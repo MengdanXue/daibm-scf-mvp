@@ -1,0 +1,13 @@
+services:
+  mvp:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DAIBM_DB_PATH: /app/data/daibm_scf.db
+    volumes:
+      - daibm-data:/app/data
+
+volumes:
+  daibm-data:
+

@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.uvicorn-smoke.*.log
+.coverage
+htmlcov/
+.env
+data/*.db
+data/*.db-*
+dist/
+build/
+*.egg-info/
+.idea/
+.vscode/

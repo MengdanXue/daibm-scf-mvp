@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DAIBM-SCF Minimal MVP</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#637083; --line:#dfe5ec; --blue:#1956a3; --bg:#f5f7fa; --ok:#167c4b; --warn:#9a6500; --bad:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; color:var(--ink); background:var(--bg); }
+    header { padding:28px max(24px,calc((100vw - 1180px)/2)); background:#fff; border-bottom:1px solid var(--line); }
+    h1 { margin:0 0 8px; font-size:28px; }
+    header p { margin:0; color:var(--muted); }
+    main { max-width:1180px; margin:0 auto; padding:24px; }
+    .notice { padding:12px 16px; background:#fff8e8; border:1px solid #f2d48c; border-radius:10px; margin-bottom:18px; color:#654b11; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    .card, section { background:white; border:1px solid var(--line); border-radius:12px; box-shadow:0 4px 14px rgba(23,32,42,.04); }
+    .card { padding:16px; }
+    .card span { color:var(--muted); font-size:13px; }
+    .card strong { display:block; margin-top:8px; font-size:25px; }
+    section { padding:20px; margin-top:18px; }
+    section h2 { margin:0 0 16px; font-size:19px; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; }
+    button { border:0; border-radius:8px; background:var(--blue); color:white; padding:10px 15px; cursor:pointer; font-weight:600; }
+    button.secondary { background:#e9eef5; color:#29405e; }
+    form { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+    label { font-size:12px; color:var(--muted); }
+    input { width:100%; padding:9px; margin-top:5px; border:1px solid var(--line); border-radius:7px; }
+    label.checkbox { display:flex; align-items:center; gap:8px; padding-top:21px; }
+    label.checkbox input { width:auto; margin:0; }
+    form button { align-self:end; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    .pill { display:inline-block; border-radius:999px; padding:3px 8px; font-size:12px; font-weight:700; }
+    .approved { background:#e6f5ed; color:var(--ok); }
+    .manual_review { background:#fff2d6; color:var(--warn); }
+    .rejected { background:#fdebea; color:var(--bad); }
+    code { color:#41546c; font-size:11px; word-break:break-all; }
+    .scroll { overflow-x:auto; }
+    @media (max-width:850px) { .grid,form { grid-template-columns:1fr 1fr; } }
+    @media (max-width:560px) { .grid,form { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>DAIBM-SCF Minimal MVP</h1>
+  <p>可审计供应链融资风险闭环 · 场景演示原型 v0.1</p>
+</header>
+<main>
+  <div class="notice">本原型使用合成场景与透明风险基线；它不是生产级区块链、真实银行审批系统或论文中 TGNN 的复现。</div>
+  <div class="grid">
+    <div class="card"><span>融资申请</span><strong id="requestCount">0</strong></div>
+    <div class="card"><span>平均风险分数</span><strong id="averageRisk">0.000</strong></div>
+    <div class="card"><span>账本事件</span><strong id="eventCount">0</strong></div>
+    <div class="card"><span>账本完整性</span><strong id="ledgerState">—</strong></div>
+  </div>
+
+  <section>
+    <h2>快速操作</h2>
+    <div class="actions">
+      <button onclick="seedDemo()">载入演示场景</button>
+      <button class="secondary" onclick="refreshAll()">刷新</button>
+      <button class="secondary" onclick="verifyLedger()">校验账本</button>
+      <button class="secondary" onclick="window.open('/docs','_blank')">API 文档</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>新建融资请求</h2>
+    <form id="requestForm">
+      <label>企业标识<input name="applicant_id" value="supplier-new-04" required></label>
+      <label>融资金额<input name="amount" type="number" value="900000" min="1" required></label>
+      <label>期限（天）<input name="term_days" type="number" value="60" min="7" max="365" required></label>
+      <label>付款延迟（天）<input name="payment_delay_days" type="number" value="8" min="0" required></label>
+      <label>交易对手风险（0-1）<input name="counterparty_risk" type="number" value="0.25" min="0" max="1" step="0.01" required></label>
+      <label>合作时长（月）<input name="relationship_months" type="number" value="18" min="0" required></label>
+      <label>近30天交易数<input name="transactions_last_30d" type="number" value="12" min="0" required></label>
+      <label class="checkbox"><input name="invoice_mismatch" type="checkbox"> 发票信息不一致</label>
+      <button type="submit">提交并执行闭环</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>最近融资申请</h2>
+    <div class="scroll"><table><thead><tr><th>企业</th><th>金额</th><th>风险</th><th>决策</th><th>控制动作</th></tr></thead><tbody id="requests"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>审计账本</h2>
+    <div class="scroll"><table><thead><tr><th>ID</th><th>事件</th><th>实体</th><th>哈希</th></tr></thead><tbody id="ledger"></tbody></table></div>
+  </section>
+</main>
+<script>
+  const api = async (path, options={}) => {
+    const response = await fetch(path, {headers:{'Content-Type':'application/json'}, ...options});
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  };
+  const fmt = value => new Intl.NumberFormat('zh-CN',{maximumFractionDigits:0}).format(value);
+  async function refreshAll(){
+    const [dashboard, requests, ledger] = await Promise.all([api('/api/dashboard'), api('/api/requests'), api('/api/ledger?limit=24')]);
+    document.querySelector('#requestCount').textContent = dashboard.request_count;
+    document.querySelector('#averageRisk').textContent = dashboard.average_risk_score.toFixed(3);
+    document.querySelector('#eventCount').textContent = dashboard.ledger_event_count;
+    const state=document.querySelector('#ledgerState'); state.textContent=dashboard.ledger_valid?'有效':'异常'; state.style.color=dashboard.ledger_valid?'var(--ok)':'var(--bad)';
+    document.querySelector('#requests').innerHTML=requests.map(r=>`<tr><td>${r.applicant_id}</td><td>¥ ${fmt(r.amount)}</td><td>${r.risk_score.toFixed(3)}</td><td><span class="pill ${r.decision}">${r.decision}</span></td><td>${r.control_action}</td></tr>`).join('');
+    document.querySelector('#ledger').innerHTML=ledger.map(e=>`<tr><td>${e.id}</td><td>${e.event_type}</td><td>${e.entity_id.slice(0,12)}</td><td><code>${e.event_hash.slice(0,24)}…</code></td></tr>`).join('');
+  }
+  async function seedDemo(){ await api('/api/demo/seed',{method:'POST'}); await refreshAll(); }
+  async function verifyLedger(){ const result=await api('/api/ledger/verify'); alert(result.valid?`账本有效，共 ${result.event_count} 个事件`:`账本异常，事件 ${result.invalid_event_id}`); await refreshAll(); }
+  document.querySelector('#requestForm').addEventListener('submit',async event=>{
+    event.preventDefault(); const f=new FormData(event.target);
+    const body={applicant_id:f.get('applicant_id'),amount:Number(f.get('amount')),term_days:Number(f.get('term_days')),payment_delay_days:Number(f.get('payment_delay_days')),counterparty_risk:Number(f.get('counterparty_risk')),invoice_mismatch:f.get('invoice_mismatch')==='on',relationship_months:Number(f.get('relationship_months')),transactions_last_30d:Number(f.get('transactions_last_30d'))};
+    try { const result=await api('/api/requests',{method:'POST',body:JSON.stringify(body)}); alert(`决策：${result.decision}，风险分数：${result.risk_score}`); await refreshAll(); } catch(error){ alert(error.message); }
+  });
+  refreshAll();
+</script>
+</body>
+</html>
+
