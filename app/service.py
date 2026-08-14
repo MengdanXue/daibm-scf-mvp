@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import connect, initialize
-from .ledger import Ledger
+from .ledger import Ledger, canonical_json
 from .risk import assess
 from .schemas import FinancingRequestCreate
 
@@ -168,7 +168,36 @@ class FinancingService:
         with connect(self.db_path) as connection:
             connection.execute("DELETE FROM ledger_events")
             connection.execute("DELETE FROM financing_requests")
+            connection.execute("DELETE FROM sqlite_sequence WHERE name = 'ledger_events'")
         return self.seed_demo()
+
+    def tamper_demo_ledger(self) -> dict[str, Any]:
+        """Alter one synthetic event without updating its hash to demonstrate detection."""
+        if not self.list_requests(limit=1):
+            self.seed_demo()
+        verification = self.ledger.verify()
+        if not verification["valid"]:
+            return verification
+        with connect(self.db_path) as connection:
+            row = connection.execute(
+                """
+                SELECT id, payload_json
+                FROM ledger_events
+                WHERE event_type = 'RISK_ASSESSMENT'
+                ORDER BY id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("No risk-assessment event available for the demo")
+            payload = json.loads(row["payload_json"])
+            payload["demo_tampered"] = True
+            payload["score"] = 0.9999
+            connection.execute(
+                "UPDATE ledger_events SET payload_json = ? WHERE id = ?",
+                (canonical_json(payload), row["id"]),
+            )
+        return self.ledger.verify()
 
     @staticmethod
     def _row_to_request(row) -> dict[str, Any]:

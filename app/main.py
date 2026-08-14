@@ -26,7 +26,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
-        version="0.2.0",
+        version="0.3.0",
         description="Scenario demonstrator for an auditable supply-chain finance risk loop.",
         lifespan=lifespan,
     )
@@ -75,6 +75,10 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     @application.post("/api/demo/reset")
     def reset_demo(request: Request):
         return request.app.state.service.reset_demo()
+
+    @application.post("/api/demo/tamper")
+    def tamper_demo(request: Request):
+        return request.app.state.service.tamper_demo_ledger()
 
     return application
 

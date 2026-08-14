@@ -25,7 +25,14 @@ def test_demo_creates_closed_loop_and_valid_ledger(tmp_path):
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
 
+        tampered = client.post("/api/demo/tamper")
+        assert tampered.status_code == 200
+        assert tampered.json()["valid"] is False
+        assert tampered.json()["reason"] == "event_hash_mismatch"
+
         reset = client.post("/api/demo/reset")
         assert reset.status_code == 200
         assert len(reset.json()) == 3
-        assert client.get("/api/ledger/verify").json()["event_count"] == 12
+        repaired = client.get("/api/ledger/verify").json()
+        assert repaired["valid"] is True
+        assert repaired["event_count"] == 12
