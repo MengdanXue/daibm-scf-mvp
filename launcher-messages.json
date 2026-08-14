@@ -1,4 +1,5 @@
 {
   "no_docker": "Docker Desktop не установлен. / 未检测到 Docker Desktop。",
-  "docker_stopped": "Запустите Docker Desktop. / 请先启动 Docker Desktop。"
+  "docker_stopped": "Запустите Docker Desktop. / 请先启动 Docker Desktop。",
+  "startup_timeout": "Истекло время запуска; проверьте журнал ниже. / 启动超时，请查看下方日志。"
 }

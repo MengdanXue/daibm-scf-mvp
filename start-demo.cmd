@@ -27,6 +27,7 @@ goto wait_health
 
 :startup_timeout
 echo [DAIBM-SCF] Startup timed out. Showing diagnostic logs.
+powershell -NoProfile -Command "$messages = Get-Content -Raw -Encoding utf8 'launcher-messages.json' | ConvertFrom-Json; Write-Host ('[DAIBM-SCF] ' + $messages.startup_timeout)"
 docker compose logs --tail 100
 exit /b 1
 
