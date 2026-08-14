@@ -1,17 +1,47 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Mapping
+
+from sqlalchemy import URL
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+@dataclass(frozen=True)
+class PostgresSettings:
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
 
+    @classmethod
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> "PostgresSettings":
+        values = os.environ if environ is None else environ
+        raw_port = values.get("POSTGRES_PORT", "5432")
+        try:
+            port = int(raw_port)
+        except ValueError as error:
+            raise ValueError("POSTGRES_PORT must be an integer") from error
+        if not 1 <= port <= 65535:
+            raise ValueError("POSTGRES_PORT must be between 1 and 65535")
+        return cls(
+            host=values.get("POSTGRES_HOST", "localhost"),
+            port=port,
+            database=values.get("POSTGRES_DB", "daibm_scf"),
+            user=values.get("POSTGRES_USER", "daibm"),
+            password=values.get("POSTGRES_PASSWORD", "daibm_demo_password"),
+        )
 
-def database_path() -> Path:
-    configured = os.getenv("DAIBM_DB_PATH", "data/daibm_scf.db")
-    path = Path(configured)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
+    @property
+    def sqlalchemy_url(self) -> URL:
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port,
+            database=self.database,
+        )
