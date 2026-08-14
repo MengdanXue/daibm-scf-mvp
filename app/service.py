@@ -22,6 +22,8 @@ DECISIONS = {
     "high": ("rejected", "suspend_auto_approval_and_enhanced_validation"),
 }
 
+CENT = Decimal("0.01")
+
 DEMO_SCENARIOS = (
     FinancingRequestCreate(
         applicant_id="supplier-stable-01",
@@ -160,15 +162,19 @@ class FinancingService:
         session: Session,
         request: FinancingRequestCreate,
     ) -> FinancingRequestModel:
-        result = assess(request)
+        canonical_amount = Decimal(str(request.amount)).quantize(CENT)
+        normalized_request = request.model_copy(
+            update={"amount": float(canonical_amount)}
+        )
+        result = assess(normalized_request)
         decision, control_action = DECISIONS[result.band]
         model = FinancingRequestModel(
             request_id=uuid.uuid4(),
             created_at=datetime.now(timezone.utc),
-            applicant_id=request.applicant_id,
-            amount=Decimal(str(request.amount)),
-            term_days=request.term_days,
-            features=request.model_dump(),
+            applicant_id=normalized_request.applicant_id,
+            amount=canonical_amount,
+            term_days=normalized_request.term_days,
+            features=normalized_request.model_dump(),
             risk_score=result.score,
             decision=decision,
             explanations=result.contributions,
@@ -178,7 +184,12 @@ class FinancingService:
         self.ledger_repository.append_many(
             session,
             model.request_id,
-            self._event_specs(request, result, decision, control_action),
+            self._event_specs(
+                normalized_request,
+                result,
+                decision,
+                control_action,
+            ),
         )
         return model
 

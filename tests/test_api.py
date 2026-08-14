@@ -71,6 +71,25 @@ def test_missing_request_returns_404(client):
     assert response.json() == {"detail": "Request not found"}
 
 
+def test_request_rejects_fractional_cent_amount(client):
+    response = client.post(
+        "/api/requests",
+        json={
+            "applicant_id": "fractional-cent",
+            "amount": 450000.001,
+            "term_days": 60,
+            "payment_delay_days": 2,
+            "counterparty_risk": 0.12,
+            "invoice_mismatch": False,
+            "relationship_months": 48,
+            "transactions_last_30d": 8,
+        },
+    )
+
+    assert response.status_code == 422
+    assert client.get("/api/requests").json() == []
+
+
 def test_health_hides_database_exception_details(client, monkeypatch):
     def unavailable():
         raise SQLAlchemyError(

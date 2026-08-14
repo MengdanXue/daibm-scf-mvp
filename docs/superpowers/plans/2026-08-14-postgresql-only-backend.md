@@ -1,5 +1,7 @@
 # PostgreSQL-only Backend Implementation Plan
 
+> Implementation note (2026-08-14): the container/API port remains `8000`, while the local Compose host port defaults to `8010` because `127.0.0.1:8000` is occupied by another local service in the target demonstration environment. `MVP_PORT=8000` restores the original host address when that port is available; API paths are unchanged.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将 DAIBM-SCF MVP 从 SQLite 完整重构为 PostgreSQL-only，并在不扩大论文功能范围的前提下，保留俄语默认/中文切换页面、三类风险决策、可解释结果、哈希链审计、篡改演示和一键恢复能力。

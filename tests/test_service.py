@@ -1,10 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from sqlalchemy import func, select
 
 from app.ledger import GENESIS_HASH
 from app.models import FinancingRequestModel, LedgerEventModel
+from app.repositories import LedgerRepository
 from app.schemas import FinancingRequestCreate
 from app.service import FinancingService
 
@@ -97,7 +99,20 @@ def test_reset_rebuilds_three_scenarios_and_identity_sequence(session_factory):
 
 
 def test_concurrent_requests_do_not_fork_ledger_chain(session_factory):
-    service = FinancingService(session_factory)
+    class SynchronizedLedgerRepository(LedgerRepository):
+        def __init__(self, barrier):
+            super().__init__()
+            self.barrier = barrier
+
+        def append_many(self, session, entity_id, event_specs):
+            self.barrier.wait(timeout=10)
+            return super().append_many(session, entity_id, event_specs)
+
+    barrier = Barrier(6)
+    service = FinancingService(
+        session_factory,
+        ledger_repository=SynchronizedLedgerRepository(barrier),
+    )
 
     with ThreadPoolExecutor(max_workers=6) as executor:
         results = list(

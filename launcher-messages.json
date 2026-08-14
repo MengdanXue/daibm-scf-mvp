@@ -1,0 +1,4 @@
+{
+  "no_docker": "Docker Desktop не установлен. / 未检测到 Docker Desktop。",
+  "docker_stopped": "Запустите Docker Desktop. / 请先启动 Docker Desktop。"
+}

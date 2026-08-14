@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from decimal import Decimal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class FinancingRequestCreate(BaseModel):
@@ -13,6 +15,14 @@ class FinancingRequestCreate(BaseModel):
     relationship_months: int = Field(ge=0, le=240)
     transactions_last_30d: int = Field(ge=0, le=500)
 
+    @field_validator("amount")
+    @classmethod
+    def amount_has_at_most_two_decimal_places(cls, value: float) -> float:
+        decimal_value = Decimal(str(value))
+        if decimal_value != decimal_value.quantize(Decimal("0.01")):
+            raise ValueError("amount must have at most two decimal places")
+        return float(decimal_value)
+
 
 class Contribution(BaseModel):
     feature: str
@@ -24,4 +34,3 @@ class RiskAssessment(BaseModel):
     score: float
     band: str
     contributions: list[Contribution]
-

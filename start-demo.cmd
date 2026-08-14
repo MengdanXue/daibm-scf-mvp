@@ -1,7 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-set "DEMO_URL=http://127.0.0.1:8010"
+if not defined MVP_PORT set "MVP_PORT=8010"
+set "DEMO_URL=http://127.0.0.1:%MVP_PORT%"
 
 where docker >nul 2>nul
 if errorlevel 1 goto no_docker
@@ -31,10 +32,12 @@ exit /b 1
 
 :no_docker
 echo [DAIBM-SCF] Docker Desktop is not installed or docker.exe is not in PATH.
+powershell -NoProfile -Command "$messages = Get-Content -Raw -Encoding utf8 'launcher-messages.json' | ConvertFrom-Json; Write-Host ('[DAIBM-SCF] ' + $messages.no_docker)"
 exit /b 1
 
 :docker_stopped
 echo [DAIBM-SCF] Start Docker Desktop and wait until it is ready.
+powershell -NoProfile -Command "$messages = Get-Content -Raw -Encoding utf8 'launcher-messages.json' | ConvertFrom-Json; Write-Host ('[DAIBM-SCF] ' + $messages.docker_stopped)"
 exit /b 1
 
 :ready
