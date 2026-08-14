@@ -1,4 +1,4 @@
 -r requirements.txt
-httpx2>=2.0,<3
+httpx2==2.10.0
 pytest==9.1.1
-testcontainers[postgres]>=4.13,<5
+testcontainers[postgres]==4.15.0

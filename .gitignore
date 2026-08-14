@@ -7,8 +7,6 @@ __pycache__/
 .coverage
 htmlcov/
 .env
-data/*.db
-data/*.db-*
 output/
 dist/
 build/

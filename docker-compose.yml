@@ -1,13 +1,44 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-daibm_scf}
+      POSTGRES_USER: ${POSTGRES_USER:-daibm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   mvp:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8010:8000"
     environment:
-      DAIBM_DB_PATH: /app/data/daibm_scf.db
-    volumes:
-      - daibm-data:/app/data
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-daibm_scf}
+      POSTGRES_USER: ${POSTGRES_USER:-daibm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)
+      interval: 3s
+      timeout: 3s
+      retries: 30
 
 volumes:
-  daibm-data:
-
+  postgres-data:

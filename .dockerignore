@@ -1,0 +1,12 @@
+.git
+.github
+.playwright-cli
+.pytest_cache
+.venv
+**/__pycache__
+**/*.pyc
+.env
+data
+docs
+output
+tests
