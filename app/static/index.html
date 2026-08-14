@@ -1,121 +1,344 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DAIBM-SCF Minimal MVP</title>
+  <meta name="theme-color" content="#0b1736">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%232768ee'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Arial' font-size='32' font-weight='700' fill='white'%3ED%3C/text%3E%3C/svg%3E">
+  <title>DAIBM-SCF — демонстрационная система</title>
   <style>
-    :root { color-scheme: light; --ink:#17202a; --muted:#637083; --line:#dfe5ec; --blue:#1956a3; --bg:#f5f7fa; --ok:#167c4b; --warn:#9a6500; --bad:#b42318; }
+    :root {
+      --navy:#0b1736; --navy-2:#132751; --blue:#2768ee; --cyan:#21c3d6;
+      --ink:#15213b; --muted:#6d7890; --line:#e4e9f2; --bg:#f4f7fb;
+      --white:#fff; --green:#15976c; --amber:#d48a16; --red:#d24b50;
+      --shadow:0 12px 34px rgba(24,43,85,.09); --radius:18px;
+    }
     * { box-sizing:border-box; }
-    body { margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; color:var(--ink); background:var(--bg); }
-    header { padding:28px max(24px,calc((100vw - 1180px)/2)); background:#fff; border-bottom:1px solid var(--line); }
-    h1 { margin:0 0 8px; font-size:28px; }
-    header p { margin:0; color:var(--muted); }
-    main { max-width:1180px; margin:0 auto; padding:24px; }
-    .notice { padding:12px 16px; background:#fff8e8; border:1px solid #f2d48c; border-radius:10px; margin-bottom:18px; color:#654b11; }
-    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
-    .card, section { background:white; border:1px solid var(--line); border-radius:12px; box-shadow:0 4px 14px rgba(23,32,42,.04); }
-    .card { padding:16px; }
-    .card span { color:var(--muted); font-size:13px; }
-    .card strong { display:block; margin-top:8px; font-size:25px; }
-    section { padding:20px; margin-top:18px; }
-    section h2 { margin:0 0 16px; font-size:19px; }
-    .actions { display:flex; gap:10px; flex-wrap:wrap; }
-    button { border:0; border-radius:8px; background:var(--blue); color:white; padding:10px 15px; cursor:pointer; font-weight:600; }
-    button.secondary { background:#e9eef5; color:#29405e; }
-    form { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
-    label { font-size:12px; color:var(--muted); }
-    input { width:100%; padding:9px; margin-top:5px; border:1px solid var(--line); border-radius:7px; }
-    label.checkbox { display:flex; align-items:center; gap:8px; padding-top:21px; }
-    label.checkbox input { width:auto; margin:0; }
-    form button { align-self:end; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th,td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
-    th { color:var(--muted); font-weight:600; }
-    .pill { display:inline-block; border-radius:999px; padding:3px 8px; font-size:12px; font-weight:700; }
-    .approved { background:#e6f5ed; color:var(--ok); }
-    .manual_review { background:#fff2d6; color:var(--warn); }
-    .rejected { background:#fdebea; color:var(--bad); }
-    code { color:#41546c; font-size:11px; word-break:break-all; }
-    .scroll { overflow-x:auto; }
-    @media (max-width:850px) { .grid,form { grid-template-columns:1fr 1fr; } }
-    @media (max-width:560px) { .grid,form { grid-template-columns:1fr; } }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--bg); font-family:Inter,"Segoe UI","Microsoft YaHei",Arial,sans-serif; }
+    button,input { font:inherit; }
+    button { cursor:pointer; }
+    .app { min-height:100vh; display:grid; grid-template-columns:248px minmax(0,1fr); }
+    .sidebar { position:sticky; top:0; height:100vh; padding:24px 18px; background:var(--navy); color:#fff; display:flex; flex-direction:column; z-index:20; }
+    .brand { display:flex; gap:12px; align-items:center; padding:4px 8px 26px; }
+    .brand-mark { width:42px; height:42px; display:grid; place-items:center; border-radius:13px; background:linear-gradient(135deg,var(--blue),var(--cyan)); font-weight:900; box-shadow:0 8px 22px rgba(39,104,238,.35); }
+    .brand strong { display:block; letter-spacing:.3px; }
+    .brand small { display:block; margin-top:3px; color:#9eb0d6; font-size:11px; }
+    .nav-label { margin:6px 10px 10px; color:#7389b6; font-size:10px; font-weight:800; letter-spacing:1.2px; text-transform:uppercase; }
+    .nav { display:grid; gap:6px; }
+    .nav button { width:100%; border:0; padding:12px 13px; border-radius:11px; color:#aebedf; background:transparent; text-align:left; display:flex; align-items:center; gap:11px; font-weight:650; }
+    .nav button:hover,.nav button.active { color:#fff; background:rgba(255,255,255,.09); }
+    .nav-icon { width:22px; text-align:center; font-size:17px; }
+    .side-bottom { margin-top:auto; }
+    .research-badge { padding:14px; border:1px solid rgba(255,255,255,.1); border-radius:13px; background:rgba(255,255,255,.045); }
+    .research-badge b { display:block; font-size:12px; }
+    .research-badge span { display:block; margin-top:5px; color:#90a5ce; font-size:10px; line-height:1.5; }
+    .content { min-width:0; }
+    .topbar { height:72px; padding:0 32px; display:flex; align-items:center; justify-content:space-between; background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:15; }
+    .top-title strong { display:block; font-size:14px; }
+    .top-title span { color:var(--muted); font-size:11px; }
+    .top-actions { display:flex; align-items:center; gap:14px; }
+    .live { display:flex; align-items:center; gap:7px; color:var(--green); font-size:12px; font-weight:700; }
+    .live::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 0 5px rgba(21,151,108,.12); }
+    .lang { display:flex; padding:3px; border:1px solid var(--line); border-radius:10px; background:#f5f7fb; }
+    .lang button { border:0; border-radius:7px; padding:6px 9px; color:var(--muted); background:transparent; font-size:11px; font-weight:800; }
+    .lang button.active { color:var(--blue); background:white; box-shadow:0 2px 7px rgba(40,57,91,.12); }
+    main { max-width:1500px; margin:auto; padding:28px 32px 48px; }
+    .view { display:none; animation:fade .22s ease; }
+    .view.active { display:block; }
+    @keyframes fade { from { opacity:.25; transform:translateY(5px); } }
+    .hero { min-height:248px; padding:34px 36px; border-radius:24px; color:white; overflow:hidden; position:relative; background:linear-gradient(122deg,#0b1736 0%,#17366e 67%,#175a85 100%); box-shadow:0 18px 48px rgba(11,23,54,.2); }
+    .hero::before,.hero::after { content:""; position:absolute; border-radius:50%; border:1px solid rgba(255,255,255,.13); }
+    .hero::before { width:390px; height:390px; right:-90px; top:-210px; }
+    .hero::after { width:280px; height:280px; right:55px; bottom:-210px; }
+    .hero-grid { position:relative; z-index:1; display:grid; grid-template-columns:1.25fr .75fr; gap:36px; align-items:center; }
+    .eyebrow { color:#7fe2eb; font-size:11px; font-weight:800; letter-spacing:1.6px; text-transform:uppercase; }
+    .hero h1 { max-width:760px; margin:12px 0 12px; font-size:clamp(27px,3vw,42px); line-height:1.13; letter-spacing:-.7px; }
+    .hero p { max-width:710px; margin:0; color:#c2d1ed; font-size:14px; line-height:1.7; }
+    .hero-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
+    .btn { border:0; border-radius:11px; padding:11px 16px; font-weight:750; display:inline-flex; gap:8px; align-items:center; justify-content:center; }
+    .btn-primary { color:white; background:var(--blue); box-shadow:0 8px 20px rgba(39,104,238,.28); }
+    .btn-primary:hover { background:#1959da; }
+    .btn-light { color:#17305f; background:#fff; }
+    .btn-soft { color:#2b4d83; background:#eaf0fb; }
+    .btn-danger { color:var(--red); background:#fff0f0; }
+    .demo-card { padding:18px; border:1px solid rgba(255,255,255,.14); border-radius:17px; background:rgba(7,18,46,.34); backdrop-filter:blur(8px); }
+    .demo-card h3 { margin:0 0 13px; font-size:13px; }
+    .demo-step { display:grid; grid-template-columns:26px 1fr; gap:9px; margin-top:11px; align-items:start; color:#b8c8e6; font-size:11px; line-height:1.35; }
+    .demo-step b { width:24px; height:24px; display:grid; place-items:center; border-radius:8px; color:#8ee7ee; background:rgba(33,195,214,.13); }
+    .kpis { margin-top:18px; display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    .kpi { min-height:122px; padding:19px; border:1px solid var(--line); border-radius:var(--radius); background:#fff; box-shadow:var(--shadow); }
+    .kpi-top { display:flex; align-items:center; justify-content:space-between; color:var(--muted); font-size:11px; font-weight:650; }
+    .kpi-icon { width:35px; height:35px; display:grid; place-items:center; border-radius:11px; background:#edf3ff; color:var(--blue); font-size:17px; }
+    .kpi strong { display:block; margin-top:12px; font-size:27px; letter-spacing:-.5px; }
+    .kpi small { color:#98a2b5; font-size:10px; }
+    .kpi .good { color:var(--green); }
+    .two-col { margin-top:16px; display:grid; grid-template-columns:1fr 1.38fr; gap:16px; }
+    .panel { padding:21px; border:1px solid var(--line); border-radius:var(--radius); background:#fff; box-shadow:var(--shadow); }
+    .panel-head { margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .panel-head h2 { margin:0; font-size:16px; }
+    .panel-head p { margin:4px 0 0; color:var(--muted); font-size:11px; }
+    .link-btn { border:0; color:var(--blue); background:transparent; font-size:11px; font-weight:750; }
+    .decision-wrap { display:flex; align-items:center; gap:24px; min-height:185px; }
+    .donut { width:140px; height:140px; flex:none; border-radius:50%; display:grid; place-items:center; background:conic-gradient(var(--green) 0 33.3%,var(--amber) 33.3% 66.6%,var(--red) 66.6%); position:relative; }
+    .donut::before { content:""; width:92px; height:92px; border-radius:50%; background:#fff; position:absolute; }
+    .donut-inner { position:relative; text-align:center; z-index:1; }
+    .donut-inner b { display:block; font-size:25px; }
+    .donut-inner span { color:var(--muted); font-size:9px; }
+    .legend { width:100%; display:grid; gap:13px; }
+    .legend-row { display:grid; grid-template-columns:10px 1fr auto; align-items:center; gap:8px; font-size:11px; }
+    .dot { width:8px; height:8px; border-radius:50%; }
+    .dot.green { background:var(--green); }.dot.amber { background:var(--amber); }.dot.red { background:var(--red); }
+    .legend-row span { color:var(--muted); }
+    .process { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; position:relative; padding-top:8px; }
+    .process::before { content:""; position:absolute; top:31px; left:11%; right:11%; height:2px; background:#dae3f4; }
+    .process-step { position:relative; z-index:1; text-align:center; }
+    .process-icon { width:48px; height:48px; margin:auto; display:grid; place-items:center; border:5px solid #fff; border-radius:50%; background:#eaf1ff; color:var(--blue); box-shadow:0 0 0 1px #dce6f7; font-size:17px; }
+    .process-step h3 { margin:10px 0 4px; font-size:11px; }
+    .process-step p { margin:0; color:var(--muted); font-size:9px; line-height:1.45; }
+    .table-panel { margin-top:16px; }
+    .table-scroll { overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:11px; }
+    th { padding:11px 12px; color:#8792a7; background:#f8fafd; text-align:left; font-weight:750; white-space:nowrap; }
+    td { padding:13px 12px; border-bottom:1px solid #edf0f5; vertical-align:middle; }
+    tbody tr { transition:.15s; }
+    tbody tr.clickable:hover { background:#f7faff; cursor:pointer; }
+    .company { display:flex; align-items:center; gap:9px; min-width:155px; }
+    .avatar { width:31px; height:31px; display:grid; place-items:center; border-radius:9px; color:#355993; background:#e9f0fb; font-size:10px; font-weight:900; }
+    .company b { display:block; font-size:11px; }.company small { color:#97a1b3; font-size:9px; }
+    .risk-number { font-weight:800; }
+    .mini-track { width:75px; height:5px; margin-top:5px; overflow:hidden; border-radius:9px; background:#edf0f5; }
+    .mini-track i { display:block; height:100%; border-radius:inherit; }
+    .pill { display:inline-flex; align-items:center; border-radius:999px; padding:5px 9px; font-size:9px; font-weight:800; white-space:nowrap; }
+    .approved { color:var(--green); background:#e6f7f1; }.manual_review { color:#b46e05; background:#fff3dc; }.rejected { color:var(--red); background:#fff0f0; }
+    .page-heading { margin:2px 0 20px; display:flex; justify-content:space-between; gap:18px; align-items:flex-end; }
+    .page-heading h1 { margin:0; font-size:25px; }.page-heading p { margin:6px 0 0; color:var(--muted); font-size:12px; }
+    .review-grid { display:grid; grid-template-columns:.8fr 1.2fr; gap:16px; align-items:start; }
+    form { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+    label { color:#6f7c92; font-size:10px; font-weight:650; }
+    input { width:100%; margin-top:6px; padding:10px 11px; border:1px solid #dfe5ef; border-radius:9px; outline:none; color:var(--ink); background:#fbfcfe; }
+    input:focus { border-color:#6b95ef; box-shadow:0 0 0 3px rgba(39,104,238,.09); }
+    .checkbox { min-height:40px; display:flex; align-items:center; gap:8px; padding-top:16px; }.checkbox input { width:auto; margin:0; }
+    .form-submit { grid-column:1/-1; }
+    .empty-detail { min-height:420px; display:grid; place-items:center; color:var(--muted); text-align:center; }
+    .empty-detail .circle { width:66px; height:66px; margin:0 auto 12px; display:grid; place-items:center; border-radius:50%; background:#edf3ff; font-size:27px; }
+    .risk-header { display:grid; grid-template-columns:120px 1fr; gap:22px; align-items:center; }
+    .gauge { width:116px; height:116px; border-radius:50%; display:grid; place-items:center; position:relative; background:conic-gradient(var(--green) calc(var(--score)*1%),#edf0f5 0); }
+    .gauge::before { content:""; width:86px; height:86px; position:absolute; border-radius:50%; background:#fff; }
+    .gauge span { position:relative; z-index:1; font-size:23px; font-weight:900; }.gauge small { display:block; color:var(--muted); font-size:9px; text-align:center; }
+    .detail-title h3 { margin:0 0 7px; font-size:19px; }.detail-title p { margin:0 0 12px; color:var(--muted); font-size:10px; }
+    .meta { display:flex; gap:18px; flex-wrap:wrap; }.meta span { color:var(--muted); font-size:9px; }.meta b { display:block; margin-top:3px; color:var(--ink); font-size:11px; }
+    .factors { margin-top:20px; padding-top:17px; border-top:1px solid var(--line); }
+    .factors h4 { margin:0 0 13px; font-size:12px; }
+    .factor { display:grid; grid-template-columns:145px 1fr 42px; gap:10px; align-items:center; margin:10px 0; font-size:10px; }
+    .factor-track { height:7px; overflow:hidden; border-radius:20px; background:#edf0f5; }.factor-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#3a75ef,#22bfd2); }
+    .decision-callout { margin-top:18px; padding:14px; border-radius:12px; display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; background:#f7f9fd; border:1px solid var(--line); }
+    .decision-callout small { display:block; color:var(--muted); margin-top:5px; font-size:9px; }
+    .ledger-hero { padding:24px; display:grid; grid-template-columns:1fr auto; gap:24px; align-items:center; border-radius:19px; color:#fff; background:linear-gradient(120deg,#10234c,#176377); }
+    .ledger-hero h2 { margin:0 0 7px; }.ledger-hero p { margin:0; color:#bad2df; font-size:11px; max-width:650px; line-height:1.6; }
+    .seal { width:112px; height:112px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.22); border-radius:50%; text-align:center; background:rgba(255,255,255,.08); }
+    .seal b { display:block; font-size:24px; color:#7ef0ce; }.seal span { font-size:9px; color:#c8d9e2; }
+    .hash { max-width:180px; color:#56657c; font-family:Consolas,monospace; font-size:9px; word-break:break-all; }
+    .event-tag { font-size:9px; font-weight:800; color:#3a65a3; }
+    .model-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .model-card { min-height:205px; padding:22px; border:1px solid var(--line); border-radius:var(--radius); background:#fff; box-shadow:var(--shadow); }
+    .model-card .number { color:#b6c4dc; font-size:11px; font-weight:900; }.model-card h3 { margin:13px 0 9px; font-size:15px; }.model-card p { margin:0; color:var(--muted); font-size:11px; line-height:1.7; }
+    .boundary { margin-top:16px; padding:18px 20px; border:1px solid #f0d79f; border-radius:14px; color:#75571c; background:#fff9eb; font-size:11px; line-height:1.7; }
+    .toast { position:fixed; right:24px; bottom:24px; max-width:390px; padding:14px 17px; color:#fff; background:#15284e; border-radius:12px; box-shadow:0 16px 35px rgba(9,23,51,.25); font-size:11px; transform:translateY(100px); opacity:0; transition:.25s; z-index:99; }
+    .toast.show { transform:none; opacity:1; }
+    .mobile-menu { display:none; }
+    @media (max-width:1050px) { .app{grid-template-columns:82px 1fr}.brand-text,.nav button span:not(.nav-icon),.nav-label,.research-badge{display:none}.brand{justify-content:center;padding-left:0;padding-right:0}.nav button{justify-content:center}.kpis{grid-template-columns:1fr 1fr}.hero-grid,.review-grid{grid-template-columns:1fr}.model-grid{grid-template-columns:1fr 1fr} }
+    @media (max-width:720px) { .app{display:block}.sidebar{display:none}.topbar{padding:0 16px}.top-title{display:none}main{padding:18px 14px 35px}.hero{padding:25px 21px}.hero-grid{gap:22px}.kpis,.two-col,.model-grid{grid-template-columns:1fr}.process{grid-template-columns:1fr 1fr}.process::before{display:none}.review-grid{grid-template-columns:1fr}form{grid-template-columns:1fr}.risk-header{grid-template-columns:1fr}.ledger-hero{grid-template-columns:1fr}.seal{width:90px;height:90px}.mobile-menu{display:flex;gap:3px;overflow:auto}.mobile-menu button{border:0;padding:7px;color:var(--muted);background:transparent;font-size:10px;white-space:nowrap}.factor{grid-template-columns:105px 1fr 35px} }
   </style>
 </head>
 <body>
-<header>
-  <h1>DAIBM-SCF Minimal MVP</h1>
-  <p>可审计供应链融资风险闭环 · 场景演示原型 v0.1</p>
-</header>
-<main>
-  <div class="notice">本原型使用合成场景与透明风险基线；它不是生产级区块链、真实银行审批系统或论文中 TGNN 的复现。</div>
-  <div class="grid">
-    <div class="card"><span>融资申请</span><strong id="requestCount">0</strong></div>
-    <div class="card"><span>平均风险分数</span><strong id="averageRisk">0.000</strong></div>
-    <div class="card"><span>账本事件</span><strong id="eventCount">0</strong></div>
-    <div class="card"><span>账本完整性</span><strong id="ledgerState">—</strong></div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">D</div><div class="brand-text"><strong>DAIBM-SCF</strong><small>Risk Intelligence</small></div></div>
+    <div class="nav-label" data-i18n="navTitle">Навигация</div>
+    <nav class="nav">
+      <button class="active" data-view-button="overview" onclick="switchView('overview')"><span class="nav-icon">⌂</span><span data-i18n="navOverview">Обзор</span></button>
+      <button data-view-button="review" onclick="switchView('review')"><span class="nav-icon">◎</span><span data-i18n="navReview">Оценка риска</span></button>
+      <button data-view-button="ledger" onclick="switchView('ledger')"><span class="nav-icon">◇</span><span data-i18n="navLedger">Аудиторский реестр</span></button>
+      <button data-view-button="model" onclick="switchView('model')"><span class="nav-icon">≋</span><span data-i18n="navModel">Методика</span></button>
+    </nav>
+    <div class="side-bottom"><div class="research-badge"><b data-i18n="prototype">Исследовательский прототип</b><span data-i18n="prototypeNote">Магистерская диссертация · синтетические данные · версия 0.2</span></div></div>
+  </aside>
+
+  <div class="content">
+    <header class="topbar">
+      <div class="top-title"><strong data-i18n="systemName">Интеллектуальный аудит финансирования цепей поставок</strong><span data-i18n="systemSub">Демонстрационный контур принятия решений</span></div>
+      <div class="mobile-menu"><button onclick="switchView('overview')" data-i18n="navOverview">Обзор</button><button onclick="switchView('review')" data-i18n="navReview">Оценка риска</button><button onclick="switchView('ledger')" data-i18n="navLedger">Реестр</button></div>
+      <div class="top-actions"><span class="live" data-i18n="online">Система доступна</span><div class="lang"><button data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button data-lang="zh" onclick="setLanguage('zh')">中文</button></div></div>
+    </header>
+
+    <main>
+      <section id="view-overview" class="view active">
+        <div class="hero">
+          <div class="hero-grid">
+            <div>
+              <div class="eyebrow" data-i18n="heroEyebrow">Демонстрация замкнутого контура DAIBM-SCF</div>
+              <h1 data-i18n="heroTitle">От заявки до контролируемого решения — прозрачно и проверяемо</h1>
+              <p data-i18n="heroText">Система объединяет данные заявки, объяснимую оценку риска, решение о финансировании и защищённый аудиторский след в одном демонстрационном сценарии.</p>
+              <div class="hero-actions"><button class="btn btn-primary" onclick="startDemo()"><span>▶</span><span data-i18n="startDemo">Запустить демонстрацию</span></button><button class="btn btn-light" onclick="switchView('review')" data-i18n="newRequest">Новая заявка</button></div>
+            </div>
+            <div class="demo-card">
+              <h3 data-i18n="demoScript">Сценарий выступления · 3 минуты</h3>
+              <div class="demo-step"><b>1</b><span data-i18n="step1">Загрузить три контрастных кейса</span></div>
+              <div class="demo-step"><b>2</b><span data-i18n="step2">Сравнить одобрение, проверку и отказ</span></div>
+              <div class="demo-step"><b>3</b><span data-i18n="step3">Показать вклад факторов риска</span></div>
+              <div class="demo-step"><b>4</b><span data-i18n="step4">Проверить целостность цепочки событий</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi"><div class="kpi-top"><span data-i18n="kpiRequests">Заявки</span><span class="kpi-icon">▤</span></div><strong id="requestCount">0</strong><small data-i18n="kpiRequestsNote">в текущем демонстрационном контуре</small></div>
+          <div class="kpi"><div class="kpi-top"><span data-i18n="kpiRisk">Средний риск</span><span class="kpi-icon">◒</span></div><strong id="averageRisk">0.000</strong><small data-i18n="kpiRiskNote">шкала вероятности 0–1</small></div>
+          <div class="kpi"><div class="kpi-top"><span data-i18n="kpiEvents">События реестра</span><span class="kpi-icon">◇</span></div><strong id="eventCount">0</strong><small data-i18n="kpiEventsNote">4 события на одну заявку</small></div>
+          <div class="kpi"><div class="kpi-top"><span data-i18n="kpiIntegrity">Целостность</span><span class="kpi-icon">✓</span></div><strong id="ledgerState" class="good">—</strong><small data-i18n="kpiIntegrityNote">проверка хеш-цепочки</small></div>
+        </div>
+
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-head"><div><h2 data-i18n="decisionStructure">Структура решений</h2><p data-i18n="decisionStructureSub">Распределение заявок по результатам</p></div></div>
+            <div class="decision-wrap"><div id="decisionDonut" class="donut"><div class="donut-inner"><b id="donutTotal">0</b><span data-i18n="totalCases">всего кейсов</span></div></div><div id="decisionLegend" class="legend"></div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div><h2 data-i18n="closedLoop">Замкнутый контур управления риском</h2><p data-i18n="closedLoopSub">Каждый этап фиксируется как самостоятельное событие</p></div></div>
+            <div class="process">
+              <div class="process-step"><div class="process-icon">1</div><h3 data-i18n="process1">Заявка</h3><p data-i18n="process1Sub">Параметры сделки и контрагента</p></div>
+              <div class="process-step"><div class="process-icon">2</div><h3 data-i18n="process2">Оценка</h3><p data-i18n="process2Sub">Расчёт и объяснение риска</p></div>
+              <div class="process-step"><div class="process-icon">3</div><h3 data-i18n="process3">Решение</h3><p data-i18n="process3Sub">Одобрение, проверка или отказ</p></div>
+              <div class="process-step"><div class="process-icon">4</div><h3 data-i18n="process4">Контроль</h3><p data-i18n="process4Sub">Действие и запись в реестр</p></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel table-panel">
+          <div class="panel-head"><div><h2 data-i18n="recentRequests">Последние заявки</h2><p data-i18n="rowHint">Нажмите строку, чтобы раскрыть объяснение решения</p></div><button class="link-btn" onclick="switchView('review')" data-i18n="showAll">Показать все →</button></div>
+          <div class="table-scroll"><table><thead><tr><th data-i18n="thCompany">Компания</th><th data-i18n="thAmount">Сумма</th><th data-i18n="thTerm">Срок</th><th data-i18n="thRisk">Риск</th><th data-i18n="thDecision">Решение</th><th data-i18n="thAction">Контрольное действие</th></tr></thead><tbody id="overviewRequests"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="view-review" class="view">
+        <div class="page-heading"><div><h1 data-i18n="reviewTitle">Оценка заявки</h1><p data-i18n="reviewSub">Создайте кейс или выберите существующий для анализа факторов риска</p></div><button class="btn btn-soft" onclick="startDemo()" data-i18n="reloadDemo">Перезагрузить демо-кейсы</button></div>
+        <div class="review-grid">
+          <div class="panel">
+            <div class="panel-head"><div><h2 data-i18n="formTitle">Параметры финансирования</h2><p data-i18n="formSub">Все поля используются прозрачной базовой моделью</p></div></div>
+            <form id="requestForm">
+              <label><span data-i18n="fieldCompany">Идентификатор компании</span><input name="applicant_id" value="supplier-new-04" required></label>
+              <label><span data-i18n="fieldAmount">Сумма финансирования</span><input name="amount" type="number" value="900000" min="1" required></label>
+              <label><span data-i18n="fieldTerm">Срок, дней</span><input name="term_days" type="number" value="60" min="7" max="365" required></label>
+              <label><span data-i18n="fieldDelay">Просрочка платежа, дней</span><input name="payment_delay_days" type="number" value="8" min="0" required></label>
+              <label><span data-i18n="fieldCounterparty">Риск контрагента, 0–1</span><input name="counterparty_risk" type="number" value="0.25" min="0" max="1" step="0.01" required></label>
+              <label><span data-i18n="fieldRelationship">Срок отношений, мес.</span><input name="relationship_months" type="number" value="18" min="0" required></label>
+              <label><span data-i18n="fieldTransactions">Сделок за 30 дней</span><input name="transactions_last_30d" type="number" value="12" min="0" required></label>
+              <label class="checkbox"><input name="invoice_mismatch" type="checkbox"><span data-i18n="fieldInvoice">Расхождение в счёте-фактуре</span></label>
+              <button class="btn btn-primary form-submit" type="submit" data-i18n="submitRequest">Рассчитать риск и принять решение</button>
+            </form>
+          </div>
+          <div id="riskDetail" class="panel"><div class="empty-detail"><div><div class="circle">◎</div><b data-i18n="selectCase">Выберите заявку</b><p data-i18n="selectCaseSub">Здесь появятся оценка и вклад факторов</p></div></div></div>
+        </div>
+        <div class="panel table-panel">
+          <div class="panel-head"><div><h2 data-i18n="caseRegister">Реестр заявок</h2><p data-i18n="caseRegisterSub">Синтетические данные демонстрационного контура</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th data-i18n="thCompany">Компания</th><th data-i18n="thAmount">Сумма</th><th data-i18n="thTerm">Срок</th><th data-i18n="thRisk">Риск</th><th data-i18n="thDecision">Решение</th><th data-i18n="thAction">Контрольное действие</th></tr></thead><tbody id="reviewRequests"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="view-ledger" class="view">
+        <div class="page-heading"><div><h1 data-i18n="ledgerTitle">Проверяемый аудиторский реестр</h1><p data-i18n="ledgerSub">Связанная хеш-цепочка фиксирует жизненный цикл каждой заявки</p></div><button class="btn btn-primary" onclick="verifyLedger()" data-i18n="verifyNow">Проверить сейчас</button></div>
+        <div class="ledger-hero"><div><h2 data-i18n="integrityTitle">Контроль целостности событий</h2><p data-i18n="integrityText">Хеш каждого события зависит от его данных и предыдущей записи. Изменение истории нарушает цепочку и выявляется при повторной проверке.</p></div><div class="seal"><div><b id="sealState">✓</b><span id="sealText" data-i18n="chainValid">Цепочка действительна</span></div></div></div>
+        <div class="panel table-panel">
+          <div class="panel-head"><div><h2 data-i18n="eventJournal">Журнал событий</h2><p><span id="ledgerCountLabel">0</span> <span data-i18n="eventsRecorded">событий зафиксировано</span></p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>ID</th><th data-i18n="thEvent">Событие</th><th data-i18n="thEntity">Объект</th><th data-i18n="thTime">Время</th><th data-i18n="thPreviousHash">Предыдущий хеш</th><th data-i18n="thHash">Хеш события</th></tr></thead><tbody id="ledgerRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="view-model" class="view">
+        <div class="page-heading"><div><h1 data-i18n="modelTitle">Методика демонстрационного прототипа</h1><p data-i18n="modelSub">Что именно подтверждает MVP и где проходят границы доказательства</p></div><button class="btn btn-soft" onclick="window.open('/docs','_blank')">OpenAPI ↗</button></div>
+        <div class="model-grid">
+          <div class="model-card"><span class="number">01 / DATA</span><h3 data-i18n="modelData">Входные признаки</h3><p data-i18n="modelDataText">Сумма и срок финансирования, просрочка, риск контрагента, расхождение документов, длительность отношений и интенсивность транзакций.</p></div>
+          <div class="model-card"><span class="number">02 / RISK</span><h3 data-i18n="modelRisk">Объяснимая оценка</h3><p data-i18n="modelRiskText">Нормализованная взвешенная модель преобразует факторы в оценку 0–1 и показывает вклад каждого признака в итоговый риск.</p></div>
+          <div class="model-card"><span class="number">03 / DECISION</span><h3 data-i18n="modelDecision">Правило решения</h3><p data-i18n="modelDecisionText">Низкий риск одобряется, средний направляется на ручную проверку, высокий отклоняется с усиленным контролем.</p></div>
+          <div class="model-card"><span class="number">04 / LEDGER</span><h3 data-i18n="modelLedger">Аудиторский след</h3><p data-i18n="modelLedgerText">Для каждой заявки фиксируются запрос, оценка, решение и контрольное действие. Связанные хеши позволяют обнаружить изменение истории.</p></div>
+          <div class="model-card"><span class="number">05 / LOOP</span><h3 data-i18n="modelLoop">Замкнутый контур</h3><p data-i18n="modelLoopText">Результат аналитики не остаётся отчётом: он непосредственно инициирует управленческое действие и его регистрацию.</p></div>
+          <div class="model-card"><span class="number">06 / DEMO</span><h3 data-i18n="modelProof">Что подтверждает MVP</h3><p data-i18n="modelProofText">Прототип подтверждает техническую реализуемость сценария и логическую связанность компонентов, а не промышленную эффективность всей архитектуры.</p></div>
+        </div>
+        <div class="boundary"><b data-i18n="boundaryTitle">Граница научного утверждения:</b> <span data-i18n="boundaryText">это компьютерная имитационная проверка сценария. Реестр реализован как хеш-цепочка поверх SQLite, а риск-модель — как прозрачный базовый алгоритм. Hyperledger Fabric, TGNN, ZKP и банковские интеграции в MVP не заявляются.</span></div>
+      </section>
+    </main>
   </div>
+</div>
+<div id="toast" class="toast"></div>
 
-  <section>
-    <h2>快速操作</h2>
-    <div class="actions">
-      <button onclick="seedDemo()">载入演示场景</button>
-      <button class="secondary" onclick="refreshAll()">刷新</button>
-      <button class="secondary" onclick="verifyLedger()">校验账本</button>
-      <button class="secondary" onclick="window.open('/docs','_blank')">API 文档</button>
-    </div>
-  </section>
-
-  <section>
-    <h2>新建融资请求</h2>
-    <form id="requestForm">
-      <label>企业标识<input name="applicant_id" value="supplier-new-04" required></label>
-      <label>融资金额<input name="amount" type="number" value="900000" min="1" required></label>
-      <label>期限（天）<input name="term_days" type="number" value="60" min="7" max="365" required></label>
-      <label>付款延迟（天）<input name="payment_delay_days" type="number" value="8" min="0" required></label>
-      <label>交易对手风险（0-1）<input name="counterparty_risk" type="number" value="0.25" min="0" max="1" step="0.01" required></label>
-      <label>合作时长（月）<input name="relationship_months" type="number" value="18" min="0" required></label>
-      <label>近30天交易数<input name="transactions_last_30d" type="number" value="12" min="0" required></label>
-      <label class="checkbox"><input name="invoice_mismatch" type="checkbox"> 发票信息不一致</label>
-      <button type="submit">提交并执行闭环</button>
-    </form>
-  </section>
-
-  <section>
-    <h2>最近融资申请</h2>
-    <div class="scroll"><table><thead><tr><th>企业</th><th>金额</th><th>风险</th><th>决策</th><th>控制动作</th></tr></thead><tbody id="requests"></tbody></table></div>
-  </section>
-
-  <section>
-    <h2>审计账本</h2>
-    <div class="scroll"><table><thead><tr><th>ID</th><th>事件</th><th>实体</th><th>哈希</th></tr></thead><tbody id="ledger"></tbody></table></div>
-  </section>
-</main>
 <script>
-  const api = async (path, options={}) => {
-    const response = await fetch(path, {headers:{'Content-Type':'application/json'}, ...options});
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
+  const I18N = {
+    ru: {
+      navTitle:'Навигация',navOverview:'Обзор',navReview:'Оценка риска',navLedger:'Аудиторский реестр',navModel:'Методика',prototype:'Исследовательский прототип',prototypeNote:'Магистерская диссертация · синтетические данные · версия 0.2',systemName:'Интеллектуальный аудит финансирования цепей поставок',systemSub:'Демонстрационный контур принятия решений',online:'Система доступна',heroEyebrow:'Демонстрация замкнутого контура DAIBM-SCF',heroTitle:'От заявки до контролируемого решения — прозрачно и проверяемо',heroText:'Система объединяет данные заявки, объяснимую оценку риска, решение о финансировании и защищённый аудиторский след в одном демонстрационном сценарии.',startDemo:'Запустить демонстрацию',newRequest:'Новая заявка',demoScript:'Сценарий выступления · 3 минуты',step1:'Загрузить три контрастных кейса',step2:'Сравнить одобрение, проверку и отказ',step3:'Показать вклад факторов риска',step4:'Проверить целостность цепочки событий',kpiRequests:'Заявки',kpiRequestsNote:'в текущем демонстрационном контуре',kpiRisk:'Средний риск',kpiRiskNote:'шкала вероятности 0–1',kpiEvents:'События реестра',kpiEventsNote:'4 события на одну заявку',kpiIntegrity:'Целостность',kpiIntegrityNote:'проверка хеш-цепочки',valid:'Действительна',invalid:'Нарушена',decisionStructure:'Структура решений',decisionStructureSub:'Распределение заявок по результатам',totalCases:'всего кейсов',closedLoop:'Замкнутый контур управления риском',closedLoopSub:'Каждый этап фиксируется как самостоятельное событие',process1:'Заявка',process1Sub:'Параметры сделки и контрагента',process2:'Оценка',process2Sub:'Расчёт и объяснение риска',process3:'Решение',process3Sub:'Одобрение, проверка или отказ',process4:'Контроль',process4Sub:'Действие и запись в реестр',recentRequests:'Последние заявки',rowHint:'Нажмите строку, чтобы раскрыть объяснение решения',showAll:'Показать все →',thCompany:'Компания',thAmount:'Сумма',thTerm:'Срок',thRisk:'Риск',thDecision:'Решение',thAction:'Контрольное действие',days:'дн.',reviewTitle:'Оценка заявки',reviewSub:'Создайте кейс или выберите существующий для анализа факторов риска',reloadDemo:'Перезагрузить демо-кейсы',formTitle:'Параметры финансирования',formSub:'Все поля используются прозрачной базовой моделью',fieldCompany:'Идентификатор компании',fieldAmount:'Сумма финансирования',fieldTerm:'Срок, дней',fieldDelay:'Просрочка платежа, дней',fieldCounterparty:'Риск контрагента, 0–1',fieldRelationship:'Срок отношений, мес.',fieldTransactions:'Сделок за 30 дней',fieldInvoice:'Расхождение в счёте-фактуре',submitRequest:'Рассчитать риск и принять решение',selectCase:'Выберите заявку',selectCaseSub:'Здесь появятся оценка и вклад факторов',caseRegister:'Реестр заявок',caseRegisterSub:'Синтетические данные демонстрационного контура',ledgerTitle:'Проверяемый аудиторский реестр',ledgerSub:'Связанная хеш-цепочка фиксирует жизненный цикл каждой заявки',verifyNow:'Проверить сейчас',integrityTitle:'Контроль целостности событий',integrityText:'Хеш каждого события зависит от его данных и предыдущей записи. Изменение истории нарушает цепочку и выявляется при повторной проверке.',chainValid:'Цепочка действительна',chainInvalid:'Обнаружено нарушение',eventJournal:'Журнал событий',eventsRecorded:'событий зафиксировано',thEvent:'Событие',thEntity:'Объект',thTime:'Время',thPreviousHash:'Предыдущий хеш',thHash:'Хеш события',modelTitle:'Методика демонстрационного прототипа',modelSub:'Что именно подтверждает MVP и где проходят границы доказательства',modelData:'Входные признаки',modelDataText:'Сумма и срок финансирования, просрочка, риск контрагента, расхождение документов, длительность отношений и интенсивность транзакций.',modelRisk:'Объяснимая оценка',modelRiskText:'Нормализованная взвешенная модель преобразует факторы в оценку 0–1 и показывает вклад каждого признака в итоговый риск.',modelDecision:'Правило решения',modelDecisionText:'Низкий риск одобряется, средний направляется на ручную проверку, высокий отклоняется с усиленным контролем.',modelLedger:'Аудиторский след',modelLedgerText:'Для каждой заявки фиксируются запрос, оценка, решение и контрольное действие. Связанные хеши позволяют обнаружить изменение истории.',modelLoop:'Замкнутый контур',modelLoopText:'Результат аналитики не остаётся отчётом: он непосредственно инициирует управленческое действие и его регистрацию.',modelProof:'Что подтверждает MVP',modelProofText:'Прототип подтверждает техническую реализуемость сценария и логическую связанность компонентов, а не промышленную эффективность всей архитектуры.',boundaryTitle:'Граница научного утверждения:',boundaryText:'это компьютерная имитационная проверка сценария. Реестр реализован как хеш-цепочка поверх SQLite, а риск-модель — как прозрачный базовый алгоритм. Hyperledger Fabric, TGNN, ZKP и банковские интеграции в MVP не заявляются.',approved:'Одобрено',manual_review:'Ручная проверка',rejected:'Отказано',standard_monitoring:'Стандартный мониторинг',request_documents_and_enhanced_validation:'Запрос документов и расширенная проверка',suspend_auto_approval_and_enhanced_validation:'Приостановка автоодобрения и усиленная проверка',riskFactors:'Вклад факторов риска',amount:'Сумма финансирования',payment_delay_days:'Просрочка платежа',counterparty_risk:'Риск контрагента',invoice_mismatch:'Расхождение документов',relationship_age_risk:'Короткая история отношений',transaction_velocity:'Интенсивность транзакций',decisionResult:'Результат решения',requestCreated:'Заявка рассчитана',demoReady:'Демо-контур обновлён: 3 кейса и 12 событий',ledgerOk:'Проверка пройдена: цепочка событий целостна',ledgerFail:'Целостность цепочки нарушена',FINANCING_REQUEST:'Регистрация заявки',RISK_ASSESSMENT:'Оценка риска',FINANCING_DECISION:'Решение по финансированию',CONTROL_ACTION:'Контрольное действие',noData:'Нет данных — запустите демонстрацию'
+    },
+    zh: {
+      navTitle:'系统导航',navOverview:'业务总览',navReview:'风险审查',navLedger:'可信审计账本',navModel:'模型说明',prototype:'科研演示原型',prototypeNote:'硕士学位论文 · 合成数据 · 版本 0.2',systemName:'供应链金融智能风险审计系统',systemSub:'风险决策闭环演示环境',online:'系统运行正常',heroEyebrow:'DAIBM-SCF 风险闭环场景演示',heroTitle:'从融资申请到受控决策——透明、可解释、可验证',heroText:'系统将融资申请、可解释风险评估、融资决策和防篡改审计记录连接为一个完整的演示闭环。',startDemo:'开始答辩演示',newRequest:'新建融资申请',demoScript:'3 分钟答辩演示路线',step1:'装载三组差异化合成案例',step2:'比较通过、复核与拒绝结果',step3:'展示风险因素贡献解释',step4:'验证业务事件哈希链完整性',kpiRequests:'融资申请',kpiRequestsNote:'当前演示环境中的申请数',kpiRisk:'平均风险',kpiRiskNote:'0–1 概率刻度',kpiEvents:'账本事件',kpiEventsNote:'每笔申请形成 4 个事件',kpiIntegrity:'账本完整性',kpiIntegrityNote:'哈希链实时校验',valid:'有效',invalid:'异常',decisionStructure:'决策结果分布',decisionStructureSub:'融资申请按决策结果统计',totalCases:'案例总数',closedLoop:'风险管理闭环',closedLoopSub:'每一个环节均形成独立审计事件',process1:'融资申请',process1Sub:'交易与对手方数据进入系统',process2:'风险评估',process2Sub:'计算风险并解释主要因素',process3:'融资决策',process3Sub:'通过、人工复核或拒绝',process4:'控制反馈',process4Sub:'执行措施并写入审计账本',recentRequests:'最近融资申请',rowHint:'点击任意一行查看决策解释',showAll:'查看全部 →',thCompany:'企业',thAmount:'融资金额',thTerm:'期限',thRisk:'风险分数',thDecision:'决策结果',thAction:'控制措施',days:'天',reviewTitle:'融资风险审查',reviewSub:'创建新案例，或选择已有案例查看风险因素解释',reloadDemo:'重新装载演示案例',formTitle:'融资参数录入',formSub:'所有字段均进入透明的基线模型',fieldCompany:'企业标识',fieldAmount:'融资金额',fieldTerm:'融资期限（天）',fieldDelay:'付款延迟（天）',fieldCounterparty:'交易对手风险（0–1）',fieldRelationship:'合作时长（月）',fieldTransactions:'近 30 天交易数',fieldInvoice:'发票信息不一致',submitRequest:'计算风险并生成决策',selectCase:'请选择融资申请',selectCaseSub:'这里将展示风险评分和因素贡献',caseRegister:'融资申请台账',caseRegisterSub:'演示环境使用匿名合成数据',ledgerTitle:'可验证审计账本',ledgerSub:'使用相互关联的哈希记录融资申请完整生命周期',verifyNow:'立即验证',integrityTitle:'业务事件完整性验证',integrityText:'每个事件的哈希同时依赖事件内容和上一条记录。历史记录一旦被修改，哈希链将在重新验证时报告异常。',chainValid:'账本链有效',chainInvalid:'发现完整性异常',eventJournal:'业务事件日志',eventsRecorded:'个事件已写入',thEvent:'事件类型',thEntity:'业务对象',thTime:'发生时间',thPreviousHash:'上一事件哈希',thHash:'当前事件哈希',modelTitle:'演示原型方法说明',modelSub:'明确 MVP 能够验证什么，以及科研证据的边界',modelData:'输入特征',modelDataText:'融资金额与期限、付款延迟、交易对手风险、凭证不一致、合作历史和交易活跃度。',modelRisk:'可解释风险评分',modelRiskText:'归一化加权模型将多个因素转换为 0–1 风险分数，并给出各特征对结果的贡献。',modelDecision:'决策规则',modelDecisionText:'低风险自动通过，中风险进入人工复核，高风险被拒绝并触发强化控制。',modelLedger:'审计证据链',modelLedgerText:'每笔申请形成申请、评估、决策和控制四类事件，通过关联哈希检测历史修改。',modelLoop:'风险闭环',modelLoopText:'模型输出不仅用于展示，还会直接触发业务控制措施，并将结果回写审计账本。',modelProof:'MVP 验证目标',modelProofText:'原型验证场景的技术可行性和组件间的逻辑闭环，而不是证明完整架构已达到工业部署效果。',boundaryTitle:'科研声明边界：',boundaryText:'本系统属于计算机模拟场景验证。账本采用 SQLite 上的哈希链，风险模型采用透明基线算法；MVP 不声称实现 Hyperledger Fabric、TGNN、ZKP 或真实银行系统集成。',approved:'已通过',manual_review:'人工复核',rejected:'已拒绝',standard_monitoring:'标准持续监测',request_documents_and_enhanced_validation:'补充资料并执行强化核验',suspend_auto_approval_and_enhanced_validation:'暂停自动审批并执行强化核验',riskFactors:'风险因素贡献',amount:'融资金额',payment_delay_days:'付款延迟',counterparty_risk:'交易对手风险',invoice_mismatch:'凭证信息不一致',relationship_age_risk:'合作历史较短',transaction_velocity:'交易活跃度',decisionResult:'融资决策结果',requestCreated:'融资申请已完成评估',demoReady:'演示环境已重置：3 个案例、12 个审计事件',ledgerOk:'验证通过：业务事件哈希链完整',ledgerFail:'验证失败：账本完整性异常',FINANCING_REQUEST:'融资申请登记',RISK_ASSESSMENT:'风险评估',FINANCING_DECISION:'融资决策',CONTROL_ACTION:'控制措施执行',noData:'暂无数据，请点击开始答辩演示'
+    }
   };
-  const fmt = value => new Intl.NumberFormat('zh-CN',{maximumFractionDigits:0}).format(value);
+
+  let lang = localStorage.getItem('daibm-lang') || 'ru';
+  let requestsState = [];
+  let ledgerState = [];
+  let dashboardState = null;
+  let selectedId = null;
+  const t = key => I18N[lang][key] || key;
+  const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const api = async (path, options={}) => { const response=await fetch(path,{headers:{'Content-Type':'application/json'},...options}); if(!response.ok) throw new Error(await response.text()); return response.json(); };
+  const currency = value => new Intl.NumberFormat(lang==='ru'?'ru-RU':'zh-CN',{style:'currency',currency:'CNY',maximumFractionDigits:0}).format(value);
+  const scoreColor = score => score>=.72?'var(--red)':score>=.45?'var(--amber)':'var(--green)';
+
+  function setLanguage(next){ lang=next; localStorage.setItem('daibm-lang',lang); document.documentElement.lang=lang==='ru'?'ru':'zh-CN'; document.title=lang==='ru'?'DAIBM-SCF — демонстрационная система':'DAIBM-SCF — 供应链金融风险审计演示系统'; document.querySelectorAll('[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===lang)); document.querySelectorAll('[data-i18n]').forEach(el=>{ const value=I18N[lang][el.dataset.i18n]; if(value) el.textContent=value; }); renderAll(); }
+  function switchView(view){ document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id===`view-${view}`)); document.querySelectorAll('[data-view-button]').forEach(el=>el.classList.toggle('active',el.dataset.viewButton===view)); window.scrollTo({top:0,behavior:'smooth'}); }
+  function toast(message){ const el=document.querySelector('#toast'); el.textContent=message; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer=setTimeout(()=>el.classList.remove('show'),3200); }
+
   async function refreshAll(){
-    const [dashboard, requests, ledger] = await Promise.all([api('/api/dashboard'), api('/api/requests'), api('/api/ledger?limit=24')]);
-    document.querySelector('#requestCount').textContent = dashboard.request_count;
-    document.querySelector('#averageRisk').textContent = dashboard.average_risk_score.toFixed(3);
-    document.querySelector('#eventCount').textContent = dashboard.ledger_event_count;
-    const state=document.querySelector('#ledgerState'); state.textContent=dashboard.ledger_valid?'有效':'异常'; state.style.color=dashboard.ledger_valid?'var(--ok)':'var(--bad)';
-    document.querySelector('#requests').innerHTML=requests.map(r=>`<tr><td>${r.applicant_id}</td><td>¥ ${fmt(r.amount)}</td><td>${r.risk_score.toFixed(3)}</td><td><span class="pill ${r.decision}">${r.decision}</span></td><td>${r.control_action}</td></tr>`).join('');
-    document.querySelector('#ledger').innerHTML=ledger.map(e=>`<tr><td>${e.id}</td><td>${e.event_type}</td><td>${e.entity_id.slice(0,12)}</td><td><code>${e.event_hash.slice(0,24)}…</code></td></tr>`).join('');
+    [dashboardState,requestsState,ledgerState]=await Promise.all([api('/api/dashboard'),api('/api/requests'),api('/api/ledger?limit=100')]);
+    if(!selectedId && requestsState.length) selectedId=[...requestsState].sort((a,b)=>b.risk_score-a.risk_score)[0].request_id;
+    renderAll();
   }
-  async function seedDemo(){ await api('/api/demo/seed',{method:'POST'}); await refreshAll(); }
-  async function verifyLedger(){ const result=await api('/api/ledger/verify'); alert(result.valid?`账本有效，共 ${result.event_count} 个事件`:`账本异常，事件 ${result.invalid_event_id}`); await refreshAll(); }
+  function renderAll(){ if(!dashboardState) return; renderDashboard(); renderRequestTables(); renderDetail(); renderLedger(); }
+  function renderDashboard(){
+    document.querySelector('#requestCount').textContent=dashboardState.request_count;
+    document.querySelector('#averageRisk').textContent=dashboardState.average_risk_score.toFixed(3);
+    document.querySelector('#eventCount').textContent=dashboardState.ledger_event_count;
+    const state=document.querySelector('#ledgerState'); state.textContent=dashboardState.ledger_valid?t('valid'):t('invalid'); state.style.color=dashboardState.ledger_valid?'var(--green)':'var(--red)';
+    const counts=dashboardState.decision_counts||{}, total=dashboardState.request_count||0, approved=counts.approved||0, review=counts.manual_review||0, rejected=counts.rejected||0;
+    document.querySelector('#donutTotal').textContent=total;
+    const a=total?approved/total*100:0, m=total?review/total*100:0;
+    document.querySelector('#decisionDonut').style.background=total?`conic-gradient(var(--green) 0 ${a}%,var(--amber) ${a}% ${a+m}%,var(--red) ${a+m}% 100%)`:'#edf0f5';
+    document.querySelector('#decisionLegend').innerHTML=[['approved','green',approved],['manual_review','amber',review],['rejected','red',rejected]].map(([key,color,count])=>`<div class="legend-row"><i class="dot ${color}"></i><span>${t(key)}</span><b>${count}</b></div>`).join('');
+  }
+  function requestRows(items){
+    if(!items.length) return `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:28px">${t('noData')}</td></tr>`;
+    return items.map(r=>`<tr class="clickable" onclick="openRequest('${r.request_id}')"><td><div class="company"><span class="avatar">${esc(r.applicant_id.slice(-2).toUpperCase())}</span><span><b>${esc(r.applicant_id)}</b><small>${esc(r.request_id.slice(0,8))}</small></span></div></td><td><b>${currency(r.amount)}</b></td><td>${r.term_days} ${t('days')}</td><td><span class="risk-number" style="color:${scoreColor(r.risk_score)}">${r.risk_score.toFixed(3)}</span><div class="mini-track"><i style="width:${r.risk_score*100}%;background:${scoreColor(r.risk_score)}"></i></div></td><td><span class="pill ${r.decision}">${t(r.decision)}</span></td><td>${t(r.control_action)}</td></tr>`).join('');
+  }
+  function renderRequestTables(){ const rows=requestRows(requestsState); document.querySelector('#overviewRequests').innerHTML=rows; document.querySelector('#reviewRequests').innerHTML=rows; }
+  function openRequest(id){ selectedId=id; switchView('review'); renderDetail(); }
+  function renderDetail(){
+    const el=document.querySelector('#riskDetail'), r=requestsState.find(item=>item.request_id===selectedId);
+    if(!r){ el.innerHTML=`<div class="empty-detail"><div><div class="circle">◎</div><b>${t('selectCase')}</b><p>${t('selectCaseSub')}</p></div></div>`; return; }
+    const factors=r.explanations.map(f=>`<div class="factor"><span>${t(f.feature)}</span><div class="factor-track"><i style="width:${Math.min(100,f.weighted_contribution/.25*100)}%"></i></div><b>${Number(f.weighted_contribution).toFixed(3)}</b></div>`).join('');
+    el.innerHTML=`<div class="risk-header"><div class="gauge" style="--score:${r.risk_score*100};background:conic-gradient(${scoreColor(r.risk_score)} ${r.risk_score*100}%,#edf0f5 0)"><span>${r.risk_score.toFixed(3)}<small>${t('thRisk')}</small></span></div><div class="detail-title"><span class="pill ${r.decision}">${t(r.decision)}</span><h3>${esc(r.applicant_id)}</h3><p>ID · ${esc(r.request_id)}</p><div class="meta"><span>${t('thAmount')}<b>${currency(r.amount)}</b></span><span>${t('thTerm')}<b>${r.term_days} ${t('days')}</b></span><span>${t('fieldDelay')}<b>${r.features.payment_delay_days} ${t('days')}</b></span></div></div></div><div class="factors"><h4>${t('riskFactors')}</h4>${factors}</div><div class="decision-callout"><div><b>${t('decisionResult')}: ${t(r.decision)}</b><small>${t(r.control_action)}</small></div><span class="pill ${r.decision}">${t(r.decision)}</span></div>`;
+  }
+  function renderLedger(){
+    document.querySelector('#ledgerCountLabel').textContent=ledgerState.length;
+    const valid=dashboardState.ledger_valid; document.querySelector('#sealState').textContent=valid?'✓':'!'; document.querySelector('#sealState').style.color=valid?'#7ef0ce':'#ff9696'; document.querySelector('#sealText').textContent=valid?t('chainValid'):t('chainInvalid');
+    document.querySelector('#ledgerRows').innerHTML=ledgerState.map(e=>`<tr><td><b>#${e.id}</b></td><td><span class="event-tag">${t(e.event_type)}</span></td><td>${esc(e.entity_id.slice(0,12))}</td><td>${new Date(e.created_at).toLocaleString(lang==='ru'?'ru-RU':'zh-CN')}</td><td><div class="hash">${esc(e.previous_hash||'GENESIS')}</div></td><td><div class="hash">${esc(e.event_hash)}</div></td></tr>`).join('');
+  }
+  async function startDemo(){ try { await api('/api/demo/reset',{method:'POST'}); selectedId=null; await refreshAll(); switchView('overview'); toast(t('demoReady')); } catch(error){ toast(error.message); } }
+  async function verifyLedger(){ try { const result=await api('/api/ledger/verify'); dashboardState.ledger_valid=result.valid; renderDashboard(); renderLedger(); switchView('ledger'); toast(result.valid?t('ledgerOk'):t('ledgerFail')); } catch(error){ toast(error.message); } }
   document.querySelector('#requestForm').addEventListener('submit',async event=>{
-    event.preventDefault(); const f=new FormData(event.target);
-    const body={applicant_id:f.get('applicant_id'),amount:Number(f.get('amount')),term_days:Number(f.get('term_days')),payment_delay_days:Number(f.get('payment_delay_days')),counterparty_risk:Number(f.get('counterparty_risk')),invoice_mismatch:f.get('invoice_mismatch')==='on',relationship_months:Number(f.get('relationship_months')),transactions_last_30d:Number(f.get('transactions_last_30d'))};
-    try { const result=await api('/api/requests',{method:'POST',body:JSON.stringify(body)}); alert(`决策：${result.decision}，风险分数：${result.risk_score}`); await refreshAll(); } catch(error){ alert(error.message); }
+    event.preventDefault(); const f=new FormData(event.target); const body={applicant_id:f.get('applicant_id'),amount:Number(f.get('amount')),term_days:Number(f.get('term_days')),payment_delay_days:Number(f.get('payment_delay_days')),counterparty_risk:Number(f.get('counterparty_risk')),invoice_mismatch:f.get('invoice_mismatch')==='on',relationship_months:Number(f.get('relationship_months')),transactions_last_30d:Number(f.get('transactions_last_30d'))};
+    try { const result=await api('/api/requests',{method:'POST',body:JSON.stringify(body)}); selectedId=result.request_id; await refreshAll(); renderDetail(); toast(`${t('requestCreated')}: ${t(result.decision)} · ${result.risk_score.toFixed(3)}`); } catch(error){ toast(error.message); }
   });
-  refreshAll();
+  setLanguage(lang);
+  refreshAll().catch(error=>toast(error.message));
 </script>
 </body>
 </html>
-

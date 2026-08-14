@@ -24,3 +24,8 @@ def test_demo_creates_closed_loop_and_valid_ledger(tmp_path):
         health = client.get("/api/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
+
+        reset = client.post("/api/demo/reset")
+        assert reset.status_code == 200
+        assert len(reset.json()) == 3
+        assert client.get("/api/ledger/verify").json()["event_count"] == 12

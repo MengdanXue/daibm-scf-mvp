@@ -163,6 +163,13 @@ class FinancingService:
         ]
         return [self.create_request(scenario) for scenario in scenarios]
 
+    def reset_demo(self) -> list[dict[str, Any]]:
+        """Reset only the local synthetic demo store and rebuild the three scenarios."""
+        with connect(self.db_path) as connection:
+            connection.execute("DELETE FROM ledger_events")
+            connection.execute("DELETE FROM financing_requests")
+        return self.seed_demo()
+
     @staticmethod
     def _row_to_request(row) -> dict[str, Any]:
         features = json.loads(row["features_json"])
@@ -178,4 +185,3 @@ class FinancingService:
             "explanations": json.loads(row["explanation_json"]),
             "control_action": row["control_action"],
         }
-
