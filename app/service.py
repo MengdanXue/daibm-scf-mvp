@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from decimal import Decimal
 from typing import Any
 
-from .db import connect, initialize
-from .ledger import Ledger, canonical_json
-from .risk import assess
-from .schemas import FinancingRequestCreate
+from sqlalchemy.orm import Session, sessionmaker
 
+from app.ledger import canonical_timestamp
+from app.models import FinancingRequestModel
+from app.repositories import FinancingRequestRepository, LedgerRepository
+from app.repositories.ledger import LedgerEventSpec
+from app.risk import RiskResult, assess
+from app.schemas import FinancingRequestCreate
+
+__all__ = ["FinancingService"]
 
 DECISIONS = {
     "low": ("approved", "standard_monitoring"),
@@ -18,199 +22,212 @@ DECISIONS = {
     "high": ("rejected", "suspend_auto_approval_and_enhanced_validation"),
 }
 
+DEMO_SCENARIOS = (
+    FinancingRequestCreate(
+        applicant_id="supplier-stable-01",
+        amount=450_000,
+        term_days=60,
+        payment_delay_days=2,
+        counterparty_risk=0.12,
+        invoice_mismatch=False,
+        relationship_months=48,
+        transactions_last_30d=8,
+    ),
+    FinancingRequestCreate(
+        applicant_id="supplier-review-02",
+        amount=1_800_000,
+        term_days=90,
+        payment_delay_days=18,
+        counterparty_risk=0.48,
+        invoice_mismatch=False,
+        relationship_months=10,
+        transactions_last_30d=19,
+    ),
+    FinancingRequestCreate(
+        applicant_id="supplier-risk-03",
+        amount=4_200_000,
+        term_days=120,
+        payment_delay_days=52,
+        counterparty_risk=0.87,
+        invoice_mismatch=True,
+        relationship_months=2,
+        transactions_last_30d=45,
+    ),
+)
+
 
 class FinancingService:
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self.ledger = Ledger(db_path)
-
-    def initialize(self) -> None:
-        initialize(self.db_path)
-
-    def create_request(self, request: FinancingRequestCreate) -> dict[str, Any]:
-        request_id = str(uuid.uuid4())
-        created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        result = assess(request)
-        decision, control_action = DECISIONS[result.band]
-        features = request.model_dump()
-        explanations = result.contributions
-
-        with connect(self.db_path) as connection:
-            connection.execute(
-                """
-                INSERT INTO financing_requests
-                    (request_id, created_at, applicant_id, amount, term_days,
-                     features_json, risk_score, decision, explanation_json, control_action)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    request_id,
-                    created_at,
-                    request.applicant_id,
-                    request.amount,
-                    request.term_days,
-                    json.dumps(features, ensure_ascii=False, sort_keys=True),
-                    result.score,
-                    decision,
-                    json.dumps(explanations, ensure_ascii=False),
-                    control_action,
-                ),
-            )
-
-        self.ledger.append(
-            "FINANCING_REQUEST",
-            request_id,
-            {
-                "applicant_id": request.applicant_id,
-                "amount": request.amount,
-                "term_days": request.term_days,
-            },
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        financing_repository: FinancingRequestRepository | None = None,
+        ledger_repository: LedgerRepository | None = None,
+    ) -> None:
+        self.session_factory = session_factory
+        self.financing_repository = (
+            financing_repository or FinancingRequestRepository()
         )
-        self.ledger.append(
-            "RISK_ASSESSMENT",
-            request_id,
-            {
-                "score": result.score,
-                "band": result.band,
-                "top_contributions": explanations[:3],
-                "model": "transparent_logistic_baseline_v0.1",
-            },
-        )
-        self.ledger.append(
-            "FINANCING_DECISION",
-            request_id,
-            {"decision": decision, "risk_score": result.score},
-        )
-        self.ledger.append(
-            "CONTROL_ACTION",
-            request_id,
-            {"action": control_action, "source": "risk_decision_loop"},
-        )
-        return self.get_request(request_id)
+        self.ledger_repository = ledger_repository or LedgerRepository()
 
-    def get_request(self, request_id: str) -> dict[str, Any]:
-        with connect(self.db_path) as connection:
-            row = connection.execute(
-                "SELECT * FROM financing_requests WHERE request_id = ?", (request_id,)
-            ).fetchone()
-        if row is None:
-            raise KeyError(request_id)
-        return self._row_to_request(row)
+    def create_request(
+        self,
+        request: FinancingRequestCreate,
+    ) -> dict[str, Any]:
+        with self.session_factory.begin() as session:
+            model = self._create_request_in_session(session, request)
+        return self._request_to_dict(model)
+
+    def get_request(self, request_id: str | uuid.UUID) -> dict[str, Any]:
+        try:
+            normalized_id = uuid.UUID(str(request_id))
+        except ValueError as error:
+            raise KeyError(str(request_id)) from error
+        with self.session_factory() as session:
+            model = self.financing_repository.get(session, normalized_id)
+            if model is None:
+                raise KeyError(str(request_id))
+            return self._request_to_dict(model)
 
     def list_requests(self, limit: int = 50) -> list[dict[str, Any]]:
-        with connect(self.db_path) as connection:
-            rows = connection.execute(
-                "SELECT * FROM financing_requests ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [self._row_to_request(row) for row in rows]
+        with self.session_factory() as session:
+            return [
+                self._request_to_dict(model)
+                for model in self.financing_repository.list(session, limit)
+            ]
+
+    def list_ledger(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.session_factory() as session:
+            return self.ledger_repository.list(session, limit)
+
+    def verify_ledger(self) -> dict[str, Any]:
+        with self.session_factory() as session:
+            return self.ledger_repository.verify(session)
 
     def dashboard(self) -> dict[str, Any]:
-        with connect(self.db_path) as connection:
-            total = connection.execute(
-                "SELECT COUNT(*) AS count FROM financing_requests"
-            ).fetchone()["count"]
-            average = connection.execute(
-                "SELECT COALESCE(AVG(risk_score), 0) AS value FROM financing_requests"
-            ).fetchone()["value"]
-            rows = connection.execute(
-                "SELECT decision, COUNT(*) AS count FROM financing_requests GROUP BY decision"
-            ).fetchall()
-        decision_counts = {row["decision"]: row["count"] for row in rows}
-        verification = self.ledger.verify()
+        with self.session_factory() as session:
+            total, average, decision_counts = (
+                self.financing_repository.dashboard_aggregates(session)
+            )
+            verification = self.ledger_repository.verify(session)
         return {
             "request_count": total,
-            "average_risk_score": round(float(average), 4),
+            "average_risk_score": round(average, 4),
             "decision_counts": decision_counts,
             "ledger_valid": verification["valid"],
             "ledger_event_count": verification["event_count"],
         }
 
     def seed_demo(self) -> list[dict[str, Any]]:
-        if self.list_requests(limit=1):
-            return self.list_requests(limit=50)
-        scenarios = [
-            FinancingRequestCreate(
-                applicant_id="supplier-stable-01",
-                amount=450_000,
-                term_days=60,
-                payment_delay_days=2,
-                counterparty_risk=0.12,
-                invoice_mismatch=False,
-                relationship_months=48,
-                transactions_last_30d=8,
-            ),
-            FinancingRequestCreate(
-                applicant_id="supplier-review-02",
-                amount=1_800_000,
-                term_days=90,
-                payment_delay_days=18,
-                counterparty_risk=0.48,
-                invoice_mismatch=False,
-                relationship_months=10,
-                transactions_last_30d=19,
-            ),
-            FinancingRequestCreate(
-                applicant_id="supplier-risk-03",
-                amount=4_200_000,
-                term_days=120,
-                payment_delay_days=52,
-                counterparty_risk=0.87,
-                invoice_mismatch=True,
-                relationship_months=2,
-                transactions_last_30d=45,
-            ),
-        ]
-        return [self.create_request(scenario) for scenario in scenarios]
+        with self.session_factory() as session:
+            if self.financing_repository.exists_any(session):
+                return [
+                    self._request_to_dict(model)
+                    for model in self.financing_repository.list(session, 50)
+                ]
+
+        with self.session_factory.begin() as session:
+            models = [
+                self._create_request_in_session(session, scenario)
+                for scenario in DEMO_SCENARIOS
+            ]
+        return [self._request_to_dict(model) for model in models]
 
     def reset_demo(self) -> list[dict[str, Any]]:
-        """Reset only the local synthetic demo store and rebuild the three scenarios."""
-        with connect(self.db_path) as connection:
-            connection.execute("DELETE FROM ledger_events")
-            connection.execute("DELETE FROM financing_requests")
-            connection.execute("DELETE FROM sqlite_sequence WHERE name = 'ledger_events'")
-        return self.seed_demo()
+        with self.session_factory.begin() as session:
+            self.ledger_repository.clear_demo_data(session)
+            models = [
+                self._create_request_in_session(session, scenario)
+                for scenario in DEMO_SCENARIOS
+            ]
+        return [self._request_to_dict(model) for model in models]
 
     def tamper_demo_ledger(self) -> dict[str, Any]:
-        """Alter one synthetic event without updating its hash to demonstrate detection."""
-        if not self.list_requests(limit=1):
+        with self.session_factory() as session:
+            has_requests = self.financing_repository.exists_any(session)
+        if not has_requests:
             self.seed_demo()
-        verification = self.ledger.verify()
+
+        verification = self.verify_ledger()
         if not verification["valid"]:
             return verification
-        with connect(self.db_path) as connection:
-            row = connection.execute(
-                """
-                SELECT id, payload_json
-                FROM ledger_events
-                WHERE event_type = 'RISK_ASSESSMENT'
-                ORDER BY id ASC
-                LIMIT 1
-                """
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("No risk-assessment event available for the demo")
-            payload = json.loads(row["payload_json"])
-            payload["demo_tampered"] = True
-            payload["score"] = 0.9999
-            connection.execute(
-                "UPDATE ledger_events SET payload_json = ? WHERE id = ?",
-                (canonical_json(payload), row["id"]),
-            )
-        return self.ledger.verify()
+
+        with self.session_factory.begin() as session:
+            self.ledger_repository.tamper_first_risk_event(session)
+        return self.verify_ledger()
+
+    def _create_request_in_session(
+        self,
+        session: Session,
+        request: FinancingRequestCreate,
+    ) -> FinancingRequestModel:
+        result = assess(request)
+        decision, control_action = DECISIONS[result.band]
+        model = FinancingRequestModel(
+            request_id=uuid.uuid4(),
+            created_at=datetime.now(timezone.utc),
+            applicant_id=request.applicant_id,
+            amount=Decimal(str(request.amount)),
+            term_days=request.term_days,
+            features=request.model_dump(),
+            risk_score=result.score,
+            decision=decision,
+            explanations=result.contributions,
+            control_action=control_action,
+        )
+        self.financing_repository.add(session, model)
+        self.ledger_repository.append_many(
+            session,
+            model.request_id,
+            self._event_specs(request, result, decision, control_action),
+        )
+        return model
 
     @staticmethod
-    def _row_to_request(row) -> dict[str, Any]:
-        features = json.loads(row["features_json"])
+    def _event_specs(
+        request: FinancingRequestCreate,
+        result: RiskResult,
+        decision: str,
+        control_action: str,
+    ) -> list[LedgerEventSpec]:
+        return [
+            (
+                "FINANCING_REQUEST",
+                {
+                    "applicant_id": request.applicant_id,
+                    "amount": request.amount,
+                    "term_days": request.term_days,
+                },
+            ),
+            (
+                "RISK_ASSESSMENT",
+                {
+                    "score": result.score,
+                    "band": result.band,
+                    "top_contributions": result.contributions[:3],
+                    "model": "transparent_logistic_baseline_v0.1",
+                },
+            ),
+            (
+                "FINANCING_DECISION",
+                {"decision": decision, "risk_score": result.score},
+            ),
+            (
+                "CONTROL_ACTION",
+                {"action": control_action, "source": "risk_decision_loop"},
+            ),
+        ]
+
+    @staticmethod
+    def _request_to_dict(model: FinancingRequestModel) -> dict[str, Any]:
         return {
-            "request_id": row["request_id"],
-            "created_at": row["created_at"],
-            "applicant_id": row["applicant_id"],
-            "amount": row["amount"],
-            "term_days": row["term_days"],
-            "features": features,
-            "risk_score": row["risk_score"],
-            "decision": row["decision"],
-            "explanations": json.loads(row["explanation_json"]),
-            "control_action": row["control_action"],
+            "request_id": str(model.request_id),
+            "created_at": canonical_timestamp(model.created_at),
+            "applicant_id": model.applicant_id,
+            "amount": float(model.amount),
+            "term_days": model.term_days,
+            "features": model.features,
+            "risk_score": model.risk_score,
+            "decision": model.decision,
+            "explanations": model.explanations,
+            "control_action": model.control_action,
         }

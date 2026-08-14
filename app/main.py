@@ -6,31 +6,45 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 
-from .config import database_path
-from .schemas import FinancingRequestCreate
-from .service import FinancingService
-
+from app.config import PostgresSettings
+from app.database import Database
+from app.schemas import FinancingRequestCreate
+from app.service import FinancingService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
-def create_app(db_path: Path | None = None) -> FastAPI:
-    service = FinancingService(db_path or database_path())
+def create_app(database: Database | None = None) -> FastAPI:
+    owns_database = database is None
+    active_database = database or Database.create(
+        PostgresSettings.from_env().sqlalchemy_url
+    )
+    service = FinancingService(active_database.session_factory)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
-        service.initialize()
+        application.state.database = active_database
         application.state.service = service
         yield
+        if owns_database:
+            active_database.dispose()
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
-        version="0.3.0",
-        description="Scenario demonstrator for an auditable supply-chain finance risk loop.",
+        version="0.4.0",
+        description=(
+            "Scenario demonstrator for an auditable supply-chain finance "
+            "risk loop."
+        ),
         lifespan=lifespan,
     )
-    application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    application.mount(
+        "/static",
+        StaticFiles(directory=STATIC_DIR),
+        name="static",
+    )
 
     @application.get("/", include_in_schema=False)
     def index():
@@ -38,19 +52,42 @@ def create_app(db_path: Path | None = None) -> FastAPI:
 
     @application.get("/api/health")
     def health(request: Request):
-        verification = request.app.state.service.ledger.verify()
-        return {"status": "ok", "ledger": verification}
+        try:
+            request.app.state.database.is_reachable()
+            verification = request.app.state.service.verify_ledger()
+        except SQLAlchemyError as error:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "database_unavailable",
+                    "message": "PostgreSQL is unavailable",
+                },
+            ) from error
+        return {
+            "status": "ok",
+            "database": {
+                "backend": "postgresql",
+                "reachable": True,
+            },
+            "ledger": verification,
+        }
 
     @application.get("/api/dashboard")
     def dashboard(request: Request):
         return request.app.state.service.dashboard()
 
     @application.post("/api/requests", status_code=201)
-    def create_financing_request(payload: FinancingRequestCreate, request: Request):
+    def create_financing_request(
+        payload: FinancingRequestCreate,
+        request: Request,
+    ):
         return request.app.state.service.create_request(payload)
 
     @application.get("/api/requests")
-    def list_financing_requests(request: Request, limit: int = Query(50, ge=1, le=200)):
+    def list_financing_requests(
+        request: Request,
+        limit: int = Query(50, ge=1, le=200),
+    ):
         return request.app.state.service.list_requests(limit=limit)
 
     @application.get("/api/requests/{request_id}")
@@ -58,15 +95,21 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         try:
             return request.app.state.service.get_request(request_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Request not found") from error
+            raise HTTPException(
+                status_code=404,
+                detail="Request not found",
+            ) from error
 
     @application.get("/api/ledger")
-    def ledger(request: Request, limit: int = Query(100, ge=1, le=500)):
-        return request.app.state.service.ledger.list(limit=limit)
+    def ledger(
+        request: Request,
+        limit: int = Query(100, ge=1, le=500),
+    ):
+        return request.app.state.service.list_ledger(limit=limit)
 
     @application.get("/api/ledger/verify")
     def verify_ledger(request: Request):
-        return request.app.state.service.ledger.verify()
+        return request.app.state.service.verify_ledger()
 
     @application.post("/api/demo/seed")
     def seed_demo(request: Request):
