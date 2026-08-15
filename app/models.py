@@ -9,7 +9,6 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
-    ForeignKey,
     Identity,
     Index,
     Integer,
@@ -20,6 +19,19 @@ from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = ["Base", "FinancingRequestModel", "LedgerEventModel"]
+
+LEDGER_EVENT_TYPES = (
+    "FINANCING_REQUEST",
+    "RISK_ASSESSMENT",
+    "FINANCING_DECISION",
+    "CONTROL_ACTION",
+    "MODEL_INFERENCE_COMPLETED",
+    "RISK_POLICY_TRIGGERED",
+    "CONTROL_ACTION_REQUESTED",
+    "SIMULATED_RISK_INJECTED",
+    "INTEGRITY_VIOLATION_DETECTED",
+    "LEDGER_RECOVERY_COMPLETED",
+)
 
 
 class Base(DeclarativeBase):
@@ -87,11 +99,8 @@ class LedgerEventModel(Base):
     __table_args__ = (
         CheckConstraint(
             "event_type IN ("
-            "'FINANCING_REQUEST', "
-            "'RISK_ASSESSMENT', "
-            "'FINANCING_DECISION', "
-            "'CONTROL_ACTION'"
-            ")",
+            + ", ".join(f"'{value}'" for value in LEDGER_EVENT_TYPES)
+            + ")",
             name="ck_ledger_events_event_type",
         ),
         CheckConstraint(
@@ -113,10 +122,15 @@ class LedgerEventModel(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+    stream_id: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="global",
+        server_default="global",
+    )
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("financing_requests.request_id", ondelete="RESTRICT"),
         nullable=False,
     )
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

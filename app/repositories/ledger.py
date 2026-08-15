@@ -26,7 +26,7 @@ class LedgerRepository:
         session.execute(
             text(
                 "TRUNCATE ledger_events, financing_requests "
-                "RESTART IDENTITY"
+                "RESTART IDENTITY CASCADE"
             )
         )
 

@@ -9,6 +9,30 @@ from sqlalchemy.orm import Session, sessionmaker
 from testcontainers.community.postgres import PostgresContainer
 
 
+ALL_DATA_TABLES = (
+    "integrity_incidents",
+    "policy_decisions",
+    "risk_assessments",
+    "model_versions",
+    "model_runs",
+    "graph_snapshots",
+    "synthetic_scenarios",
+    "dataset_versions",
+    "ledger_events",
+    "financing_requests",
+)
+
+
+def truncate_all(connection) -> None:
+    connection.execute(
+        text(
+            "TRUNCATE "
+            + ", ".join(ALL_DATA_TABLES)
+            + " RESTART IDENTITY CASCADE"
+        )
+    )
+
+
 @pytest.fixture(scope="session")
 def postgres_url() -> Iterator[URL]:
     with PostgresContainer("postgres:17-alpine") as postgres:
@@ -35,17 +59,7 @@ def session_factory(
 ) -> Iterator[sessionmaker[Session]]:
     factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
     with migrated_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE ledger_events, financing_requests "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        truncate_all(connection)
     yield factory
     with migrated_engine.begin() as connection:
-        connection.execute(
-            text(
-                "TRUNCATE ledger_events, financing_requests "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        truncate_all(connection)

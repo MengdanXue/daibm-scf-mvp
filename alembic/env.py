@@ -8,6 +8,7 @@ from sqlalchemy.pool import NullPool
 
 from app.config import PostgresSettings
 from app.models import Base
+import app.models_research  # noqa: F401  Registers Research Core metadata.
 
 
 config = context.config
