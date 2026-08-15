@@ -70,6 +70,7 @@ class SyntheticDataset:
     size_codes: NDArray[np.int8]
     states: NDArray[np.float32]
     relationships: NDArray[np.int32]
+    relationship_active_months: NDArray[np.int16]
     edge_observations: NDArray[np.float32]
     severe_events: NDArray[np.uint8]
 
@@ -79,6 +80,7 @@ class SyntheticDataset:
             self.size_codes,
             self.states,
             self.relationships,
+            self.relationship_active_months,
             self.edge_observations,
             self.severe_events,
         ):
@@ -108,6 +110,7 @@ class SyntheticDataset:
             ("size_codes", self.size_codes),
             ("states", self.states),
             ("relationships", self.relationships),
+            ("relationship_active_months", self.relationship_active_months),
             ("edge_observations", self.edge_observations),
             ("severe_events", self.severe_events),
         )

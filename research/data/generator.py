@@ -91,6 +91,12 @@ def generate_dataset(
     severe_events = (rng.random((months, n)) < event_probability).astype(np.uint8)
 
     relationships = _relationships(rng, n, active.edge_count)
+    relationship_active_months = np.column_stack(
+        (
+            np.ones(active.edge_count, dtype=np.int16),
+            np.full(active.edge_count, months, dtype=np.int16),
+        )
+    )
     suppliers = relationships[:, 0]
     customers = relationships[:, 1]
     exposure = 0.62 * latent[:, suppliers] + 0.38 * latent[:, customers]
@@ -118,6 +124,7 @@ def generate_dataset(
         size_codes=size_codes,
         states=states,
         relationships=relationships,
+        relationship_active_months=relationship_active_months,
         edge_observations=edge_observations,
         severe_events=severe_events,
     )

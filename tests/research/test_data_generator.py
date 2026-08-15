@@ -16,6 +16,9 @@ def test_reference_dataset_has_frozen_dimensions_and_safe_relationships():
     assert len(dataset.enterprise_ids) == 500
     assert dataset.states.shape == (24, 500, 7)
     assert dataset.relationships.shape == (1500, 2)
+    assert dataset.relationship_active_months.shape == (1500, 2)
+    assert np.all(dataset.relationship_active_months[:, 0] == 1)
+    assert np.all(dataset.relationship_active_months[:, 1] == 24)
     assert dataset.edge_observations.shape == (24, 1500, 4)
     assert dataset.severe_events.shape == (24, 500)
     assert np.all(dataset.relationships[:, 0] != dataset.relationships[:, 1])
