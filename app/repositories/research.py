@@ -6,13 +6,20 @@ import uuid
 from datetime import datetime, timezone
 
 import numpy as np
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.ledger import canonical_timestamp
+from app.domain.research import PolicyDecision, RiskAssessment
+from app.models import LedgerEventModel
 
 from app.models_research import (
     DatasetVersionModel,
     GraphSnapshotModel,
     ModelRunModel,
     ModelVersionModel,
+    PolicyDecisionModel,
+    RiskAssessmentModel,
     SyntheticScenarioModel,
 )
 from research.artifacts.verification import VerifiedArtifact
@@ -160,3 +167,116 @@ class ResearchRepository:
         session: Session, graph_snapshot_id: uuid.UUID
     ) -> GraphSnapshotModel | None:
         return session.get(GraphSnapshotModel, graph_snapshot_id)
+
+    @staticmethod
+    def add_assessment(
+        session: Session, assessment: RiskAssessment
+    ) -> RiskAssessmentModel:
+        model = RiskAssessmentModel(
+            risk_assessment_id=assessment.risk_assessment_id,
+            enterprise_id=assessment.enterprise_id,
+            graph_snapshot_id=assessment.graph_snapshot_id,
+            model_version_id=assessment.model_version_id,
+            input_sha256=assessment.input_sha256,
+            risk_score=assessment.risk_score,
+            band=assessment.band,
+            explanations=list(assessment.explanations),
+            inferred_at=assessment.inferred_at,
+        )
+        session.add(model)
+        session.flush()
+        return model
+
+    @staticmethod
+    def add_policy_decision(
+        session: Session, decision: PolicyDecision
+    ) -> PolicyDecisionModel:
+        model = PolicyDecisionModel(
+            policy_decision_id=decision.policy_decision_id,
+            risk_assessment_id=decision.risk_assessment_id,
+            policy_version=decision.policy_version,
+            decision=decision.decision,
+            low_threshold=decision.low_threshold,
+            high_threshold=decision.high_threshold,
+            reason_codes=list(decision.reason_codes),
+            permitted_action=decision.permitted_action,
+            created_at=decision.created_at,
+        )
+        session.add(model)
+        session.flush()
+        return model
+
+    @staticmethod
+    def get_trace(
+        session: Session, risk_assessment_id: uuid.UUID
+    ) -> dict[str, object] | None:
+        assessment = session.get(RiskAssessmentModel, risk_assessment_id)
+        if assessment is None:
+            return None
+        decision = session.scalar(
+            select(PolicyDecisionModel).where(
+                PolicyDecisionModel.risk_assessment_id == risk_assessment_id
+            )
+        )
+        events = list(
+            session.scalars(
+                select(LedgerEventModel)
+                .where(LedgerEventModel.entity_id == risk_assessment_id)
+                .order_by(LedgerEventModel.id.asc())
+            )
+        )
+        if decision is None or len(events) != 3:
+            return None
+        first_payload = events[0].payload
+        return {
+            "risk_assessment_id": str(assessment.risk_assessment_id),
+            "enterprise_id": assessment.enterprise_id,
+            "graph_snapshot_id": str(assessment.graph_snapshot_id),
+            "model_version_id": str(assessment.model_version_id),
+            "input_sha256": assessment.input_sha256,
+            "risk_score": assessment.risk_score,
+            "band": assessment.band,
+            "explanations": assessment.explanations,
+            "inferred_at": canonical_timestamp(assessment.inferred_at),
+            "policy_decision": {
+                "policy_decision_id": str(decision.policy_decision_id),
+                "policy_version": decision.policy_version,
+                "decision": decision.decision,
+                "thresholds": [
+                    decision.low_threshold,
+                    decision.high_threshold,
+                ],
+                "reason_codes": decision.reason_codes,
+                "permitted_action": decision.permitted_action,
+                "created_at": canonical_timestamp(decision.created_at),
+            },
+            "ledger_events": [
+                {
+                    "id": event.id,
+                    "created_at": canonical_timestamp(event.created_at),
+                    "stream_id": event.stream_id,
+                    "event_type": event.event_type,
+                    "entity_id": str(event.entity_id),
+                    "payload": event.payload,
+                    "previous_hash": event.previous_hash,
+                    "event_hash": event.event_hash,
+                }
+                for event in events
+            ],
+            "lineage": {
+                key: first_payload[key]
+                for key in (
+                    "artifact_sha256",
+                    "checkpoint_sha256",
+                    "dataset_content_sha256",
+                    "feature_schema_version",
+                    "graph_snapshot_sha256",
+                    "input_sha256",
+                    "model_version_id",
+                )
+            },
+            "inference_engine": "onnxruntime-cpu",
+            "real_model_inference": True,
+            "synthetic_data": True,
+            "persisted": True,
+        }

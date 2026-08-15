@@ -35,7 +35,11 @@ class LedgerRepository:
         session: Session,
         entity_id: uuid.UUID,
         events: list[LedgerEventSpec],
+        *,
+        stream_id: str = "global",
     ) -> list[LedgerEventModel]:
+        if stream_id != "global":
+            raise ValueError("PostgreSQL audit adapter supports only global stream")
         session.execute(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": LEDGER_LOCK_KEY},
@@ -53,6 +57,7 @@ class LedgerRepository:
                 event_type=event_type,
                 entity_id=entity_id,
                 payload=payload,
+                stream_id=stream_id,
             )
             session.add(event)
             session.flush()
@@ -133,6 +138,7 @@ class LedgerRepository:
         event_type: str,
         entity_id: uuid.UUID,
         payload: dict[str, Any],
+        stream_id: str = "global",
     ) -> LedgerEventModel:
         created_at = datetime.now(timezone.utc)
         event_hash = calculate_hash(
@@ -144,6 +150,7 @@ class LedgerRepository:
         )
         return LedgerEventModel(
             created_at=created_at,
+            stream_id=stream_id,
             event_type=event_type,
             entity_id=entity_id,
             payload=payload,
@@ -156,6 +163,7 @@ class LedgerRepository:
         return {
             "id": event.id,
             "created_at": canonical_timestamp(event.created_at),
+            "stream_id": event.stream_id,
             "event_type": event.event_type,
             "entity_id": str(event.entity_id),
             "payload": event.payload,

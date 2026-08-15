@@ -43,7 +43,9 @@ def test_research_status_exposes_registered_lineage(research_client):
     assert payload["model"]["real_inference"] is True
 
 
-def test_research_inference_runs_promoted_onnx_without_persisting(research_client):
+def test_research_inference_runs_promoted_onnx_with_traceable_persistence(
+    research_client,
+):
     status = research_client.get("/api/research/status").json()
 
     response = research_client.post(
@@ -62,7 +64,13 @@ def test_research_inference_runs_promoted_onnx_without_persisting(research_clien
     assert payload["inference_engine"] == "onnxruntime-cpu"
     assert payload["real_model_inference"] is True
     assert payload["synthetic_data"] is True
-    assert payload["persisted"] is False
+    assert payload["persisted"] is True
+    assert payload["policy_decision"]["decision"] in {
+        "NORMAL",
+        "ADDITIONAL_CHECK",
+        "FINANCING_REVIEW",
+    }
+    assert len(payload["ledger_events"]) == 3
     assert len(payload["input_sha256"]) == 64
     assert len(payload["explanations"]) == 3
 

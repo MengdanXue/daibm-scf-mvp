@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.schemas_research import ResearchInferenceRequest
@@ -31,7 +33,7 @@ def research_status(request: Request):
 @router.post("/inference")
 def research_inference(payload: ResearchInferenceRequest, request: Request):
     try:
-        assessment = request.app.state.research_service.assess(
+        return request.app.state.research_decision_service.assess(
             enterprise_id=payload.enterprise_id,
             graph_snapshot_id=payload.graph_snapshot_id,
             model_version_id=payload.model_version_id,
@@ -43,4 +45,13 @@ def research_inference(payload: ResearchInferenceRequest, request: Request):
         ) from error
     except ResearchModelUnavailable as error:
         raise _unavailable() from error
-    return request.app.state.research_service.response(assessment)
+
+
+@router.get("/assessments/{risk_assessment_id}/trace")
+def assessment_trace(risk_assessment_id: UUID, request: Request):
+    try:
+        return request.app.state.research_decision_service.get_trace(
+            risk_assessment_id
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Assessment trace not found") from error
