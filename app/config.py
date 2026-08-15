@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 
 from sqlalchemy import URL
@@ -44,4 +45,26 @@ class PostgresSettings:
             host=self.host,
             port=self.port,
             database=self.database,
+        )
+
+
+@dataclass(frozen=True)
+class ResearchSettings:
+    reference_dir: Path
+    required: bool = True
+
+    @classmethod
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> "ResearchSettings":
+        values = os.environ if environ is None else environ
+        default_dir = Path(__file__).resolve().parents[1] / "artifacts" / "reference"
+        raw_required = values.get("RESEARCH_CORE_REQUIRED", "true").strip().lower()
+        if raw_required not in {"true", "false"}:
+            raise ValueError("RESEARCH_CORE_REQUIRED must be true or false")
+        return cls(
+            reference_dir=Path(
+                values.get("RESEARCH_ARTIFACT_DIR", str(default_dir))
+            ),
+            required=raw_required == "true",
         )

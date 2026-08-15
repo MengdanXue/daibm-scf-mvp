@@ -21,18 +21,20 @@ def test_health_reports_postgresql_and_ledger(client):
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "database": {
-            "backend": "postgresql",
-            "reachable": True,
-        },
-        "ledger": {
-            "valid": True,
-            "event_count": 0,
-            "head_hash": "GENESIS",
-        },
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["database"] == {
+        "backend": "postgresql",
+        "reachable": True,
     }
+    assert payload["ledger"] == {
+        "valid": True,
+        "event_count": 0,
+        "head_hash": "GENESIS",
+    }
+    assert payload["research_core"]["status"] == "ready"
+    assert payload["research_core"]["required"] is True
+    assert len(payload["research_core"]["artifact_sha256"]) == 64
 
 
 def test_demo_creates_closed_loop_and_valid_ledger(client):

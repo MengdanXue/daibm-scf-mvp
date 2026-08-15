@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY alembic.ini .
 COPY alembic ./alembic
 COPY app ./app
+COPY research ./research
+COPY artifacts ./artifacts
 
 EXPOSE 8000
 

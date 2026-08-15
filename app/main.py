@@ -8,25 +8,38 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import PostgresSettings
+from app.api.research import router as research_router
+from app.config import PostgresSettings, ResearchSettings
 from app.database import Database
 from app.schemas import FinancingRequestCreate
 from app.service import FinancingService
+from app.services.research_inference import ResearchInferenceService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
-def create_app(database: Database | None = None) -> FastAPI:
+def create_app(
+    database: Database | None = None,
+    *,
+    research_settings: ResearchSettings | None = None,
+) -> FastAPI:
     owns_database = database is None
     active_database = database or Database.create(
         PostgresSettings.from_env().sqlalchemy_url
     )
     service = FinancingService(active_database.session_factory)
+    active_research_settings = research_settings or ResearchSettings.from_env()
+    research_service = ResearchInferenceService(
+        active_database.session_factory,
+        active_research_settings,
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         application.state.database = active_database
         application.state.service = service
+        application.state.research_service = research_service
+        research_service.initialize()
         yield
         if owns_database:
             active_database.dispose()
@@ -45,6 +58,7 @@ def create_app(database: Database | None = None) -> FastAPI:
         StaticFiles(directory=STATIC_DIR),
         name="static",
     )
+    application.include_router(research_router)
 
     @application.get("/", include_in_schema=False)
     def index():
@@ -63,6 +77,18 @@ def create_app(database: Database | None = None) -> FastAPI:
                     "message": "PostgreSQL is unavailable",
                 },
             ) from error
+        research_health = request.app.state.research_service.health()
+        if (
+            research_health["status"] != "ready"
+            and research_health["required"]
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "research_model_unavailable",
+                    "message": "Promoted research model is unavailable",
+                },
+            )
         return {
             "status": "ok",
             "database": {
@@ -70,6 +96,7 @@ def create_app(database: Database | None = None) -> FastAPI:
                 "reachable": True,
             },
             "ledger": verification,
+            "research_core": research_health,
         }
 
     @application.get("/api/dashboard")
