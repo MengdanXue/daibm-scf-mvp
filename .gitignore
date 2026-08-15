@@ -8,6 +8,11 @@ __pycache__/
 htmlcov/
 .env
 output/
+data/generated/
+artifacts/candidates/
+experiments/results/
+*.pt
+*.pth
 dist/
 build/
 *.egg-info/
