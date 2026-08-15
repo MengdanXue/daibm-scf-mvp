@@ -1,0 +1,124 @@
+{
+  "artifact": "tgnn-v0.4.onnx",
+  "artifact_sha256": "158d273db310c3f1abf4be7cb06aee78568e475ebb7564ebbeaa16d3efeeb0e5",
+  "checkpoint_sha256": "47de64d9cea91abe492771a4b0c6d3694d4bfffd6e7b4834dac0d5ae617c4cab",
+  "dataset": {
+    "content_sha256": "f784faa8bdef23625888d64de75c2f29a80c0a51e266e0822652569507648353",
+    "counts": {
+      "edge_observations": 36000,
+      "enterprises": 500,
+      "months": 24,
+      "relationships": 1500,
+      "severe_events": 426
+    },
+    "dataset_name": "synthetic-scf-v1",
+    "dataset_version": "1.0.0",
+    "edge_features": [
+      "monthly_transaction_amount",
+      "transaction_count",
+      "overdue_ratio",
+      "average_payment_delay_days"
+    ],
+    "generation_timestamp": "2026-08-15T00:00:00+00:00",
+    "generator_code_version": "0.4.0",
+    "parameters": {
+      "enterprise_count": 500,
+      "months": 24,
+      "relationships_per_enterprise": 3,
+      "seed": 20260815
+    },
+    "schema_version": "scf-data-v1",
+    "seed": 20260815,
+    "software_versions": {
+      "numpy": "2.5.2",
+      "python": "3.12.13"
+    },
+    "state_features": [
+      "credit_history_score",
+      "liquidity_ratio",
+      "leverage_ratio",
+      "cash_flow_index",
+      "operational_stability",
+      "overdue_ratio",
+      "average_delay_normalized"
+    ],
+    "temporal_range": {
+      "first_month": 1,
+      "last_month": 24
+    }
+  },
+  "deployment_slot": "default",
+  "feature_count": 17,
+  "feature_schema": {
+    "direction": "supplier_to_customer",
+    "gcn_adjacency": "symmetric_normalized_with_self_loops",
+    "names": [
+      "credit_history_score",
+      "liquidity_ratio",
+      "leverage_ratio",
+      "cash_flow_index",
+      "operational_stability",
+      "overdue_ratio",
+      "average_delay_normalized",
+      "inbound_amount",
+      "inbound_count",
+      "inbound_overdue_ratio",
+      "inbound_average_delay",
+      "outbound_amount",
+      "outbound_count",
+      "outbound_overdue_ratio",
+      "outbound_average_delay",
+      "in_degree",
+      "out_degree"
+    ],
+    "node_count": 500,
+    "sequence_length": 12,
+    "version": "graph-features-v1"
+  },
+  "inference_format": "onnx",
+  "input_bundle": "reference-inputs.npz",
+  "input_bundle_sha256": "88a065796cbf789ffc1e39eb5512c7b1188e97fe3b00e376442d439d7f60c5d1",
+  "input_names": [
+    "node_features",
+    "adjacency"
+  ],
+  "lifecycle_status": "promoted",
+  "metrics": {
+    "brier_score": 0.24689348265111993,
+    "confusion_matrix": [
+      [
+        712,
+        629
+      ],
+      [
+        53,
+        106
+      ]
+    ],
+    "f1": 0.2371364653243848,
+    "pr_auc": 0.19104619980239151,
+    "precision": 0.14421768707482993,
+    "recall": 0.6666666666666666,
+    "roc_auc": 0.6596597864167827
+  },
+  "model_family": "tgnn",
+  "model_name": "minimal-gcn-bilstm",
+  "node_count": 500,
+  "normalization_id": "3d0b0e25d9f6a5c8ca362aaf901ad53db3374fa8cf32c777672abc87496cddac",
+  "onnx_opset": 18,
+  "parity_max_absolute_difference": 2.384185791015625e-07,
+  "parity_tolerance": 1e-05,
+  "run_seed": 20260815,
+  "semantic_version": "0.4.0",
+  "sequence_length": 12,
+  "snapshot_sha256": "0708faf5cb75b6c2bb4ca2fe5f31f5e45cf86c41fdc0b7c91e820d9b810b9c65",
+  "training_configuration": {
+    "dropout": 0.2,
+    "early_stopping_patience": 10,
+    "learning_rate": 0.001,
+    "max_epochs": 100,
+    "seed": 20260815,
+    "spatial_dimension": 32,
+    "temporal_hidden": 32
+  }
+}

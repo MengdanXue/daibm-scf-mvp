@@ -1,0 +1,26 @@
+{
+  "direction": "supplier_to_customer",
+  "gcn_adjacency": "symmetric_normalized_with_self_loops",
+  "names": [
+    "credit_history_score",
+    "liquidity_ratio",
+    "leverage_ratio",
+    "cash_flow_index",
+    "operational_stability",
+    "overdue_ratio",
+    "average_delay_normalized",
+    "inbound_amount",
+    "inbound_count",
+    "inbound_overdue_ratio",
+    "inbound_average_delay",
+    "outbound_amount",
+    "outbound_count",
+    "outbound_overdue_ratio",
+    "outbound_average_delay",
+    "in_degree",
+    "out_degree"
+  ],
+  "node_count": 500,
+  "sequence_length": 12,
+  "version": "graph-features-v1"
+}

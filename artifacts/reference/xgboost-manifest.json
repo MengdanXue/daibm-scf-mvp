@@ -1,0 +1,53 @@
+{
+  "artifact": "xgboost-v0.4.json",
+  "artifact_sha256": "6125e2ab113c0290661480d42c3f50076c9dabb684aa0f95566863298cd89e48",
+  "configuration": {
+    "colsample_bytree": 0.8,
+    "eval_metric": "auc",
+    "learning_rate": 0.05,
+    "max_depth": 4,
+    "n_estimators": 200,
+    "random_state": 20260815,
+    "subsample": 0.8
+  },
+  "feature_count": 119,
+  "lifecycle_status": "evaluated",
+  "metrics": {
+    "brier_score": 0.09711214197638922,
+    "confusion_matrix": [
+      [
+        1334,
+        7
+      ],
+      [
+        155,
+        4
+      ]
+    ],
+    "f1": 0.047058823529411764,
+    "pr_auc": 0.16009137556802383,
+    "precision": 0.36363636363636365,
+    "recall": 0.025157232704402517,
+    "roc_auc": 0.5968933350217382
+  },
+  "model_family": "xgboost",
+  "normalization_id": "3d0b0e25d9f6a5c8ca362aaf901ad53db3374fa8cf32c777672abc87496cddac",
+  "run_seed": 20260815,
+  "semantic_version": "0.4.0",
+  "test_anchors": [
+    19,
+    20,
+    21
+  ],
+  "training_anchors": [
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "validation_anchors": [
+    17,
+    18
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "content_sha256": "f784faa8bdef23625888d64de75c2f29a80c0a51e266e0822652569507648353",
+  "counts": {
+    "edge_observations": 36000,
+    "enterprises": 500,
+    "months": 24,
+    "relationships": 1500,
+    "severe_events": 426
+  },
+  "dataset_name": "synthetic-scf-v1",
+  "dataset_version": "1.0.0",
+  "edge_features": [
+    "monthly_transaction_amount",
+    "transaction_count",
+    "overdue_ratio",
+    "average_payment_delay_days"
+  ],
+  "generation_timestamp": "2026-08-15T00:00:00+00:00",
+  "generator_code_version": "0.4.0",
+  "parameters": {
+    "enterprise_count": 500,
+    "months": 24,
+    "relationships_per_enterprise": 3,
+    "seed": 20260815
+  },
+  "schema_version": "scf-data-v1",
+  "seed": 20260815,
+  "software_versions": {
+    "numpy": "2.5.2",
+    "python": "3.12.13"
+  },
+  "state_features": [
+    "credit_history_score",
+    "liquidity_ratio",
+    "leverage_ratio",
+    "cash_flow_index",
+    "operational_stability",
+    "overdue_ratio",
+    "average_delay_normalized"
+  ],
+  "temporal_range": {
+    "first_month": 1,
+    "last_month": 24
+  }
+}

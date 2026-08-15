@@ -26,6 +26,7 @@ dev = [
 ]
 research = [
   "onnx>=1.22,<2",
+  "onnxscript>=0.7,<1",
   "scikit-learn>=1.9,<2",
   "torch>=2.13,<3",
   "xgboost>=3.4,<4",
