@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -87,6 +87,7 @@ class FinancingRequestModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
+        default=lambda: datetime.now(timezone.utc),
     )
     applicant_id: Mapped[str] = mapped_column(Text, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
@@ -101,7 +102,7 @@ class FinancingRequestModel(Base):
     status: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        default="draft",
+        default="audited",
         server_default="audited",
     )
     version: Mapped[int] = mapped_column(
