@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 HTML_PATH = Path(__file__).parents[1] / "app" / "static" / "index.html"
+WORKFLOW_JS_PATH = HTML_PATH.with_name("workflow.js")
 
 
 def _html() -> str:
@@ -113,3 +114,58 @@ def test_created_financing_links_to_audit_and_research_evidence():
     assert 'data-result-action="research"' in html
     assert html.count("viewAuditEvidence:") == 2
     assert html.count("viewResearchEvidence:") == 2
+
+
+def test_ui_exposes_real_login_logout_and_five_role_workbench():
+    html = _html()
+
+    assert 'id="authGate"' in html
+    assert 'id="loginForm"' in html
+    assert 'id="demoAccounts"' in html
+    assert 'id="logoutButton"' in html
+    assert 'id="view-workflow"' in html
+    assert 'data-view-button="workflow"' in html
+    assert 'id="workflowApplications"' in html
+    assert 'id="workflowDetail"' in html
+    assert 'id="workflowTimeline"' in html
+
+
+def test_supplier_workbench_has_complete_application_fields():
+    html = _html()
+
+    assert 'id="applicationForm"' in html
+    for field in (
+        "core_enterprise_organization_code",
+        "contract_number",
+        "invoice_number",
+        "amount",
+        "term_days",
+        "payment_delay_days",
+        "counterparty_risk",
+        "invoice_mismatch",
+        "relationship_months",
+        "transactions_last_30d",
+    ):
+        assert f'name="{field}"' in html
+
+
+def test_workflow_javascript_uses_authenticated_versioned_apis():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for path in (
+        "/api/v1/auth/me",
+        "/api/v1/auth/login",
+        "/api/v1/auth/logout",
+        "/api/v1/dashboard",
+        "/api/v1/tasks",
+        "/api/v1/applications",
+        "/submit",
+        "/trade-confirmation",
+        "/risk-assessment",
+        "/decision",
+        "/control-action",
+        "/audit-review",
+    ):
+        assert path in javascript
+    assert "allowed_actions" in javascript
+    assert "Demo123!" in javascript

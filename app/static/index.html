@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b1736">
+  <link rel="stylesheet" href="/static/workflow.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%232768ee'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Arial' font-size='32' font-weight='700' fill='white'%3ED%3C/text%3E%3C/svg%3E">
   <title>DAIBM-SCF — демонстрационная система</title>
   <style>
@@ -235,11 +236,45 @@
   </style>
 </head>
 <body>
+<section id="authGate" class="auth-gate" aria-labelledby="loginTitle">
+  <div class="auth-stage">
+    <div class="auth-story">
+      <div class="auth-brand"><span>D</span><b>DAIBM-SCF</b></div>
+      <p class="auth-kicker">SUPPLY CHAIN FINANCE · ROLE WORKFLOW</p>
+      <h1 id="loginTitle" data-wf-i18n="loginTitle">Войдите в рабочий контур</h1>
+      <p data-wf-i18n="loginSubtitle">Пять участников проводят одну заявку от поставщика до проверяемого аудиторского следа.</p>
+      <ol class="handoff-preview" aria-label="Five role workflow">
+        <li><b>01</b><span data-wf-i18n="roleSupplier">Поставщик</span></li>
+        <li><b>02</b><span data-wf-i18n="roleCoreEnterprise">Якорная компания</span></li>
+        <li><b>03</b><span data-wf-i18n="roleFinancier">Финансист</span></li>
+        <li><b>04</b><span data-wf-i18n="roleRiskManager">Риск-менеджер</span></li>
+        <li><b>05</b><span data-wf-i18n="roleAuditor">Аудитор</span></li>
+      </ol>
+      <small data-wf-i18n="researchBoundary">Демонстрационный прототип на синтетических данных · PostgreSQL · проверяемый журнал событий</small>
+    </div>
+    <div class="auth-panel">
+      <div class="auth-panel-head">
+        <div><span data-wf-i18n="demoAccess">Демонстрационный доступ</span><h2 data-wf-i18n="chooseRole">Выберите роль</h2></div>
+        <div class="lang auth-lang"><button type="button" data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button type="button" data-lang="zh" onclick="setLanguage('zh')">中文</button></div>
+      </div>
+      <div id="demoAccounts" class="account-grid" aria-live="polite"></div>
+      <div class="auth-divider"><span data-wf-i18n="orCredentials">или введите учётные данные</span></div>
+      <form id="loginForm" class="login-form">
+        <label><span data-wf-i18n="username">Имя пользователя</span><input name="username" autocomplete="username" value="supplier.demo" required></label>
+        <label><span data-wf-i18n="password">Пароль</span><input name="password" type="password" autocomplete="current-password" value="Demo123!" required></label>
+        <button id="loginButton" class="btn btn-primary" type="submit" data-wf-i18n="signIn">Войти в систему</button>
+        <p id="loginError" class="form-error" role="alert"></p>
+      </form>
+      <p class="demo-password"><span data-wf-i18n="commonPassword">Общий пароль демо-ролей:</span> <code>Demo123!</code></p>
+    </div>
+  </div>
+</section>
 <div class="app">
   <aside class="sidebar">
     <div class="brand"><div class="brand-mark">D</div><div class="brand-text"><strong>DAIBM-SCF</strong><small>Risk Intelligence</small></div></div>
     <div class="nav-label" data-i18n="navTitle">Навигация</div>
     <nav class="nav">
+      <button data-view-button="workflow" onclick="switchView('workflow')"><span class="nav-icon">↳</span><span data-wf-i18n="navWorkflow">Рабочий контур</span></button>
       <button class="active" data-view-button="overview" onclick="switchView('overview')"><span class="nav-icon">⌂</span><span data-i18n="navOverview">Обзор</span></button>
       <button data-view-button="research" onclick="switchView('research')"><span class="nav-icon">⌁</span><span data-i18n="navResearch">Исследовательское ядро</span></button>
       <button data-view-button="review" onclick="switchView('review')"><span class="nav-icon">◎</span><span data-i18n="navReview">Оценка риска</span></button>
@@ -253,10 +288,61 @@
     <header class="topbar">
       <div class="top-title"><strong data-i18n="systemName">Интеллектуальный аудит финансирования цепей поставок</strong><span data-i18n="systemSub">Демонстрационный контур принятия решений</span></div>
       <div class="mobile-menu"><button onclick="switchView('overview')" data-i18n="navOverview">Обзор</button><button onclick="switchView('research')" data-i18n="navResearch">Исследование</button><button onclick="switchView('review')" data-i18n="navReview">Оценка риска</button><button onclick="switchView('ledger')" data-i18n="navLedger">Реестр</button></div>
-      <div class="top-actions"><span class="live" data-i18n="online">Система доступна</span><button class="icon-button" onclick="toggleFullscreen()" data-i18n-title="fullscreen" title="Полный экран">⛶</button><div class="lang"><button data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button data-lang="zh" onclick="setLanguage('zh')">中文</button></div></div>
+      <div class="top-actions"><span class="live" data-i18n="online">Система доступна</span><div id="currentUser" class="current-user" hidden></div><button id="logoutButton" class="logout-button" type="button" data-wf-i18n="logout">Выйти</button><button class="icon-button" onclick="toggleFullscreen()" data-i18n-title="fullscreen" title="Полный экран">⛶</button><div class="lang"><button data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button data-lang="zh" onclick="setLanguage('zh')">中文</button></div></div>
     </header>
 
     <main>
+      <section id="view-workflow" class="view workflow-view">
+        <div class="workflow-heading">
+          <div><span class="eyebrow" data-wf-i18n="workflowEyebrow">РОЛЕВОЙ БИЗНЕС-ПРОЦЕСС</span><h1 data-wf-i18n="workflowTitle">Финансирование цепи поставок</h1><p id="roleMission">—</p></div>
+          <button id="refreshWorkflow" class="btn btn-soft" type="button" data-wf-i18n="refresh">Обновить данные</button>
+        </div>
+        <div id="roleBanner" class="role-banner"><span class="role-seal">—</span><div><small data-wf-i18n="currentStation">Текущая рабочая станция</small><b>—</b><p>—</p></div></div>
+        <ol id="custodyRail" class="custody-rail" aria-label="Application handoff rail">
+          <li data-role-stage="supplier"><b>01</b><span data-wf-i18n="roleSupplier">Поставщик</span><small data-wf-i18n="stageCreate">Создание и подача</small></li>
+          <li data-role-stage="core_enterprise"><b>02</b><span data-wf-i18n="roleCoreEnterprise">Якорная компания</span><small data-wf-i18n="stageConfirm">Подтверждение сделки</small></li>
+          <li data-role-stage="financier"><b>03</b><span data-wf-i18n="roleFinancier">Финансист</span><small data-wf-i18n="stageDecide">Оценка и решение</small></li>
+          <li data-role-stage="risk_manager"><b>04</b><span data-wf-i18n="roleRiskManager">Риск-менеджер</span><small data-wf-i18n="stageControl">Контроль</small></li>
+          <li data-role-stage="auditor"><b>05</b><span data-wf-i18n="roleAuditor">Аудитор</span><small data-wf-i18n="stageAudit">Проверка следа</small></li>
+        </ol>
+        <div class="workflow-kpis">
+          <article><span data-wf-i18n="allApplications">Доступные заявки</span><strong id="workflowApplicationCount">0</strong></article>
+          <article><span data-wf-i18n="myTasks">Мои задачи</span><strong id="workflowTaskCount">0</strong></article>
+          <article><span data-wf-i18n="activeStatus">Активных статусов</span><strong id="workflowStatusCount">0</strong></article>
+          <article><span data-wf-i18n="database">Хранилище</span><strong>PostgreSQL</strong></article>
+        </div>
+
+        <section id="supplierCreate" class="workflow-panel supplier-create" hidden>
+          <div class="workflow-panel-head"><div><span>01 / APPLICATION</span><h2 data-wf-i18n="newApplication">Новая заявка на финансирование</h2><p data-wf-i18n="newApplicationHint">Заполните реквизиты сделки. Заявка сохранится как черновик и будет доступна для подачи.</p></div><span class="synthetic-tag">SYNTHETIC DEMO DATA</span></div>
+          <form id="applicationForm" class="application-form">
+            <label><span data-wf-i18n="coreEnterpriseCode">Код якорной компании</span><input name="core_enterprise_organization_code" value="CORE-001" required></label>
+            <label><span data-wf-i18n="contractNumber">Номер договора</span><input name="contract_number" value="SCF-2026-001" required></label>
+            <label><span data-wf-i18n="invoiceNumber">Номер счёта-фактуры</span><input name="invoice_number" value="INV-2026-001" required></label>
+            <label><span data-wf-i18n="amount">Сумма, CNY</span><input name="amount" type="number" value="1200000" min="1" step="0.01" required></label>
+            <label><span data-wf-i18n="termDays">Срок, дней</span><input name="term_days" type="number" value="90" min="7" max="365" required></label>
+            <label><span data-wf-i18n="paymentDelay">Просрочка, дней</span><input name="payment_delay_days" type="number" value="18" min="0" max="365" required></label>
+            <label><span data-wf-i18n="counterpartyRisk">Риск контрагента, 0–1</span><input name="counterparty_risk" type="number" value="0.58" min="0" max="1" step="0.01" required></label>
+            <label><span data-wf-i18n="relationshipMonths">Отношения, месяцев</span><input name="relationship_months" type="number" value="18" min="0" max="240" required></label>
+            <label><span data-wf-i18n="transactions30d">Сделок за 30 дней</span><input name="transactions_last_30d" type="number" value="12" min="0" max="500" required></label>
+            <label class="wf-checkbox"><input name="invoice_mismatch" type="checkbox" checked><span data-wf-i18n="invoiceMismatch">Есть расхождение документов</span></label>
+            <button class="btn btn-primary wf-form-submit" type="submit" data-wf-i18n="saveDraft">Сохранить черновик</button>
+          </form>
+        </section>
+
+        <div class="workbench-grid">
+          <section class="workflow-panel queue-panel">
+            <div class="workflow-panel-head"><div><span>QUEUE</span><h2 data-wf-i18n="applicationQueue">Очередь заявок</h2><p id="queueHint">—</p></div><span id="taskBadge" class="task-badge">0</span></div>
+            <div id="workflowApplications" class="application-list" aria-live="polite"></div>
+          </section>
+          <section id="workflowDetail" class="workflow-panel detail-panel">
+            <div class="workflow-empty"><span>↳</span><b data-wf-i18n="selectApplication">Выберите заявку</b><p data-wf-i18n="selectApplicationHint">Здесь появятся реквизиты, допустимые действия и полная история передачи между ролями.</p></div>
+          </section>
+        </div>
+        <section class="workflow-panel timeline-panel">
+          <div class="workflow-panel-head"><div><span>TRACE</span><h2 data-wf-i18n="workflowTimeline">История передачи ответственности</h2><p data-wf-i18n="timelineHint">Каждый переход выполняется атомарно и фиксируется вместе с ролью исполнителя.</p></div><span class="tamper-label">TAMPER-EVIDENT</span></div>
+          <div id="workflowTimeline" class="workflow-timeline"><p class="timeline-empty" data-wf-i18n="timelineEmpty">Выберите заявку, чтобы увидеть историю.</p></div>
+        </section>
+      </section>
       <section id="view-overview" class="view active">
         <div class="hero">
           <div class="hero-grid">
@@ -585,7 +671,7 @@
     try { const result=await api('/api/requests',{method:'POST',body:JSON.stringify(body)}); selectedId=result.request_id; await refreshAll(); setJourneyState('complete'); renderDetail(); toast(`${t('requestCreated')}: ${t(result.decision)} · ${result.risk_score.toFixed(3)}`); } catch(error){ setJourneyState('draft'); toast(error.message); }
   });
   setLanguage(lang);
-  refreshAll().catch(error=>toast(error.message));
 </script>
+<script src="/static/workflow.js"></script>
 </body>
 </html>
