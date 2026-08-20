@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.schemas_research import ResearchInferenceRequest
+from app.schemas_research import ResearchInferenceRequest, RiskInjectionRequest
 from app.services.research_inference import (
     ResearchModelUnavailable,
     ResearchResourceNotFound,
@@ -55,3 +55,28 @@ def assessment_trace(risk_assessment_id: UUID, request: Request):
         )
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Assessment trace not found") from error
+
+
+@router.post("/scenarios/{enterprise_id}/inject-risk")
+def inject_risk(
+    enterprise_id: str,
+    payload: RiskInjectionRequest,
+    request: Request,
+):
+    del payload
+    try:
+        return request.app.state.research_scenario_service.inject_risk(
+            enterprise_id
+        )
+    except ResearchResourceNotFound as error:
+        raise HTTPException(status_code=404, detail="Enterprise not found") from error
+    except ResearchModelUnavailable as error:
+        raise _unavailable() from error
+
+
+@router.post("/scenarios/reset")
+def reset_scenario(request: Request):
+    try:
+        return request.app.state.research_scenario_service.reset()
+    except ResearchModelUnavailable as error:
+        raise _unavailable() from error

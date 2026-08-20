@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import numpy as np
+
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.research import PolicyDecision, RiskAssessment
@@ -34,11 +36,15 @@ class ResearchDecisionService:
         enterprise_id: str,
         graph_snapshot_id: uuid.UUID,
         model_version_id: uuid.UUID,
+        node_features: np.ndarray | None = None,
+        adjacency: np.ndarray | None = None,
     ) -> dict[str, Any]:
         assessment = self.inference_service.assess(
             enterprise_id=enterprise_id,
             graph_snapshot_id=graph_snapshot_id,
             model_version_id=model_version_id,
+            node_features=node_features,
+            adjacency=adjacency,
         )
         decision = self.policy_engine.evaluate(assessment)
         with self.session_factory.begin() as session:

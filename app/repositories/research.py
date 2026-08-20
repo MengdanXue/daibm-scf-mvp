@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ledger import canonical_timestamp
@@ -280,3 +280,83 @@ class ResearchRepository:
             "synthetic_data": True,
             "persisted": True,
         }
+
+    @staticmethod
+    def next_scenario_revision(
+        session: Session,
+        dataset_version_id: uuid.UUID,
+        name: str,
+    ) -> int:
+        latest = session.scalar(
+            select(func.max(SyntheticScenarioModel.revision)).where(
+                SyntheticScenarioModel.dataset_version_id == dataset_version_id,
+                SyntheticScenarioModel.name == name,
+            )
+        )
+        return int(latest or 0) + 1
+
+    @staticmethod
+    def add_scenario(
+        session: Session,
+        *,
+        scenario_id: uuid.UUID,
+        dataset_version_id: uuid.UUID,
+        name: str,
+        revision: int,
+        overlay: dict[str, object],
+        overlay_sha256: str,
+        created_at: datetime,
+    ) -> SyntheticScenarioModel:
+        model = SyntheticScenarioModel(
+            synthetic_scenario_id=scenario_id,
+            dataset_version_id=dataset_version_id,
+            name=name,
+            revision=revision,
+            overlay=overlay,
+            overlay_sha256=overlay_sha256,
+            status="active",
+            creator="research-demo",
+            created_at=created_at,
+        )
+        session.add(model)
+        session.flush()
+        return model
+
+    @staticmethod
+    def add_graph_snapshot(
+        session: Session,
+        *,
+        graph_snapshot_id: uuid.UUID,
+        dataset_version_id: uuid.UUID,
+        synthetic_scenario_id: uuid.UUID,
+        scenario_revision: int,
+        overlay_sha256: str,
+        feature_schema_version: str,
+        normalization_id: str,
+        node_ordering_sha256: str,
+        adjacency_sha256: str,
+        feature_sha256: str,
+        content_sha256: str,
+        created_at: datetime,
+    ) -> GraphSnapshotModel:
+        model = GraphSnapshotModel(
+            graph_snapshot_id=graph_snapshot_id,
+            dataset_version_id=dataset_version_id,
+            synthetic_scenario_id=synthetic_scenario_id,
+            scenario_revision=scenario_revision,
+            overlay_sha256=overlay_sha256,
+            anchor_month=21,
+            window_start_month=10,
+            window_end_month=21,
+            feature_schema_version=feature_schema_version,
+            normalization_id=normalization_id,
+            node_ordering_sha256=node_ordering_sha256,
+            adjacency_sha256=adjacency_sha256,
+            feature_sha256=feature_sha256,
+            content_sha256=content_sha256,
+            storage_locator=f"in-memory:scenario:{synthetic_scenario_id}",
+            created_at=created_at,
+        )
+        session.add(model)
+        session.flush()
+        return model

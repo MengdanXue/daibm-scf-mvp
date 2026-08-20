@@ -15,6 +15,7 @@ from app.schemas import FinancingRequestCreate
 from app.service import FinancingService
 from app.services.research_inference import ResearchInferenceService
 from app.services.research_decision import ResearchDecisionService
+from app.services.research_scenario import ResearchScenarioService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -38,6 +39,10 @@ def create_app(
         active_database.session_factory,
         research_service,
     )
+    research_scenario_service = ResearchScenarioService(
+        research_service,
+        research_decision_service,
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -45,6 +50,7 @@ def create_app(
         application.state.service = service
         application.state.research_service = research_service
         application.state.research_decision_service = research_decision_service
+        application.state.research_scenario_service = research_scenario_service
         research_service.initialize()
         yield
         if owns_database:

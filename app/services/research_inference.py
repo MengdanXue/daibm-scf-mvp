@@ -125,6 +125,8 @@ class ResearchInferenceService:
         enterprise_id: str,
         graph_snapshot_id: uuid.UUID,
         model_version_id: uuid.UUID,
+        node_features: np.ndarray | None = None,
+        adjacency: np.ndarray | None = None,
     ) -> RiskAssessment:
         self._require_available()
         assert self.artifact is not None
@@ -139,21 +141,57 @@ class ResearchInferenceService:
                 model.lifecycle_status != "promoted"
                 or model.deployment_slot != "default"
                 or model.checkpoint_sha256 != manifest["checkpoint_sha256"]
-                or snapshot.content_sha256 != manifest["snapshot_sha256"]
                 or snapshot.normalization_id != manifest["normalization_id"]
+                or snapshot.feature_schema_version
+                != manifest["feature_schema"]["version"]
+                or snapshot.dataset_version_id != model.dataset_version_id
             ):
                 raise ResearchModelUnavailable
-
+            if node_features is None or adjacency is None:
+                if snapshot.content_sha256 != manifest["snapshot_sha256"]:
+                    raise ResearchModelUnavailable
+                active_x = self.artifact.input_x
+                active_adjacency = self.artifact.input_adjacency
+            else:
+                active_x = np.asarray(node_features, dtype=np.float32)
+                active_adjacency = np.asarray(adjacency, dtype=np.float32)
+                expected_x_shape = (
+                    1,
+                    int(manifest["sequence_length"]),
+                    int(manifest["node_count"]),
+                    int(manifest["feature_count"]),
+                )
+                expected_adjacency_shape = (
+                    1,
+                    int(manifest["sequence_length"]),
+                    int(manifest["node_count"]),
+                    int(manifest["node_count"]),
+                )
+                feature_hash = hashlib.sha256(
+                    np.ascontiguousarray(active_x.astype("<f4")).tobytes()
+                ).hexdigest()
+                adjacency_hash = hashlib.sha256(
+                    np.ascontiguousarray(
+                        active_adjacency.astype("<f4")
+                    ).tobytes()
+                ).hexdigest()
+                if (
+                    active_x.shape != expected_x_shape
+                    or active_adjacency.shape != expected_adjacency_shape
+                    or feature_hash != snapshot.feature_sha256
+                    or adjacency_hash != snapshot.adjacency_sha256
+                ):
+                    raise ResearchModelUnavailable
         logits = self.artifact.session.run(
             ("logits",),
             {
-                "node_features": self.artifact.input_x,
-                "adjacency": self.artifact.input_adjacency,
+                "node_features": active_x,
+                "adjacency": active_adjacency,
             },
         )[0]
         score = 1.0 / (1.0 + math.exp(-float(logits[0, enterprise_index])))
         feature_names = self.artifact.manifest["feature_schema"]["names"]
-        current = self.artifact.input_x[0, -1, enterprise_index]
+        current = active_x[0, -1, enterprise_index]
         top = np.argsort(np.abs(current))[-3:][::-1]
         explanations = tuple(
             {
@@ -169,7 +207,7 @@ class ResearchInferenceService:
         input_digest.update(enterprise_id.encode())
         input_digest.update(
             np.ascontiguousarray(
-                self.artifact.input_x[:, :, enterprise_index].astype("<f4")
+                active_x[:, :, enterprise_index].astype("<f4")
             ).tobytes()
         )
         band = "low" if score < 0.40 else "medium" if score < 0.75 else "high"

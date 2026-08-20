@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from research.data.schema import SyntheticDataset
+from research.data.schema import STATE_FEATURE_NAMES, SyntheticDataset
 from research.graph.features import aggregate_node_features
 
 
@@ -80,14 +80,78 @@ def build_graph_series(
     dataset: SyntheticDataset,
     scenario: dict[str, object] | None = None,
 ) -> GraphSeries:
-    if scenario:
-        raise NotImplementedError("scenario overlays are introduced in Task 9")
-    directed, normalized = _build_adjacency(dataset)
+    active_dataset = apply_scenario_overlay(dataset, scenario) if scenario else dataset
+    directed, normalized = _build_adjacency(active_dataset)
     return GraphSeries(
-        dataset=dataset,
-        node_features=aggregate_node_features(dataset),
+        dataset=active_dataset,
+        node_features=aggregate_node_features(active_dataset),
         directed_adjacency=directed,
         normalized_adjacency=normalized,
+    )
+
+
+def apply_scenario_overlay(
+    dataset: SyntheticDataset,
+    scenario: dict[str, object],
+) -> SyntheticDataset:
+    enterprise_index = int(scenario["enterprise_index"])
+    affected_indices = [
+        int(value)
+        for value in scenario.get(
+            "affected_enterprise_indices", [enterprise_index]
+        )
+    ]
+    months = [int(value) for value in scenario["months"]]
+    state_values = dict(scenario["state_values"])
+    edge_values = dict(scenario["edge_values"])
+    if not 0 <= enterprise_index < dataset.config.enterprise_count:
+        raise ValueError("scenario enterprise is outside the dataset")
+    if any(
+        value < 0 or value >= dataset.config.enterprise_count
+        for value in affected_indices
+    ):
+        raise ValueError("affected enterprise is outside the dataset")
+    if any(month < 1 or month > dataset.config.months for month in months):
+        raise ValueError("scenario month is outside the dataset")
+
+    states = np.array(dataset.states, copy=True)
+    feature_index = {
+        name: index for index, name in enumerate(STATE_FEATURE_NAMES)
+    }
+    for month in months:
+        for name, value in state_values.items():
+            states[
+                month - 1,
+                affected_indices,
+                feature_index[name],
+            ] = np.float32(value)
+
+    edge_observations = np.array(dataset.edge_observations, copy=True)
+    connected = (
+        np.isin(dataset.relationships[:, 0], affected_indices)
+        | np.isin(dataset.relationships[:, 1], affected_indices)
+    )
+    for month in months:
+        values = edge_observations[month - 1, connected]
+        values[:, 0] *= np.float32(edge_values["amount_multiplier"])
+        values[:, 1] = np.maximum(
+            1.0,
+            values[:, 1] * np.float32(edge_values["count_multiplier"]),
+        )
+        values[:, 2] = np.float32(edge_values["overdue_ratio"])
+        values[:, 3] = np.float32(edge_values["average_delay_days"])
+        edge_observations[month - 1, connected] = values
+
+    return SyntheticDataset(
+        config=dataset.config,
+        enterprise_ids=dataset.enterprise_ids,
+        industry_codes=dataset.industry_codes,
+        size_codes=dataset.size_codes,
+        states=states,
+        relationships=dataset.relationships,
+        relationship_active_months=dataset.relationship_active_months,
+        edge_observations=edge_observations,
+        severe_events=dataset.severe_events,
     )
 
 
