@@ -59,6 +59,10 @@ Russian is the default language; every Research Core action and result also has 
 
 Integrated application v0.6 adds a database-backed five-role workflow around the frozen Research Core: supplier, core enterprise, financier, risk manager, and auditor. HttpOnly sessions and server-side authorization control visibility and transitions. The modular-monolith state machine advances a versioned application from draft to audited; each transition, workflow action, and ledger event is committed atomically. This workflow is engineering evidence for the thesis demonstrator and does not expand the scientific claim of Research Core v0.4.
 
+New workflow applications also receive a SHA-256 fingerprint of their declared trade fields and a unique invoice-claim hash. The latter rejects reuse of the same normalized invoice by the same supplier/core-enterprise pair. This is duplicate-claim control over declared fields, not uploaded-document, tax-platform, blockchain, or ZKP verification. Business baseline assessments persist an assessment UUID, engine version, input hash, timestamp, and provenance; they remain explicitly separate from Research Core TGNN inference.
+
+The Research Core dossier displays hash-verified TGNN and XGBoost rerun metrics under `2026_REIMPLEMENTATION`. The interface calls the workflow an approval, risk-control, and audit loop. It does not claim credit disbursement, repayment, or loan closure.
+
 The page is responsive, keyboard-focusable, reduced-motion aware, and uses only local assets. No external network API is needed during a defense demonstration.
 
 ## Health and startup contract

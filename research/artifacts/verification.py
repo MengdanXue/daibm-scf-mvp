@@ -21,6 +21,7 @@ class VerifiedArtifact:
     input_x: np.ndarray
     input_adjacency: np.ndarray
     session: ort.InferenceSession
+    comparison_metrics: dict[str, dict[str, Any]]
 
 
 def _verify_hash(path: Path, expected: str) -> None:
@@ -29,6 +30,25 @@ def _verify_hash(path: Path, expected: str) -> None:
         raise ArtifactVerificationError(
             f"artifact hash mismatch for {path.name}"
         )
+
+
+def _validated_metrics(
+    metrics: Any,
+    *,
+    model_name: str,
+) -> dict[str, Any]:
+    if not isinstance(metrics, dict):
+        raise ArtifactVerificationError(f"{model_name} metrics are invalid")
+    roc_auc = metrics.get("roc_auc")
+    if (
+        isinstance(roc_auc, bool)
+        or not isinstance(roc_auc, (int, float))
+        or not 0 <= float(roc_auc) <= 1
+    ):
+        raise ArtifactVerificationError(
+            f"{model_name} roc_auc is invalid"
+        )
+    return metrics
 
 
 def verify_reference_artifact(
@@ -119,6 +139,49 @@ def verify_reference_artifact(
     if len(str(manifest.get("normalization_id", ""))) != 64:
         raise ArtifactVerificationError("normalization identity is invalid")
 
+    comparison_metrics: dict[str, dict[str, Any]] = {
+        "tgnn": _validated_metrics(
+            manifest.get("metrics"), model_name="tgnn"
+        )
+    }
+    xgboost_manifest_path = reference / "xgboost-manifest.json"
+    xgboost_artifact_path = reference / "xgboost-v0.4.json"
+    if xgboost_manifest_path.is_file() or xgboost_artifact_path.is_file():
+        if not xgboost_manifest_path.is_file() or not xgboost_artifact_path.is_file():
+            raise ArtifactVerificationError("xgboost comparison files are incomplete")
+        try:
+            _verify_hash(
+                xgboost_manifest_path,
+                manifest["xgboost_manifest_sha256"],
+            )
+        except (KeyError, ArtifactVerificationError) as error:
+            raise ArtifactVerificationError(
+                "xgboost manifest hash mismatch"
+            ) from error
+        xgboost_manifest = json.loads(
+            xgboost_manifest_path.read_text(encoding="utf-8")
+        )
+        if (
+            xgboost_manifest.get("model_family") != "xgboost"
+            or xgboost_manifest.get("normalization_id")
+            != manifest.get("normalization_id")
+        ):
+            raise ArtifactVerificationError(
+                "xgboost comparison manifest is incompatible"
+            )
+        try:
+            _verify_hash(
+                xgboost_artifact_path,
+                xgboost_manifest["artifact_sha256"],
+            )
+        except (KeyError, ArtifactVerificationError) as error:
+            raise ArtifactVerificationError(
+                "xgboost comparison hash mismatch"
+            ) from error
+        comparison_metrics["xgboost"] = _validated_metrics(
+            xgboost_manifest.get("metrics"), model_name="xgboost"
+        )
+
     with np.load(input_bundle, allow_pickle=False) as bundle:
         raw_x = np.asarray(bundle["node_features"])
         raw_adjacency = np.asarray(bundle["adjacency"])
@@ -166,4 +229,5 @@ def verify_reference_artifact(
         input_x=x,
         input_adjacency=adjacency,
         session=session,
+        comparison_metrics=comparison_metrics,
     )

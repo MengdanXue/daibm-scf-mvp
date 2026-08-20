@@ -28,6 +28,7 @@ def test_research_page_exposes_complete_evidence_chain_controls():
         "researchModel",
         "researchPolicy",
         "researchLedger",
+        "researchMetrics",
     ):
         assert f'id="{element_id}"' in html
     assert 'aria-live="polite"' in html
@@ -55,8 +56,24 @@ def test_research_page_has_russian_and_chinese_copy_for_every_new_action():
         "researchBefore",
         "researchAfter",
         "researchChangedInputs",
+        "researchRerunMetrics",
+        "researchMetricBoundary",
     ):
         assert html.count(f"{key}:") == 2
+
+
+def test_research_page_renders_reimplementation_metrics_with_provenance():
+    html = _html()
+
+    for element_id in (
+        "researchMetrics",
+        "researchMetricsValue",
+        "researchMetricsMeta",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "model.metrics?.tgnn?.roc_auc" in html
+    assert "model.metrics?.xgboost?.roc_auc" in html
+    assert "2026_REIMPLEMENTATION" in html
 
 
 def test_research_javascript_uses_real_apis_and_non_silent_recovery():
@@ -179,3 +196,32 @@ def test_workflow_translates_created_draft_and_rerenders_user_on_language_change
     assert "renderCurrentUser()" in render_workbench.split(
         "function renderCustodyRail()", 1
     )[0]
+
+
+def test_workflow_detail_exposes_trade_and_business_risk_evidence():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert "application.trade_evidence" in javascript
+    assert "application.risk_evidence" in javascript
+    assert javascript.count("tradeEvidence:") == 2
+    assert javascript.count("businessRiskEvidence:") == 2
+    assert javascript.count("duplicateCheckPassed:") == 2
+    assert javascript.count("researchComparisonBoundary:") == 2
+
+
+def test_legacy_risk_overview_ignores_unscored_workflow_records():
+    html = _html()
+
+    assert "const isScoredRequest" in html
+    assert "items.filter(isScoredRequest)" in html
+    assert "requestsState.filter(isScoredRequest)" in html
+    assert "const decisionTotal=approved+review+rejected" in html
+    assert "approved/decisionTotal" in html
+
+
+def test_research_metrics_card_degrades_when_comparison_is_unavailable():
+    html = _html()
+
+    assert "model.metrics?.tgnn?.roc_auc" in html
+    assert "model.metrics?.xgboost?.roc_auc" in html
+    assert "formatResearchMetric" in html

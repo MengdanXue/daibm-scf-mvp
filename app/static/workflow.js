@@ -42,7 +42,10 @@
       risk_assessed: "Риск оценён", approved: "Одобрена", manual_review: "Ручная проверка", rejected: "Отклонена",
       controlled: "Контроль назначен", audited: "Аудит завершён",
       create: "Создание", create_draft: "Создание черновика", update: "Изменение", confirm_trade: "Подтверждение сделки", return_trade: "Возврат сделки",
-      assess_risk: "Оценка риска", decide: "Финансовое решение", apply_control: "Контрольное действие", audit: "Аудиторская проверка"
+      assess_risk: "Оценка риска", decide: "Финансовое решение", apply_control: "Контрольное действие", audit: "Аудиторская проверка",
+      tradeEvidence: "Отпечаток торговых реквизитов", businessRiskEvidence: "Доказательство бизнес-оценки", duplicateCheckPassed: "Проверка дублирования пройдена",
+      researchComparisonBoundary: "Бизнес-оценка использует прозрачную базовую модель; TGNN показана отдельно как исследовательское сравнение.",
+      duplicate_invoice_claim: "Этот счёт-фактура уже используется в другой заявке"
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
@@ -73,7 +76,10 @@
       draft: "草稿", submitted: "已提交", trade_returned: "已退回", trade_confirmed: "交易已确认", risk_assessed: "风险已评估",
       approved: "已批准", manual_review: "人工复核", rejected: "已拒绝", controlled: "已设置控制", audited: "审计已完成",
       create: "创建", create_draft: "创建草稿", update: "修改", confirm_trade: "确认交易", return_trade: "退回交易", assess_risk: "风险评估",
-      decide: "融资决策", apply_control: "控制措施", audit: "审计核验"
+      decide: "融资决策", apply_control: "控制措施", audit: "审计核验",
+      tradeEvidence: "交易凭证字段指纹", businessRiskEvidence: "业务评分证据", duplicateCheckPassed: "重复融资校验已通过",
+      researchComparisonBoundary: "业务评分使用透明基线模型；TGNN 仅作为独立科研对照展示。",
+      duplicate_invoice_claim: "该发票已被另一笔融资申请使用"
     }
   };
 
@@ -114,7 +120,8 @@
         document.body.classList.remove("authenticated");
         renderAccounts();
       }
-      const message = payload?.detail?.message || payload?.detail?.code || tr("requestFailed");
+      const code = payload?.detail?.code;
+      const message = (code && COPY[state.lang][code]) || payload?.detail?.message || code || tr("requestFailed");
       const error = new Error(message);
       error.status = response.status;
       throw error;
@@ -316,6 +323,8 @@
     return `<div class="detail-field"><span>${escapeHtml(label)}</span><b>${escapeHtml(value ?? "—")}</b></div>`;
   }
 
+  const compactHash = (value) => value ? `${String(value).slice(0, 10)}…${String(value).slice(-8)}` : "—";
+
   function renderDetail() {
     const container = document.querySelector("#workflowDetail");
     const application = state.selected;
@@ -324,12 +333,20 @@
       return;
     }
     const risk = application.risk_score == null ? "—" : Number(application.risk_score).toFixed(4);
+    const tradeEvidence = application.trade_evidence;
+    const riskEvidence = application.risk_evidence;
+    const evidenceMarkup = `<div class="workflow-evidence">
+      <article><span>${escapeHtml(tr("tradeEvidence"))}</span><b title="${escapeHtml(tradeEvidence?.fingerprint_sha256)}">${escapeHtml(compactHash(tradeEvidence?.fingerprint_sha256))}</b><small>${escapeHtml(tradeEvidence ? tr("duplicateCheckPassed") : "—")}</small></article>
+      <article><span>${escapeHtml(tr("businessRiskEvidence"))}</span><b title="${escapeHtml(riskEvidence?.input_sha256)}">${escapeHtml(riskEvidence?.engine_version || "—")}</b><small>${escapeHtml(compactHash(riskEvidence?.input_sha256))}</small></article>
+      <p>${escapeHtml(tr("researchComparisonBoundary"))}</p>
+    </div>`;
     container.innerHTML = `<div class="detail-top"><div><span class="status-chip" data-status="${escapeHtml(application.status)}">${escapeHtml(tr(application.status))}</span><h2>${escapeHtml(application.contract_number)}</h2><p>${escapeHtml(application.request_id)}</p></div><div class="detail-version"><span>${escapeHtml(tr("version"))}</span><b>v${application.version}</b></div></div>
       <div class="detail-fields">
         ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), "CORE-001")}${detailField(tr("amount"), money(application.amount))}
         ${detailField(tr("invoice"), application.invoice_number)}${detailField(tr("term"), `${application.term_days} ${tr("days")}`)}${detailField(tr("paymentDelay"), `${application.features.payment_delay_days} ${tr("days")}`)}
       </div>
       <div class="risk-result"><span>${escapeHtml(tr("risk"))}<strong>${escapeHtml(risk)}</strong></span><span>${escapeHtml(tr("decision"))}<strong>${escapeHtml(application.decision ? tr(application.decision) : "—")}</strong></span></div>
+      ${evidenceMarkup}
       ${renderActionStation(application)}`;
   }
 

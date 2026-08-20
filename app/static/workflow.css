@@ -177,6 +177,13 @@ body.authenticated .auth-gate { display: none; }
 .risk-result { margin-top: 13px; padding: 13px; display: flex; align-items: center; justify-content: space-between; gap: 13px; border: 1px solid #d9e5f1; border-radius: 12px; background: linear-gradient(105deg,#f6faff,#fff); }
 .risk-result strong { font-size: 22px; }
 .risk-result span { color: var(--wf-muted); font-size: 9px; }
+.workflow-evidence { margin-top: 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.workflow-evidence article { min-width: 0; padding: 11px; border: 1px solid #dce6f2; border-radius: 10px; background: #fbfdff; }
+.workflow-evidence span,.workflow-evidence b,.workflow-evidence small { display: block; }
+.workflow-evidence span { color: var(--wf-muted); font-size: 8px; }
+.workflow-evidence b { margin-top: 6px; overflow: hidden; color: var(--wf-ink); font: 800 9px Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-evidence small { margin-top: 5px; color: var(--wf-green); font-size: 8px; }
+.workflow-evidence p { grid-column: 1/-1; margin: 0; padding: 8px 10px; border-left: 2px solid var(--wf-cyan); color: #66748a; background: #f5fafc; font-size: 8px; line-height: 1.5; }
 .action-station { margin-top: 15px; padding: 15px; border-left: 3px solid var(--role-color); border-radius: 0 12px 12px 0; background: color-mix(in srgb,var(--role-color) 5%,#f7f9fc); }
 .action-station h3 { margin: 0 0 4px; font-size: 12px; }
 .action-station > p { margin: 0 0 12px; color: var(--wf-muted); font-size: 9px; }
@@ -219,7 +226,8 @@ body.authenticated .auth-gate { display: none; }
 }
 
 @media (max-width: 600px) {
-  .account-grid,.login-form,.application-form,.detail-fields { grid-template-columns: 1fr !important; }
+  .account-grid,.login-form,.application-form,.detail-fields,.workflow-evidence { grid-template-columns: 1fr !important; }
+  .workflow-evidence p { grid-column: auto; }
   .account-card:first-child,.wf-form-submit { grid-column: auto; }
   .custody-rail { grid-template-columns: repeat(5,minmax(72px,1fr)); overflow-x: auto; }
   .custody-rail::before { display: none; }

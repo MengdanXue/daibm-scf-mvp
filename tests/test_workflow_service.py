@@ -11,6 +11,7 @@ from app.schemas_workflow import ApplicationDraftCreate
 from app.services.identity import IdentityService
 from app.services.workflow import (
     ApplicationNotFound,
+    DuplicateInvoiceClaim,
     ForbiddenWorkflow,
     StaleApplication,
     WorkflowService,
@@ -59,6 +60,10 @@ def test_five_roles_complete_one_application_with_traceable_versions(
     assert draft["version"] == 1
     assert draft["risk_score"] is None
     assert draft["allowed_actions"] == ["update", "submit"]
+    assert len(draft["trade_evidence"]["fingerprint_sha256"]) == 64
+    assert len(draft["trade_evidence"]["invoice_claim_sha256"]) == 64
+    assert draft["trade_evidence"]["duplicate_check"] == "passed"
+    assert draft["risk_evidence"] is None
 
     submitted = service.submit(
         draft["request_id"], draft["version"], users["supplier"]
@@ -75,6 +80,13 @@ def test_five_roles_complete_one_application_with_traceable_versions(
     )
     assert 0 <= assessed["risk_score"] <= 1
     assert assessed["explanations"]
+    assert assessed["risk_evidence"]["engine_version"] == (
+        "transparent_logistic_baseline_v0.1"
+    )
+    assert assessed["risk_evidence"]["engine_type"] == "business_baseline"
+    assert len(assessed["risk_evidence"]["assessment_id"]) == 36
+    assert len(assessed["risk_evidence"]["input_sha256"]) == 64
+    assert assessed["risk_evidence"]["provenance"] == "DEMO_WORKFLOW"
 
     decided = service.decide(
         draft["request_id"],
@@ -129,6 +141,30 @@ def test_five_roles_complete_one_application_with_traceable_versions(
         "CONTROL_ACTION",
         "AUDIT_REVIEW_COMPLETED",
     ]
+
+
+def test_duplicate_invoice_claim_is_rejected_case_insensitively(session_factory):
+    users = demo_users(session_factory)
+    service = WorkflowService(session_factory)
+    service.create_draft(draft_payload(), users["supplier"])
+    duplicate = draft_payload().model_copy(
+        update={
+            "contract_number": "SCF-2026-OTHER",
+            "invoice_number": "  inv-2026-001  ",
+            "amount": 900_000,
+        }
+    )
+
+    with pytest.raises(DuplicateInvoiceClaim):
+        service.create_draft(duplicate, users["supplier"])
+
+    with session_factory() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(FinancingRequestModel)
+            )
+            == 1
+        )
 
 
 def test_returned_application_can_be_updated_and_resubmitted(session_factory):

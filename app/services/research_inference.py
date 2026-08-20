@@ -110,7 +110,7 @@ class ResearchInferenceService:
                 "artifact_sha256": manifest["artifact_sha256"],
                 "lifecycle_status": manifest["lifecycle_status"],
                 "deployment_slot": manifest["deployment_slot"],
-                "metrics": manifest["metrics"],
+                "metrics": self.artifact.comparison_metrics,
                 "real_inference": True,
             },
             "policy": {

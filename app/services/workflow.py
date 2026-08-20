@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.domain.evidence import evidence_sha256, trade_evidence
 from app.domain.workflow import (
     Action,
     InvalidTransition,
@@ -39,6 +41,10 @@ class StaleApplication(Exception):
     pass
 
 
+class DuplicateInvoiceClaim(Exception):
+    pass
+
+
 DECISION_CONTROLS = {
     "approved": "standard_monitoring",
     "manual_review": "request_documents_and_enhanced_validation",
@@ -67,52 +73,76 @@ class WorkflowService:
         self._require_role(user, Role.SUPPLIER)
         now = datetime.now(timezone.utc)
         risk_request = payload.to_risk_request(user.organization_code)
-        with self.session_factory.begin() as session:
-            core_organization = self.identity_repository.get_organization_by_code(
-                session,
-                payload.core_enterprise_organization_code,
-            )
-            if (
-                core_organization is None
-                or core_organization.organization_type != "core_enterprise"
-            ):
-                raise ApplicationNotFound("Core enterprise not found")
-            application = FinancingRequestModel(
-                request_id=uuid.uuid4(),
-                created_at=now,
-                updated_at=now,
-                applicant_id=user.organization_code,
-                amount=Decimal(str(payload.amount)).quantize(Decimal("0.01")),
-                term_days=payload.term_days,
-                features=risk_request.model_dump(),
-                risk_score=None,
-                decision=None,
-                explanations=None,
-                control_action=None,
-                status=Status.DRAFT.value,
-                version=1,
-                created_by_user_id=user.user_id,
-                supplier_organization_id=user.organization_id,
-                core_enterprise_organization_id=core_organization.organization_id,
-                contract_number=payload.contract_number,
-                invoice_number=payload.invoice_number,
-            )
-            self.workflow_repository.add_application(session, application)
-            self._record(
-                session,
-                application,
-                user,
-                action_type="create_draft",
-                event_type="APPLICATION_DRAFT_CREATED",
-                from_status=None,
-                to_status=Status.DRAFT,
-                comment=None,
-                payload={
-                    "contract_number": payload.contract_number,
-                    "invoice_number": payload.invoice_number,
-                    "amount": payload.amount,
-                },
-            )
+        try:
+            with self.session_factory.begin() as session:
+                core_organization = self.identity_repository.get_organization_by_code(
+                    session,
+                    payload.core_enterprise_organization_code,
+                )
+                if (
+                    core_organization is None
+                    or core_organization.organization_type != "core_enterprise"
+                ):
+                    raise ApplicationNotFound("Core enterprise not found")
+                amount = Decimal(str(payload.amount)).quantize(Decimal("0.01"))
+                fingerprint, invoice_claim = trade_evidence(
+                    supplier_code=user.organization_code,
+                    core_enterprise_code=core_organization.organization_code,
+                    contract_number=payload.contract_number,
+                    invoice_number=payload.invoice_number,
+                    amount=amount,
+                    term_days=payload.term_days,
+                )
+                if self.workflow_repository.get_by_invoice_claim(
+                    session, invoice_claim
+                ) is not None:
+                    raise DuplicateInvoiceClaim(invoice_claim)
+                application = FinancingRequestModel(
+                    request_id=uuid.uuid4(),
+                    created_at=now,
+                    updated_at=now,
+                    applicant_id=user.organization_code,
+                    amount=amount,
+                    term_days=payload.term_days,
+                    features=risk_request.model_dump(),
+                    risk_score=None,
+                    decision=None,
+                    explanations=None,
+                    control_action=None,
+                    status=Status.DRAFT.value,
+                    version=1,
+                    created_by_user_id=user.user_id,
+                    supplier_organization_id=user.organization_id,
+                    core_enterprise_organization_id=(
+                        core_organization.organization_id
+                    ),
+                    contract_number=payload.contract_number,
+                    invoice_number=payload.invoice_number,
+                    trade_evidence_sha256=fingerprint,
+                    invoice_claim_sha256=invoice_claim,
+                )
+                self.workflow_repository.add_application(session, application)
+                self._record(
+                    session,
+                    application,
+                    user,
+                    action_type="create_draft",
+                    event_type="APPLICATION_DRAFT_CREATED",
+                    from_status=None,
+                    to_status=Status.DRAFT,
+                    comment=None,
+                    payload={
+                        "contract_number": payload.contract_number,
+                        "invoice_number": payload.invoice_number,
+                        "amount": payload.amount,
+                        "trade_evidence_sha256": fingerprint,
+                        "invoice_claim_sha256": invoice_claim,
+                    },
+                )
+        except IntegrityError as error:
+            if self._is_duplicate_invoice(error):
+                raise DuplicateInvoiceClaim("Duplicate invoice claim") from error
+            raise
         return self.get(application.request_id, user)
 
     def update_draft(
@@ -124,45 +154,67 @@ class WorkflowService:
     ) -> dict[str, Any]:
         self._require_role(user, Role.SUPPLIER)
         normalized_id = self._normalize_id(request_id)
-        with self.session_factory.begin() as session:
-            application = self._load_for_action(session, normalized_id, user)
-            self._check_version(application, version)
-            current = Status(application.status)
-            target = next_status(current, Action.UPDATE, Role(user.role))
-            core_organization = self.identity_repository.get_organization_by_code(
-                session,
-                payload.core_enterprise_organization_code,
-            )
-            if (
-                core_organization is None
-                or core_organization.organization_type != "core_enterprise"
-            ):
-                raise ApplicationNotFound("Core enterprise not found")
-            risk_request = payload.to_risk_request(user.organization_code)
-            application.amount = Decimal(str(payload.amount)).quantize(
-                Decimal("0.01")
-            )
-            application.term_days = payload.term_days
-            application.features = risk_request.model_dump()
-            application.core_enterprise_organization_id = (
-                core_organization.organization_id
-            )
-            application.contract_number = payload.contract_number
-            application.invoice_number = payload.invoice_number
-            self._advance(
-                session,
-                application,
-                user,
-                action_type="update",
-                event_type="APPLICATION_UPDATED",
-                from_status=current,
-                to_status=target,
-                comment=None,
-                payload={
-                    "contract_number": payload.contract_number,
-                    "invoice_number": payload.invoice_number,
-                },
-            )
+        try:
+            with self.session_factory.begin() as session:
+                application = self._load_for_action(session, normalized_id, user)
+                self._check_version(application, version)
+                current = Status(application.status)
+                target = next_status(current, Action.UPDATE, Role(user.role))
+                core_organization = self.identity_repository.get_organization_by_code(
+                    session,
+                    payload.core_enterprise_organization_code,
+                )
+                if (
+                    core_organization is None
+                    or core_organization.organization_type != "core_enterprise"
+                ):
+                    raise ApplicationNotFound("Core enterprise not found")
+                risk_request = payload.to_risk_request(user.organization_code)
+                amount = Decimal(str(payload.amount)).quantize(Decimal("0.01"))
+                fingerprint, invoice_claim = trade_evidence(
+                    supplier_code=user.organization_code,
+                    core_enterprise_code=core_organization.organization_code,
+                    contract_number=payload.contract_number,
+                    invoice_number=payload.invoice_number,
+                    amount=amount,
+                    term_days=payload.term_days,
+                )
+                if self.workflow_repository.get_by_invoice_claim(
+                    session,
+                    invoice_claim,
+                    excluding_request_id=application.request_id,
+                ) is not None:
+                    raise DuplicateInvoiceClaim(invoice_claim)
+                application.amount = amount
+                application.term_days = payload.term_days
+                application.features = risk_request.model_dump()
+                application.core_enterprise_organization_id = (
+                    core_organization.organization_id
+                )
+                application.contract_number = payload.contract_number
+                application.invoice_number = payload.invoice_number
+                application.trade_evidence_sha256 = fingerprint
+                application.invoice_claim_sha256 = invoice_claim
+                self._advance(
+                    session,
+                    application,
+                    user,
+                    action_type="update",
+                    event_type="APPLICATION_UPDATED",
+                    from_status=current,
+                    to_status=target,
+                    comment=None,
+                    payload={
+                        "contract_number": payload.contract_number,
+                        "invoice_number": payload.invoice_number,
+                        "trade_evidence_sha256": fingerprint,
+                        "invoice_claim_sha256": invoice_claim,
+                    },
+                )
+        except IntegrityError as error:
+            if self._is_duplicate_invoice(error):
+                raise DuplicateInvoiceClaim("Duplicate invoice claim") from error
+            raise
         return self.get(normalized_id, user)
 
     def submit(
@@ -217,6 +269,12 @@ class WorkflowService:
             )
             application.risk_score = risk_result.score
             application.explanations = risk_result.contributions
+            application.risk_assessment_id = uuid.uuid4()
+            application.risk_engine_version = "transparent_logistic_baseline_v0.1"
+            application.risk_input_sha256 = evidence_sha256(
+                application.features
+            )
+            application.risk_assessed_at = datetime.now(timezone.utc)
             self._advance(
                 session,
                 application,
@@ -230,6 +288,9 @@ class WorkflowService:
                     "score": risk_result.score,
                     "band": risk_result.band,
                     "model": "transparent_logistic_baseline_v0.1",
+                    "assessment_id": str(application.risk_assessment_id),
+                    "input_sha256": application.risk_input_sha256,
+                    "provenance": "DEMO_WORKFLOW",
                 },
             )
         return self.get(normalized_id, user)
@@ -567,6 +628,41 @@ class WorkflowService:
             ),
             "contract_number": application.contract_number,
             "invoice_number": application.invoice_number,
+            "trade_evidence": (
+                {
+                    "fingerprint_sha256": application.trade_evidence_sha256,
+                    "invoice_claim_sha256": application.invoice_claim_sha256,
+                    "duplicate_check": "passed",
+                    "evidence_type": "declared_fields_fingerprint",
+                }
+                if application.trade_evidence_sha256
+                and application.invoice_claim_sha256
+                else None
+            ),
+            "risk_evidence": (
+                {
+                    "assessment_id": str(application.risk_assessment_id),
+                    "engine_type": "business_baseline",
+                    "engine_version": application.risk_engine_version,
+                    "input_sha256": application.risk_input_sha256,
+                    "assessed_at": canonical_timestamp(application.risk_assessed_at),
+                    "provenance": "DEMO_WORKFLOW",
+                }
+                if application.risk_assessment_id
+                and application.risk_engine_version
+                and application.risk_input_sha256
+                and application.risk_assessed_at
+                else None
+            ),
             "allowed_actions": [action.value for action in actions],
             "timeline": timeline,
         }
+
+    @staticmethod
+    def _is_duplicate_invoice(error: IntegrityError) -> bool:
+        original = getattr(error, "orig", None)
+        diagnostics = getattr(original, "diag", None)
+        return (
+            getattr(diagnostics, "constraint_name", None)
+            == "uq_financing_requests_invoice_claim_sha256"
+        )

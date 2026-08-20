@@ -149,6 +149,29 @@ def test_workflow_api_rejects_wrong_role_and_stale_version(workflow_client):
     assert stale.json()["detail"]["code"] == "stale_application"
 
 
+def test_workflow_api_rejects_duplicate_invoice_claim(workflow_client):
+    login(workflow_client, "supplier.demo")
+    first = workflow_client.post(
+        "/api/v1/applications", json=application_payload()
+    )
+    assert first.status_code == 201
+    duplicate = {
+        **application_payload(),
+        "contract_number": "SCF-API-2026-OTHER",
+        "invoice_number": " inv-api-2026-001 ",
+    }
+
+    response = workflow_client.post("/api/v1/applications", json=duplicate)
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "code": "duplicate_invoice_claim",
+            "message": "This invoice is already used by an application",
+        }
+    }
+
+
 def test_workflow_api_hides_data_from_unauthenticated_callers(workflow_client):
     for path in (
         "/api/v1/tasks",

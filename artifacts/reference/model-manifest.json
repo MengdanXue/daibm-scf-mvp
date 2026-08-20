@@ -1,6 +1,7 @@
 {
   "artifact": "tgnn-v0.4.onnx",
   "artifact_sha256": "158d273db310c3f1abf4be7cb06aee78568e475ebb7564ebbeaa16d3efeeb0e5",
+  "xgboost_manifest_sha256": "d2da360964550254732a830f365ad4a0e8015a7bed89ca92507fd4f2b9b39a2a",
   "checkpoint_sha256": "47de64d9cea91abe492771a4b0c6d3694d4bfffd6e7b4834dac0d5ae617c4cab",
   "dataset": {
     "content_sha256": "f784faa8bdef23625888d64de75c2f29a80c0a51e266e0822652569507648353",

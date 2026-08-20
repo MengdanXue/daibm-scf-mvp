@@ -1,4 +1,5 @@
 import json
+import hashlib
 import shutil
 
 import numpy as np
@@ -141,4 +142,55 @@ def test_artifact_verifier_rejects_dataset_and_node_ordering_mismatch(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ArtifactVerificationError, match="node ordering"):
+        verify_reference_artifact(reference)
+
+
+def test_reference_artifact_exposes_verified_xgboost_comparison_metrics():
+    verified = verify_reference_artifact("artifacts/reference")
+
+    assert verified.comparison_metrics["tgnn"]["roc_auc"] == pytest.approx(
+        0.6596597864167827
+    )
+    assert verified.comparison_metrics["xgboost"]["roc_auc"] == pytest.approx(
+        0.5968933350217382
+    )
+
+
+def test_artifact_verifier_rejects_corrupted_xgboost_comparison(tmp_path):
+    reference = tmp_path / "reference"
+    shutil.copytree("artifacts/reference", reference)
+    artifact = reference / "xgboost-v0.4.json"
+    artifact.write_bytes(artifact.read_bytes() + b"corruption")
+
+    with pytest.raises(ArtifactVerificationError, match="xgboost"):
+        verify_reference_artifact(reference)
+
+
+def test_artifact_verifier_rejects_modified_xgboost_metric_manifest(tmp_path):
+    reference = tmp_path / "reference"
+    shutil.copytree("artifacts/reference", reference)
+    manifest_path = reference / "xgboost-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metrics"]["roc_auc"] = 0.99
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ArtifactVerificationError, match="manifest hash"):
+        verify_reference_artifact(reference)
+
+
+def test_artifact_verifier_rejects_invalid_xgboost_roc_auc(tmp_path):
+    reference = tmp_path / "reference"
+    shutil.copytree("artifacts/reference", reference)
+    xgboost_path = reference / "xgboost-manifest.json"
+    xgboost = json.loads(xgboost_path.read_text(encoding="utf-8"))
+    xgboost["metrics"].pop("roc_auc")
+    xgboost_path.write_text(json.dumps(xgboost), encoding="utf-8")
+    model_path = reference / "model-manifest.json"
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    model["xgboost_manifest_sha256"] = hashlib.sha256(
+        xgboost_path.read_bytes()
+    ).hexdigest()
+    model_path.write_text(json.dumps(model), encoding="utf-8")
+
+    with pytest.raises(ArtifactVerificationError, match="roc_auc"):
         verify_reference_artifact(reference)

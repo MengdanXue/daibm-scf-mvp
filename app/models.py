@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -74,6 +75,24 @@ class FinancingRequestModel(Base):
             "version >= 1",
             name="ck_financing_requests_version",
         ),
+        CheckConstraint(
+            "trade_evidence_sha256 IS NULL OR "
+            "char_length(trade_evidence_sha256) = 64",
+            name="ck_financing_requests_trade_evidence_hash_length",
+        ),
+        CheckConstraint(
+            "invoice_claim_sha256 IS NULL OR "
+            "char_length(invoice_claim_sha256) = 64",
+            name="ck_financing_requests_invoice_claim_hash_length",
+        ),
+        CheckConstraint(
+            "risk_input_sha256 IS NULL OR char_length(risk_input_sha256) = 64",
+            name="ck_financing_requests_risk_input_hash_length",
+        ),
+        UniqueConstraint(
+            "invoice_claim_sha256",
+            name="uq_financing_requests_invoice_claim_sha256",
+        ),
     )
 
     request_id: Mapped[uuid.UUID] = mapped_column(
@@ -125,6 +144,16 @@ class FinancingRequestModel(Base):
     )
     contract_number: Mapped[str | None] = mapped_column(Text)
     invoice_number: Mapped[str | None] = mapped_column(Text)
+    trade_evidence_sha256: Mapped[str | None] = mapped_column(Text)
+    invoice_claim_sha256: Mapped[str | None] = mapped_column(Text)
+    risk_assessment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
+    risk_engine_version: Mapped[str | None] = mapped_column(Text)
+    risk_input_sha256: Mapped[str | None] = mapped_column(Text)
+    risk_assessed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
 
 Index(

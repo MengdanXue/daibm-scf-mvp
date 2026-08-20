@@ -32,7 +32,19 @@ def test_financing_requests_support_draft_workflow_state(migrated_engine):
         "core_enterprise_organization_id",
         "contract_number",
         "invoice_number",
+        "trade_evidence_sha256",
+        "invoice_claim_sha256",
+        "risk_assessment_id",
+        "risk_engine_version",
+        "risk_input_sha256",
+        "risk_assessed_at",
     } <= columns.keys()
+
+    unique_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("financing_requests")
+    }
+    assert "uq_financing_requests_invoice_claim_sha256" in unique_constraints
 
 
 def test_identity_and_workflow_foreign_keys_are_indexed(migrated_engine):

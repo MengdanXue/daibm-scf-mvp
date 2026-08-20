@@ -19,6 +19,7 @@ from app.schemas_workflow import (
 )
 from app.services.workflow import (
     ApplicationNotFound,
+    DuplicateInvoiceClaim,
     ForbiddenWorkflow,
     StaleApplication,
 )
@@ -53,6 +54,14 @@ def _execute(operation: Callable[[], Any]):
             detail={
                 "code": "stale_application",
                 "message": "Application was changed; refresh and retry",
+            },
+        ) from error
+    except DuplicateInvoiceClaim as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "duplicate_invoice_claim",
+                "message": "This invoice is already used by an application",
             },
         ) from error
     except InvalidTransition as error:

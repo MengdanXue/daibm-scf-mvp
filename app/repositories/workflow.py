@@ -36,6 +36,22 @@ class WorkflowRepository:
             statement = statement.with_for_update()
         return session.scalar(statement)
 
+    def get_by_invoice_claim(
+        self,
+        session: Session,
+        invoice_claim_sha256: str,
+        *,
+        excluding_request_id: uuid.UUID | None = None,
+    ) -> FinancingRequestModel | None:
+        statement = select(FinancingRequestModel).where(
+            FinancingRequestModel.invoice_claim_sha256 == invoice_claim_sha256
+        )
+        if excluding_request_id is not None:
+            statement = statement.where(
+                FinancingRequestModel.request_id != excluding_request_id
+            )
+        return session.scalar(statement)
+
     def list_for_user(
         self,
         session: Session,
