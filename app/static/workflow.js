@@ -41,7 +41,7 @@
       draft: "Черновик", submitted: "Подана", trade_returned: "Возвращена", trade_confirmed: "Сделка подтверждена",
       risk_assessed: "Риск оценён", approved: "Одобрена", manual_review: "Ручная проверка", rejected: "Отклонена",
       controlled: "Контроль назначен", audited: "Аудит завершён",
-      create: "Создание", update: "Изменение", confirm_trade: "Подтверждение сделки", return_trade: "Возврат сделки",
+      create: "Создание", create_draft: "Создание черновика", update: "Изменение", confirm_trade: "Подтверждение сделки", return_trade: "Возврат сделки",
       assess_risk: "Оценка риска", decide: "Финансовое решение", apply_control: "Контрольное действие", audit: "Аудиторская проверка"
     },
     zh: {
@@ -72,7 +72,7 @@
       taskReady: "需要处理", timelineCreate: "创建申请", days: "天", cancelEdit: "新建草稿",
       draft: "草稿", submitted: "已提交", trade_returned: "已退回", trade_confirmed: "交易已确认", risk_assessed: "风险已评估",
       approved: "已批准", manual_review: "人工复核", rejected: "已拒绝", controlled: "已设置控制", audited: "审计已完成",
-      create: "创建", update: "修改", confirm_trade: "确认交易", return_trade: "退回交易", assess_risk: "风险评估",
+      create: "创建", create_draft: "创建草稿", update: "修改", confirm_trade: "确认交易", return_trade: "退回交易", assess_risk: "风险评估",
       decide: "融资决策", apply_control: "控制措施", audit: "审计核验"
     }
   };
@@ -227,8 +227,7 @@
 
   async function enterWorkbench() {
     const role = ROLE_META[state.user.role];
-    document.querySelector("#currentUser").hidden = false;
-    document.querySelector("#currentUser").innerHTML = `<b>${escapeHtml(state.user.display_name)}</b><small>${escapeHtml(tr(role.key))} · ${escapeHtml(state.user.organization_code)}</small>`;
+    renderCurrentUser();
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
     configureRoleNavigation();
     window.switchView("workflow");
@@ -260,6 +259,7 @@
   function renderWorkbench() {
     if (!state.user) return;
     const role = ROLE_META[state.user.role];
+    renderCurrentUser();
     document.querySelector("#roleMission").textContent = tr(role.mission);
     const banner = document.querySelector("#roleBanner");
     banner.querySelector(".role-seal").textContent = role.seal;
@@ -275,6 +275,13 @@
     renderApplications();
     renderDetail();
     renderTimeline();
+  }
+
+  function renderCurrentUser() {
+    const role = ROLE_META[state.user.role];
+    const container = document.querySelector("#currentUser");
+    container.hidden = false;
+    container.innerHTML = `<b>${escapeHtml(state.user.display_name)}</b><small>${escapeHtml(tr(role.key))} · ${escapeHtml(state.user.organization_code)}</small>`;
   }
 
   function renderCustodyRail() {

@@ -169,3 +169,13 @@ def test_workflow_javascript_uses_authenticated_versioned_apis():
         assert path in javascript
     assert "allowed_actions" in javascript
     assert "Demo123!" in javascript
+
+
+def test_workflow_translates_created_draft_and_rerenders_user_on_language_change():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert javascript.count("create_draft:") == 2
+    render_workbench = javascript.split("function renderWorkbench()", 1)[1]
+    assert "renderCurrentUser()" in render_workbench.split(
+        "function renderCustodyRail()", 1
+    )[0]
