@@ -6,7 +6,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.dependencies import current_user
-from app.identity import AuthenticatedUser, InvalidCredentials
+from app.identity import (
+    AuthenticatedUser,
+    AuthenticationRequired,
+    InvalidCredentials,
+)
 from app.schemas_auth import (
     CurrentUserResponse,
     DemoAccountResponse,
@@ -68,6 +72,20 @@ def logout(request: Request, response: Response) -> None:
         httponly=True,
         samesite="strict",
     )
+
+
+@router.get("/session")
+def session_probe(request: Request):
+    try:
+        user = request.app.state.identity_service.authenticate(
+            request.cookies.get(COOKIE_NAME)
+        )
+    except AuthenticationRequired:
+        return {"authenticated": False, "user": None}
+    return {
+        "authenticated": True,
+        "user": _serialize_user(user).model_dump(mode="json"),
+    }
 
 
 @router.get("/me", response_model=CurrentUserResponse)

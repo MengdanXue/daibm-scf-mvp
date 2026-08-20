@@ -440,7 +440,9 @@
     try { state.accounts = await wfApi("/api/v1/auth/demo-accounts"); } catch (_) { state.accounts = []; }
     renderAccounts();
     try {
-      state.user = await wfApi("/api/v1/auth/me");
+      const session = await wfApi("/api/v1/auth/session");
+      if (!session.authenticated) return;
+      state.user = session.user;
       document.body.classList.add("authenticated");
       await enterWorkbench();
     } catch (_) {

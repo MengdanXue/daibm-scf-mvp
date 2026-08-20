@@ -60,6 +60,20 @@ def test_login_sets_http_only_strict_cookie_and_me_restores_identity(auth_client
     assert me.json()["username"] == "supplier.demo"
 
 
+def test_public_session_probe_avoids_expected_unauthorized_browser_noise(
+    auth_client,
+):
+    anonymous = auth_client.get("/api/v1/auth/session")
+    assert anonymous.status_code == 200
+    assert anonymous.json() == {"authenticated": False, "user": None}
+
+    login(auth_client, "core.demo")
+    authenticated = auth_client.get("/api/v1/auth/session")
+    assert authenticated.status_code == 200
+    assert authenticated.json()["authenticated"] is True
+    assert authenticated.json()["user"]["username"] == "core.demo"
+
+
 def test_bad_login_has_generic_error_and_does_not_set_cookie(auth_client):
     response = auth_client.post(
         "/api/v1/auth/login",

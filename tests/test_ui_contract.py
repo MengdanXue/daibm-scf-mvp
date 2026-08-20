@@ -153,7 +153,7 @@ def test_workflow_javascript_uses_authenticated_versioned_apis():
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 
     for path in (
-        "/api/v1/auth/me",
+        "/api/v1/auth/session",
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
         "/api/v1/dashboard",
