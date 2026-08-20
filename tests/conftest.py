@@ -67,3 +67,16 @@ def session_factory(
     yield factory
     with migrated_engine.begin() as connection:
         truncate_all(connection)
+
+
+@pytest.fixture
+def login_user():
+    def login(client, username: str):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "Demo123!"},
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    return login

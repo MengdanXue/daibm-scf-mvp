@@ -124,12 +124,17 @@ def test_recovery_preserves_original_history_and_appends_evidence(session_factor
     assert persisted.recovered_at is not None
 
 
-def test_tamper_and_recover_api_exposes_durable_incident(session_factory, migrated_engine):
+def test_tamper_and_recover_api_exposes_durable_incident(
+    session_factory,
+    migrated_engine,
+    login_user,
+):
     application = create_app(
         Database(migrated_engine, session_factory),
         research_settings=ResearchSettings.from_env({}),
     )
     with TestClient(application) as client:
+        login_user(client, "auditor.demo")
         client.post("/api/demo/seed")
 
         tampered = client.post("/api/demo/tamper")

@@ -12,7 +12,7 @@ from app.services.research_inference import ResearchInferenceService
 
 
 @pytest.fixture
-def research_client(migrated_engine, session_factory):
+def research_client(migrated_engine, session_factory, login_user):
     database = Database(
         engine=migrated_engine,
         session_factory=session_factory,
@@ -25,6 +25,7 @@ def research_client(migrated_engine, session_factory):
         ),
     )
     with TestClient(application) as client:
+        login_user(client, "financier.demo")
         yield client
 
 
@@ -128,6 +129,7 @@ def test_optional_missing_artifact_keeps_engineering_health_and_returns_503(
     migrated_engine,
     session_factory,
     tmp_path,
+    login_user,
 ):
     database = Database(
         engine=migrated_engine,
@@ -141,6 +143,7 @@ def test_optional_missing_artifact_keeps_engineering_health_and_returns_503(
         ),
     )
     with TestClient(application) as client:
+        login_user(client, "financier.demo")
         health = client.get("/api/health")
         inference = client.post(
             "/api/research/inference",

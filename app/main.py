@@ -3,16 +3,19 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.auth import router as auth_router
+from app.api.dependencies import require_roles
 from app.api.research import router as research_router
 from app.config import PostgresSettings, ResearchSettings
 from app.database import Database
 from app.schemas import FinancingRequestCreate, IntegrityRecoveryRequest
 from app.service import FinancingService
+from app.services.identity import IdentityService
 from app.services.research_inference import ResearchInferenceService
 from app.services.research_decision import ResearchDecisionService
 from app.services.research_scenario import ResearchScenarioService
@@ -49,6 +52,7 @@ def create_app(
         research_decision_service,
     )
     integrity_service = IntegrityService(active_database.session_factory)
+    identity_service = IdentityService(active_database.session_factory)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -58,6 +62,8 @@ def create_app(
         application.state.research_decision_service = research_decision_service
         application.state.research_scenario_service = research_scenario_service
         application.state.integrity_service = integrity_service
+        application.state.identity_service = identity_service
+        identity_service.seed_demo_accounts()
         research_service.initialize()
         yield
         if owns_database:
@@ -78,6 +84,7 @@ def create_app(
         name="static",
     )
     application.include_router(research_router)
+    application.include_router(auth_router)
 
     @application.get("/", include_in_schema=False)
     def index():
@@ -129,13 +136,17 @@ def create_app(
         }
 
     @application.get("/api/dashboard")
-    def dashboard(request: Request):
+    def dashboard(
+        request: Request,
+        _user=Depends(require_roles("financier", "auditor")),
+    ):
         return request.app.state.service.dashboard()
 
     @application.post("/api/requests", status_code=201)
     def create_financing_request(
         payload: FinancingRequestCreate,
         request: Request,
+        _user=Depends(require_roles("financier", "auditor")),
     ):
         return request.app.state.service.create_request(payload)
 
@@ -143,11 +154,16 @@ def create_app(
     def list_financing_requests(
         request: Request,
         limit: int = Query(50, ge=1, le=200),
+        _user=Depends(require_roles("financier", "auditor")),
     ):
         return request.app.state.service.list_requests(limit=limit)
 
     @application.get("/api/requests/{request_id}")
-    def get_financing_request(request_id: str, request: Request):
+    def get_financing_request(
+        request_id: str,
+        request: Request,
+        _user=Depends(require_roles("financier", "auditor")),
+    ):
         try:
             return request.app.state.service.get_request(request_id)
         except KeyError as error:
@@ -160,23 +176,36 @@ def create_app(
     def ledger(
         request: Request,
         limit: int = Query(100, ge=1, le=500),
+        _user=Depends(require_roles("auditor")),
     ):
         return request.app.state.service.list_ledger(limit=limit)
 
     @application.get("/api/ledger/verify")
-    def verify_ledger(request: Request):
+    def verify_ledger(
+        request: Request,
+        _user=Depends(require_roles("auditor")),
+    ):
         return request.app.state.service.verify_ledger()
 
     @application.post("/api/demo/seed")
-    def seed_demo(request: Request):
+    def seed_demo(
+        request: Request,
+        _user=Depends(require_roles("auditor")),
+    ):
         return request.app.state.service.seed_demo()
 
     @application.post("/api/demo/reset")
-    def reset_demo(request: Request):
+    def reset_demo(
+        request: Request,
+        _user=Depends(require_roles("auditor")),
+    ):
         return request.app.state.service.reset_demo()
 
     @application.post("/api/demo/tamper")
-    def tamper_demo(request: Request):
+    def tamper_demo(
+        request: Request,
+        _user=Depends(require_roles("auditor")),
+    ):
         verification = request.app.state.service.tamper_demo_ledger()
         if verification["valid"]:
             return verification
@@ -191,7 +220,11 @@ def create_app(
         }
 
     @application.post("/api/demo/recover")
-    def recover_demo(payload: IntegrityRecoveryRequest, request: Request):
+    def recover_demo(
+        payload: IntegrityRecoveryRequest,
+        request: Request,
+        _user=Depends(require_roles("auditor")),
+    ):
         try:
             return request.app.state.integrity_service.recover(
                 payload.incident_id,

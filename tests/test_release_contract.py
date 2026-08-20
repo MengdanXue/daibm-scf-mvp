@@ -18,12 +18,13 @@ ROOT = Path(__file__).parents[1]
 
 
 @pytest.fixture
-def client(migrated_engine, session_factory):
+def client(migrated_engine, session_factory, login_user):
     database = Database(
         engine=migrated_engine,
         session_factory=session_factory,
     )
     with TestClient(create_app(database)) as test_client:
+        login_user(test_client, "auditor.demo")
         yield test_client
 
 

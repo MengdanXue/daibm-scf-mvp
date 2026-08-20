@@ -1,7 +1,8 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.dependencies import require_roles
 from app.schemas_research import ResearchInferenceRequest, RiskInjectionRequest
 from app.services.research_inference import (
     ResearchModelUnavailable,
@@ -9,7 +10,11 @@ from app.services.research_inference import (
 )
 
 
-router = APIRouter(prefix="/api/research", tags=["research"])
+router = APIRouter(
+    prefix="/api/research",
+    tags=["research"],
+    dependencies=[Depends(require_roles("financier", "auditor"))],
+)
 
 
 def _unavailable() -> HTTPException:

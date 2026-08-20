@@ -13,12 +13,13 @@ from app.repositories.ledger import LedgerRepository
 
 
 @pytest.fixture
-def decision_client(migrated_engine, session_factory):
+def decision_client(migrated_engine, session_factory, login_user):
     application = create_app(
         Database(migrated_engine, session_factory),
         research_settings=ResearchSettings.from_env({}),
     )
     with TestClient(application) as client:
+        login_user(client, "financier.demo")
         yield client
 
 

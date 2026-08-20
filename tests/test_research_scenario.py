@@ -21,12 +21,13 @@ from research.data.generator import generate_dataset
 
 
 @pytest.fixture
-def scenario_client(migrated_engine, session_factory):
+def scenario_client(migrated_engine, session_factory, login_user):
     application = create_app(
         Database(migrated_engine, session_factory),
         research_settings=ResearchSettings.from_env({}),
     )
     with TestClient(application) as client:
+        login_user(client, "auditor.demo")
         yield client
 
 
