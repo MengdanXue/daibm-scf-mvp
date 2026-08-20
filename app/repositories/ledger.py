@@ -22,6 +22,13 @@ LEDGER_LOCK_KEY = 0x444149424D
 
 
 class LedgerRepository:
+    @staticmethod
+    def acquire_global_lock(session: Session) -> None:
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": LEDGER_LOCK_KEY},
+        )
+
     def clear_demo_data(self, session: Session) -> None:
         session.execute(
             text(
@@ -40,10 +47,7 @@ class LedgerRepository:
     ) -> list[LedgerEventModel]:
         if stream_id != "global":
             raise ValueError("PostgreSQL audit adapter supports only global stream")
-        session.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_key)"),
-            {"lock_key": LEDGER_LOCK_KEY},
-        )
+        self.acquire_global_lock(session)
         previous_hash = session.scalar(
             select(LedgerEventModel.event_hash)
             .order_by(LedgerEventModel.id.desc())
@@ -131,6 +135,30 @@ class LedgerRepository:
         event.payload = payload
         session.flush()
         return event.id
+
+    @staticmethod
+    def get_event(
+        session: Session,
+        event_id: int,
+        *,
+        for_update: bool = False,
+    ) -> LedgerEventModel | None:
+        statement = select(LedgerEventModel).where(
+            LedgerEventModel.id == event_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return session.scalar(statement)
+
+    @staticmethod
+    def recompute_event_hash(event: LedgerEventModel) -> str:
+        return calculate_hash(
+            event.previous_hash,
+            canonical_timestamp(event.created_at),
+            event.event_type,
+            str(event.entity_id),
+            canonical_json(event.payload),
+        )
 
     @staticmethod
     def _build_event(

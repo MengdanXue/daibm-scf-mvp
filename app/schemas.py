@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FinancingRequestCreate(BaseModel):
@@ -34,3 +35,18 @@ class RiskAssessment(BaseModel):
     score: float
     band: str
     contributions: list[Contribution]
+
+
+class IntegrityRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: UUID
+    operator: str = Field(min_length=1, max_length=80)
+
+    @field_validator("operator")
+    @classmethod
+    def operator_must_not_be_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("operator must not be blank")
+        return normalized

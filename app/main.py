@@ -11,11 +11,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.research import router as research_router
 from app.config import PostgresSettings, ResearchSettings
 from app.database import Database
-from app.schemas import FinancingRequestCreate
+from app.schemas import FinancingRequestCreate, IntegrityRecoveryRequest
 from app.service import FinancingService
 from app.services.research_inference import ResearchInferenceService
 from app.services.research_decision import ResearchDecisionService
 from app.services.research_scenario import ResearchScenarioService
+from app.services.integrity import (
+    IntegrityError,
+    IntegrityService,
+    NoIntegrityViolation,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -43,6 +48,7 @@ def create_app(
         research_service,
         research_decision_service,
     )
+    integrity_service = IntegrityService(active_database.session_factory)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -51,6 +57,7 @@ def create_app(
         application.state.research_service = research_service
         application.state.research_decision_service = research_decision_service
         application.state.research_scenario_service = research_scenario_service
+        application.state.integrity_service = integrity_service
         research_service.initialize()
         yield
         if owns_database:
@@ -160,7 +167,34 @@ def create_app(
 
     @application.post("/api/demo/tamper")
     def tamper_demo(request: Request):
-        return request.app.state.service.tamper_demo_ledger()
+        verification = request.app.state.service.tamper_demo_ledger()
+        if verification["valid"]:
+            return verification
+        try:
+            incident = request.app.state.integrity_service.detect()
+        except NoIntegrityViolation:
+            return verification
+        return {
+            **verification,
+            "integrity_incident_id": str(incident.integrity_incident_id),
+            "recovery_status": incident.recovery_status,
+        }
+
+    @application.post("/api/demo/recover")
+    def recover_demo(payload: IntegrityRecoveryRequest, request: Request):
+        try:
+            return request.app.state.integrity_service.recover(
+                payload.incident_id,
+                payload.operator,
+            )
+        except IntegrityError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "integrity_recovery_failed",
+                    "message": str(error),
+                },
+            ) from error
 
     return application
 

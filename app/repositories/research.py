@@ -16,6 +16,7 @@ from app.models import LedgerEventModel
 from app.models_research import (
     DatasetVersionModel,
     GraphSnapshotModel,
+    IntegrityIncidentModel,
     ModelRunModel,
     ModelVersionModel,
     PolicyDecisionModel,
@@ -360,3 +361,60 @@ class ResearchRepository:
         session.add(model)
         session.flush()
         return model
+
+    @staticmethod
+    def find_unresolved_incident(
+        session: Session,
+        affected_ledger_event_id: int,
+    ) -> IntegrityIncidentModel | None:
+        return session.scalar(
+            select(IntegrityIncidentModel).where(
+                IntegrityIncidentModel.affected_ledger_event_id
+                == affected_ledger_event_id,
+                IntegrityIncidentModel.recovery_status == "unresolved",
+            )
+        )
+
+    @staticmethod
+    def add_integrity_incident(
+        session: Session,
+        *,
+        integrity_incident_id: uuid.UUID,
+        affected_ledger_event_id: int,
+        detected_at: datetime,
+        expected_hash: str,
+        actual_hash: str,
+        corrupted_payload: dict[str, object],
+        trusted_recovery_source: str,
+    ) -> IntegrityIncidentModel:
+        model = IntegrityIncidentModel(
+            integrity_incident_id=integrity_incident_id,
+            affected_ledger_event_id=affected_ledger_event_id,
+            detected_at=detected_at,
+            expected_hash=expected_hash,
+            actual_hash=actual_hash,
+            corrupted_payload=corrupted_payload,
+            recovery_status="unresolved",
+            trusted_recovery_source=trusted_recovery_source,
+            recovery_method=None,
+            operator=None,
+            recovered_at=None,
+        )
+        session.add(model)
+        session.flush()
+        return model
+
+    @staticmethod
+    def get_integrity_incident(
+        session: Session,
+        integrity_incident_id: uuid.UUID,
+        *,
+        for_update: bool = False,
+    ) -> IntegrityIncidentModel | None:
+        statement = select(IntegrityIncidentModel).where(
+            IntegrityIncidentModel.integrity_incident_id
+            == integrity_incident_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return session.scalar(statement)
