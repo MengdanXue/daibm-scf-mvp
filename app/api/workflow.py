@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.dependencies import current_user
 from app.domain.workflow import InvalidTransition
 from app.identity import AuthenticatedUser
+from app.schemas_auth import OrganizationOptionResponse
 from app.schemas_workflow import (
     ApplicationDraftCreate,
     ApplicationDraftUpdate,
@@ -40,6 +41,8 @@ def _execute(operation: Callable[[], Any]):
                 "message": "Application not found",
             },
         ) from error
+
+
     except ForbiddenWorkflow as error:
         raise HTTPException(
             status_code=403,
@@ -72,6 +75,14 @@ def _execute(operation: Callable[[], Any]):
                 "message": str(error),
             },
         ) from error
+
+
+@router.get(
+    "/organizations/core-enterprises",
+    response_model=list[OrganizationOptionResponse],
+)
+def core_enterprises(_user: CurrentUser, request: Request):
+    return request.app.state.identity_service.core_enterprises()
 
 
 @router.get("/tasks")

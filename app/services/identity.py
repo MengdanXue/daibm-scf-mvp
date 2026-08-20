@@ -153,6 +153,20 @@ class IdentityService:
         with self.session_factory.begin() as session:
             self.repository.delete_session(session, _token_digest(token))
 
+    def core_enterprises(self) -> list[dict[str, str]]:
+        with self.session_factory() as session:
+            organizations = self.repository.list_organizations_by_type(
+                session,
+                "core_enterprise",
+            )
+            return [
+                {
+                    "organization_code": organization.organization_code,
+                    "name": organization.name,
+                }
+                for organization in organizations
+            ]
+
     @staticmethod
     def demo_accounts() -> list[dict[str, str]]:
         return [

@@ -97,8 +97,9 @@
   };
 
   const state = {
-    lang: localStorage.getItem("daibm-lang") || "ru",
-    user: null, accounts: [], dashboard: null, tasks: [], applications: [], selected: null, editing: null, busy: false
+    lang: localStorage.getItem("daibm-lang") || "ru", user: null,
+    accounts: [], coreEnterprises: [], dashboard: null, tasks: [],
+    applications: [], selected: null, editing: null, busy: false
   };
 
   const tr = (key) => COPY[state.lang][key] || key;
@@ -182,6 +183,17 @@
       await enterWorkbench();
       notify(tr("signedIn"));
     } catch (_) {
+      if (state.user) {
+        try { await wfApi("/api/v1/auth/logout", { method: "POST" }); }
+        catch (_) { /* the local rollback still applies */ }
+        state.user = null;
+        state.coreEnterprises = [];
+        state.applications = [];
+        state.selected = null;
+        state.editing = null;
+        document.body.classList.remove("authenticated");
+        renderAccounts();
+      }
       errorElement.textContent = tr("loginFailed");
     } finally {
       setBusy(false);
@@ -192,6 +204,7 @@
     try { await wfApi("/api/v1/auth/logout", { method: "POST" }); } catch (_) { /* local logout still applies */ }
     state.user = null;
     state.applications = [];
+    state.coreEnterprises = [];
     state.selected = null;
     state.editing = null;
     document.body.classList.remove("authenticated");
@@ -238,6 +251,9 @@
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
     configureRoleNavigation();
     window.switchView("workflow");
+    state.coreEnterprises = state.user.role === "supplier"
+      ? await wfApi("/api/v1/organizations/core-enterprises")
+      : [];
     await refreshWorkflow();
     await refreshLegacyForRole();
   }
@@ -273,6 +289,7 @@
     banner.querySelector("b").textContent = `${tr(role.key)} · ${state.user.organization_name}`;
     banner.querySelector("p").textContent = tr(role.mission);
     document.querySelector("#supplierCreate").hidden = state.user.role !== "supplier";
+    renderCoreEnterpriseOptions();
     document.querySelector("#workflowApplicationCount").textContent = state.dashboard?.application_count ?? 0;
     document.querySelector("#workflowTaskCount").textContent = state.dashboard?.task_count ?? 0;
     document.querySelector("#workflowStatusCount").textContent = Object.keys(state.dashboard?.status_counts || {}).length;
@@ -323,6 +340,21 @@
     return `<div class="detail-field"><span>${escapeHtml(label)}</span><b>${escapeHtml(value ?? "—")}</b></div>`;
   }
 
+  function renderCoreEnterpriseOptions() {
+    const select = document.querySelector(
+      '#applicationForm select[name="core_enterprise_organization_code"]'
+    );
+    if (!select) return;
+    const selectedCode = state.editing?.core_enterprise_organization_code
+      || select.value;
+    select.innerHTML = state.coreEnterprises.map((organization) =>
+      `<option value="${escapeHtml(organization.organization_code)}">${escapeHtml(organization.name)} · ${escapeHtml(organization.organization_code)}</option>`
+    ).join("");
+    if (state.coreEnterprises.some(
+      (organization) => organization.organization_code === selectedCode
+    )) select.value = selectedCode;
+  }
+
   const compactHash = (value) => value ? `${String(value).slice(0, 10)}…${String(value).slice(-8)}` : "—";
 
   function renderDetail() {
@@ -335,6 +367,10 @@
     const risk = application.risk_score == null ? "—" : Number(application.risk_score).toFixed(4);
     const tradeEvidence = application.trade_evidence;
     const riskEvidence = application.risk_evidence;
+    const coreEnterprise = [
+      application.core_enterprise_organization_name,
+      application.core_enterprise_organization_code
+    ].filter(Boolean).join(" · ");
     const evidenceMarkup = `<div class="workflow-evidence">
       <article><span>${escapeHtml(tr("tradeEvidence"))}</span><b title="${escapeHtml(tradeEvidence?.fingerprint_sha256)}">${escapeHtml(compactHash(tradeEvidence?.fingerprint_sha256))}</b><small>${escapeHtml(tradeEvidence ? tr("duplicateCheckPassed") : "—")}</small></article>
       <article><span>${escapeHtml(tr("businessRiskEvidence"))}</span><b title="${escapeHtml(riskEvidence?.input_sha256)}">${escapeHtml(riskEvidence?.engine_version || "—")}</b><small>${escapeHtml(compactHash(riskEvidence?.input_sha256))}</small></article>
@@ -342,7 +378,7 @@
     </div>`;
     container.innerHTML = `<div class="detail-top"><div><span class="status-chip" data-status="${escapeHtml(application.status)}">${escapeHtml(tr(application.status))}</span><h2>${escapeHtml(application.contract_number)}</h2><p>${escapeHtml(application.request_id)}</p></div><div class="detail-version"><span>${escapeHtml(tr("version"))}</span><b>v${application.version}</b></div></div>
       <div class="detail-fields">
-        ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), "CORE-001")}${detailField(tr("amount"), money(application.amount))}
+        ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), coreEnterprise)}${detailField(tr("amount"), money(application.amount))}
         ${detailField(tr("invoice"), application.invoice_number)}${detailField(tr("term"), `${application.term_days} ${tr("days")}`)}${detailField(tr("paymentDelay"), `${application.features.payment_delay_days} ${tr("days")}`)}
       </div>
       <div class="risk-result"><span>${escapeHtml(tr("risk"))}<strong>${escapeHtml(risk)}</strong></span><span>${escapeHtml(tr("decision"))}<strong>${escapeHtml(application.decision ? tr(application.decision) : "—")}</strong></span></div>
@@ -364,7 +400,6 @@
     if (actions.includes("decide")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="decision" data-decision="approved">${escapeHtml(tr("approve"))}</button><button class="btn btn-soft" type="button" data-workflow-action="decision" data-decision="manual_review">${escapeHtml(tr("manualReview"))}</button><button class="btn btn-danger" type="button" data-workflow-action="decision" data-decision="rejected">${escapeHtml(tr("reject"))}</button>`);
     if (actions.includes("apply_control")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="control">${escapeHtml(tr("applyControl"))}</button>`);
     if (actions.includes("audit")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="audit">${escapeHtml(tr("auditReview"))}</button>`);
-    setTimeout(() => document.querySelectorAll("[data-workflow-action]").forEach((button) => button.addEventListener("click", () => executeAction(button))), 0);
     return `<div class="action-station"><h3>${escapeHtml(tr("actionStation"))}</h3><p>${escapeHtml(tr(ROLE_META[state.user.role].mission))}</p>${comment}<div class="action-buttons">${buttons.join("")}</div></div>`;
   }
 
@@ -409,7 +444,7 @@
     const application = state.selected;
     state.editing = application;
     const form = document.querySelector("#applicationForm");
-    const values = { ...application.features, core_enterprise_organization_code: "CORE-001", contract_number: application.contract_number, invoice_number: application.invoice_number, amount: application.amount, term_days: application.term_days };
+    const values = { ...application.features, core_enterprise_organization_code: application.core_enterprise_organization_code, contract_number: application.contract_number, invoice_number: application.invoice_number, amount: application.amount, term_days: application.term_days };
     Object.entries(values).forEach(([name, value]) => {
       const input = form.elements.namedItem(name);
       if (!input) return;
@@ -460,6 +495,10 @@
     document.querySelector("#logoutButton").addEventListener("click", logout);
     document.querySelector("#refreshWorkflow").addEventListener("click", () => refreshWorkflow());
     document.querySelector("#applicationForm").addEventListener("submit", saveApplication);
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest?.("[data-workflow-action]");
+      if (button) executeAction(button);
+    });
     applyWorkflowLanguage();
     try { state.accounts = await wfApi("/api/v1/auth/demo-accounts"); } catch (_) { state.accounts = []; }
     renderAccounts();

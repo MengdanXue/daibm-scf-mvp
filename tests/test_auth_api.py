@@ -1,8 +1,12 @@
+import uuid
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.database import Database
 from app.main import create_app
+from app.models_identity import OrganizationModel
 
 
 @pytest.fixture
@@ -38,6 +42,37 @@ def test_demo_account_metadata_is_public_without_password_material(auth_client):
     }
     assert "password" not in response.text.lower()
     assert "hash" not in response.text.lower()
+
+
+def test_authenticated_core_enterprise_options_come_from_database(
+    auth_client,
+    session_factory,
+):
+    with session_factory.begin() as session:
+        session.add(
+            OrganizationModel(
+                organization_id=uuid.uuid4(),
+                organization_code="CORE-ALT-002",
+                name="АО «Вторая якорная компания»",
+                organization_type="core_enterprise",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    login(auth_client, "supplier.demo")
+
+    response = auth_client.get("/api/v1/organizations/core-enterprises")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "organization_code": "CORE-001",
+            "name": "АО «Якорная компания»",
+        },
+        {
+            "organization_code": "CORE-ALT-002",
+            "name": "АО «Вторая якорная компания»",
+        },
+    ]
 
 
 def test_login_sets_http_only_strict_cookie_and_me_restores_identity(auth_client):

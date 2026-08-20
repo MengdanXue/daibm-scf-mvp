@@ -589,6 +589,14 @@ class WorkflowService:
         application: FinancingRequestModel,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        core_organization = (
+            self.identity_repository.get_organization_by_id(
+                session,
+                application.core_enterprise_organization_id,
+            )
+            if application.core_enterprise_organization_id
+            else None
+        )
         timeline = [
             {
                 "action_id": action.action_id,
@@ -625,6 +633,14 @@ class WorkflowService:
             "supplier_organization_id": str(application.supplier_organization_id),
             "core_enterprise_organization_id": str(
                 application.core_enterprise_organization_id
+            ),
+            "core_enterprise_organization_code": (
+                core_organization.organization_code
+                if core_organization
+                else None
+            ),
+            "core_enterprise_organization_name": (
+                core_organization.name if core_organization else None
             ),
             "contract_number": application.contract_number,
             "invoice_number": application.invoice_number,

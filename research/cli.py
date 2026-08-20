@@ -5,26 +5,21 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
 
-from research.artifacts.registry import promote_tgnn
 from research.artifacts.verification import verify_reference_artifact
 from research.data.generator import generate_dataset
 from research.data.manifest import build_dataset_manifest
-from research.graph.builder import TemporalSamples, build_samples
+from research.graph.builder import build_samples
 from research.graph.features import GRAPH_FEATURE_NAMES
-from research.graph.split import TemporalSplit, temporal_split
-from research.models.tgnn import TemporalGCNBiLSTM
-from research.training.export_onnx import export_onnx
-from research.training.train_tgnn import (
-    TGNNTrainingConfig,
-    TrainedTGNN,
-    train_tgnn,
-)
-from research.training.train_xgboost import train_xgboost
+from research.graph.split import temporal_split
+
+if TYPE_CHECKING:
+    from research.graph.builder import TemporalSamples
+    from research.graph.split import TemporalSplit
+    from research.training.train_tgnn import TrainedTGNN
 
 
 def _reference_pipeline() -> tuple[dict[str, Any], TemporalSplit]:
@@ -49,6 +44,11 @@ def _last_test_sample(samples: TemporalSamples) -> TemporalSamples:
 
 
 def _load_trained(run_dir: Path) -> TrainedTGNN:
+    import torch
+
+    from research.models.tgnn import TemporalGCNBiLSTM
+    from research.training.train_tgnn import TGNNTrainingConfig, TrainedTGNN
+
     run_manifest_path = run_dir / "tgnn-run.json"
     manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
     checkpoint_path = run_dir / manifest["checkpoint"]
@@ -99,6 +99,8 @@ def command_generate(output: Path) -> dict[str, Any]:
 
 
 def command_train_xgboost(output: Path) -> dict[str, Any]:
+    from research.training.train_xgboost import train_xgboost
+
     _, split = _reference_pipeline()
     result = train_xgboost(split, output_dir=output)
     return {"artifact_sha256": result.artifact_sha256, "metrics": result.metrics}
@@ -109,6 +111,8 @@ def command_train_tgnn(
     max_epochs: int,
     patience: int,
 ) -> dict[str, Any]:
+    from research.training.train_tgnn import TGNNTrainingConfig, train_tgnn
+
     _, split = _reference_pipeline()
     result = train_tgnn(
         split,
@@ -126,6 +130,9 @@ def command_train_tgnn(
 
 
 def command_promote(run_dir: Path, destination: Path) -> dict[str, Any]:
+    from research.artifacts.registry import promote_tgnn
+    from research.training.export_onnx import export_onnx
+
     dataset_manifest, split = _reference_pipeline()
     trained = _load_trained(run_dir)
     reference_sample = _last_test_sample(split.test)
@@ -151,6 +158,11 @@ def command_build_reference(
     max_epochs: int,
     patience: int,
 ) -> dict[str, Any]:
+    from research.artifacts.registry import promote_tgnn
+    from research.training.export_onnx import export_onnx
+    from research.training.train_tgnn import TGNNTrainingConfig, train_tgnn
+    from research.training.train_xgboost import train_xgboost
+
     dataset_manifest, split = _reference_pipeline()
     xgboost_result = train_xgboost(split, output_dir=output / "xgboost")
     trained = train_tgnn(

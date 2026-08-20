@@ -41,3 +41,8 @@ class DemoAccountResponse(BaseModel):
     display_name: str
     role: str
     organization_code: str
+
+
+class OrganizationOptionResponse(BaseModel):
+    organization_code: str
+    name: str

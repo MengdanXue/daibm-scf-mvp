@@ -1,10 +1,12 @@
 import uuid
 from dataclasses import replace
+from datetime import datetime, timezone
 import pytest
 from sqlalchemy import func, select
 
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel, LedgerEventModel
+from app.models_identity import OrganizationModel
 from app.models_workflow import WorkflowActionModel
 from app.repositories.ledger import LedgerRepository
 from app.schemas_workflow import ApplicationDraftCreate
@@ -165,6 +167,37 @@ def test_duplicate_invoice_claim_is_rejected_case_insensitively(session_factory)
             )
             == 1
         )
+
+
+def test_application_serializes_the_selected_core_enterprise(session_factory):
+    users = demo_users(session_factory)
+    with session_factory.begin() as session:
+        session.add(
+            OrganizationModel(
+                organization_id=uuid.uuid4(),
+                organization_code="CORE-ALT-002",
+                name="АО «Вторая якорная компания»",
+                organization_type="core_enterprise",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+    service = WorkflowService(session_factory)
+    created = service.create_draft(
+        draft_payload().model_copy(
+            update={
+                "core_enterprise_organization_code": "CORE-ALT-002",
+                "contract_number": "SCF-2026-ALT",
+                "invoice_number": "INV-2026-ALT",
+            }
+        ),
+        users["supplier"],
+    )
+
+    assert created["core_enterprise_organization_code"] == "CORE-ALT-002"
+    assert created["core_enterprise_organization_name"] == (
+        "АО «Вторая якорная компания»"
+    )
 
 
 def test_returned_application_can_be_updated_and_resubmitted(session_factory):

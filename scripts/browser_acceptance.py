@@ -58,7 +58,11 @@ with sync_playwright() as playwright:
         "transactions_last_30d": "12",
     }
     for name, value in values.items():
-        page.locator(f'#applicationForm [name="{name}"]').fill(value)
+        field = page.locator(f'#applicationForm [name="{name}"]')
+        if name == "core_enterprise_organization_code":
+            field.select_option(value)
+        else:
+            field.fill(value)
     page.locator('#applicationForm [name="invoice_mismatch"]').check()
     page.locator('#applicationForm button[type="submit"]').click()
     page.locator('[data-workflow-action="submit"]').wait_for()
@@ -151,6 +155,66 @@ with sync_playwright() as playwright:
     page.screenshot(path=str(SCREENSHOT), full_page=True)
 
     assert browser_messages == [], browser_messages
+
+    alternate_context = browser.new_context(
+        viewport={"width": 1280, "height": 900}
+    )
+    alternate = alternate_context.new_page()
+    alternate.route(
+        "**/api/v1/organizations/core-enterprises",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=(
+                '[{"organization_code":"CORE-001","name":"Primary Core"},'
+                '{"organization_code":"CORE-ALT-002","name":"Alternate Core"}]'
+            ),
+        ),
+    )
+    alternate.goto(BASE_URL)
+    alternate.wait_for_load_state("networkidle")
+    login(alternate, "supplier.demo")
+    core_select = alternate.locator(
+        'select[name="core_enterprise_organization_code"]'
+    )
+    core_select.locator("option").nth(1).wait_for(state="attached")
+    core_options = core_select.locator("option").all_text_contents()
+    assert core_options == [
+        "Primary Core · CORE-001",
+        "Alternate Core · CORE-ALT-002",
+    ], core_options
+    core_select.select_option("CORE-ALT-002")
+    assert core_select.input_value() == "CORE-ALT-002"
+    alternate_context.close()
+
+    failing_context = browser.new_context(
+        viewport={"width": 1280, "height": 900}
+    )
+    failing = failing_context.new_page()
+    failing.route(
+        "**/api/v1/organizations/core-enterprises",
+        lambda route: route.fulfill(
+            status=503,
+            content_type="application/json",
+            body=(
+                '{"detail":{"code":"core_directory_unavailable",'
+                '"message":"Core enterprise directory unavailable"}}'
+            ),
+        ),
+    )
+    failing.goto(BASE_URL)
+    failing.wait_for_load_state("networkidle")
+    failing.locator('input[name="username"]').fill("supplier.demo")
+    failing.locator('input[name="password"]').fill("Demo123!")
+    failing.locator("#loginButton").click()
+    failing.locator("#loginError").filter(has_text="Не удалось войти").wait_for()
+    assert failing.locator("body.authenticated").count() == 0
+    session = failing.evaluate(
+        "fetch('/api/v1/auth/session').then(response => response.json())"
+    )
+    assert session["authenticated"] is False
+    failing_context.close()
+
     browser.close()
 
 print(f"browser_acceptance=passed screenshot={SCREENSHOT}")

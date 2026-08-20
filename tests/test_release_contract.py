@@ -53,6 +53,39 @@ def test_promoted_reference_artifact_verifies_from_public_cli():
     assert len(payload["artifact_sha256"]) == 64
 
 
+def test_public_verify_command_does_not_require_training_frameworks():
+    script = """
+import importlib.abc
+import runpy
+import sys
+
+class BlockTrainingFrameworks(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.', 1)[0] in {'torch', 'xgboost'}:
+            raise ModuleNotFoundError(f'blocked training dependency: {fullname}')
+        return None
+
+sys.meta_path.insert(0, BlockTrainingFrameworks())
+sys.argv = [
+    'research.cli',
+    'verify',
+    '--reference',
+    'artifacts/reference',
+]
+runpy.run_module('research.cli', run_name='__main__')
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "verified"
+
+
 def test_clean_migration_is_at_head_and_metadata_has_no_drift(migrated_engine):
     config = Config(str(ROOT / "alembic.ini"))
     with migrated_engine.connect() as connection:

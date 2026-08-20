@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,13 @@ from app.models_identity import OrganizationModel, UserModel, UserSessionModel
 
 
 class IdentityRepository:
+    def get_organization_by_id(
+        self,
+        session: Session,
+        organization_id: uuid.UUID,
+    ) -> OrganizationModel | None:
+        return session.get(OrganizationModel, organization_id)
+
     def get_organization_by_code(
         self,
         session: Session,
@@ -15,6 +24,22 @@ class IdentityRepository:
         return session.scalar(
             select(OrganizationModel).where(
                 OrganizationModel.organization_code == code
+            )
+        )
+
+    def list_organizations_by_type(
+        self,
+        session: Session,
+        organization_type: str,
+    ) -> list[OrganizationModel]:
+        return list(
+            session.scalars(
+                select(OrganizationModel)
+                .where(
+                    OrganizationModel.organization_type
+                    == organization_type
+                )
+                .order_by(OrganizationModel.organization_code)
             )
         )
 

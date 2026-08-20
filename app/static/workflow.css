@@ -137,7 +137,7 @@ body.authenticated .auth-gate { display: none; }
 
 .supplier-create { margin-bottom: 16px; }
 .application-form { display: grid !important; grid-template-columns: repeat(5,1fr) !important; gap: 11px !important; }
-.application-form input { min-height: 39px; }
+.application-form input,.application-form select { min-height: 39px; }
 .wf-checkbox { min-height: 61px; padding: 22px 9px 0; display: flex; align-items: center; gap: 7px; border-radius: 9px; background: #f7f9fd; }
 .wf-checkbox input { width: auto; min-height: auto; margin: 0; }
 .wf-form-submit { grid-column: 4/6; min-height: 42px; align-self: end; }
