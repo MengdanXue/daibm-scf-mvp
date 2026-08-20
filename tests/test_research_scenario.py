@@ -51,6 +51,9 @@ def test_risk_injection_versions_inputs_rebuilds_graph_and_reruns_model(
     ]
     assert result["after"]["risk_score"] > result["before"]["risk_score"]
     assert result["after"]["policy_decision"]["decision"] == "FINANCING_REVIEW"
+    assert result["scenario"]["relationship_direction"] == "supplier_to_customer"
+    assert result["scenario"]["affected_enterprise_ids"][0] == "E0001"
+    assert len(result["scenario"]["affected_enterprise_ids"]) > 1
     assert {item["feature"] for item in result["changed_inputs"]} >= {
         "liquidity_ratio",
         "leverage_ratio",

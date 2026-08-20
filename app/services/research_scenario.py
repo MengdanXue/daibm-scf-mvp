@@ -165,6 +165,10 @@ class ResearchScenarioService:
                 "revision": revision,
                 "overlay_sha256": overlay_sha256,
                 "provenance": "SIMULATED",
+                "relationship_direction": "supplier_to_customer",
+                "affected_enterprise_ids": overlay[
+                    "affected_enterprise_ids"
+                ],
             },
             "before": before,
             "after": after,
