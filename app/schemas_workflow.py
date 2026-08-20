@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas import FinancingRequestCreate
@@ -52,3 +54,27 @@ class ApplicationDraftCreate(BaseModel):
             relationship_months=self.relationship_months,
             transactions_last_30d=self.transactions_last_30d,
         )
+
+
+class ApplicationDraftUpdate(ApplicationDraftCreate):
+    version: int = Field(ge=1)
+
+
+class VersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+
+
+class TradeConfirmationRequest(VersionRequest):
+    confirmed: bool
+    comment: str = Field(min_length=1, max_length=500)
+
+
+class FinancingDecisionRequest(VersionRequest):
+    decision: Literal["approved", "manual_review", "rejected"]
+    comment: str = Field(min_length=1, max_length=500)
+
+
+class CommentVersionRequest(VersionRequest):
+    comment: str = Field(min_length=1, max_length=500)
