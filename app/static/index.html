@@ -116,6 +116,19 @@
     .page-heading { margin:2px 0 20px; display:flex; justify-content:space-between; gap:18px; align-items:flex-end; }
     .page-heading h1 { margin:0; font-size:25px; }.page-heading p { margin:6px 0 0; color:var(--muted); font-size:12px; }
     .review-grid { display:grid; grid-template-columns:.8fr 1.2fr; gap:16px; align-items:start; }
+    .journey-shell { margin-bottom:16px; padding:18px 20px; border:1px solid #dbe5f3; border-radius:var(--radius); background:linear-gradient(135deg,#fff,#f5f9ff); box-shadow:var(--shadow); }
+    .journey-head { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:16px; }
+    .journey-head h2 { margin:0; font-size:14px; }.journey-head p { margin:5px 0 0; color:var(--muted); font-size:10px; }
+    .journey-state { padding:6px 9px; border-radius:999px; color:#315f9f; background:#eaf1ff; font-size:9px; font-weight:800; white-space:nowrap; }
+    .lifecycle-rail { position:relative; display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin:0; padding:0; list-style:none; }
+    .lifecycle-rail::before { content:""; position:absolute; top:18px; left:9%; right:9%; height:2px; background:#dce5f2; }
+    .lifecycle-stage { position:relative; z-index:1; min-width:0; text-align:center; color:#8a96a9; }
+    .lifecycle-stage::before { content:attr(data-step); width:36px; height:36px; margin:0 auto 8px; display:grid; place-items:center; border:1px solid #d4dfed; border-radius:50%; color:#6f7f96; background:#fff; font:800 9px Consolas,monospace; transition:.2s; }
+    .lifecycle-stage b { display:block; color:#6f7c91; font-size:10px; line-height:1.35; }
+    .lifecycle-stage.active::before { border-color:var(--blue); color:#fff; background:var(--blue); box-shadow:0 0 0 5px rgba(39,104,238,.1); }
+    .lifecycle-stage.active b { color:var(--ink); }
+    .lifecycle-stage.done::before { content:"✓"; border-color:var(--green); color:#fff; background:var(--green); }
+    .lifecycle-stage.done b { color:#23765f; }
     form { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
     label { color:#6f7c92; font-size:10px; font-weight:650; }
     input { width:100%; margin-top:6px; padding:10px 11px; border:1px solid #dfe5ef; border-radius:9px; outline:none; color:var(--ink); background:#fbfcfe; }
@@ -136,6 +149,7 @@
     .factor-track { height:7px; overflow:hidden; border-radius:20px; background:#edf0f5; }.factor-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#3a75ef,#22bfd2); }
     .decision-callout { margin-top:18px; padding:14px; border-radius:12px; display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; background:#f7f9fd; border:1px solid var(--line); }
     .decision-callout small { display:block; color:var(--muted); margin-top:5px; font-size:9px; }
+    .result-actions { margin-top:10px; display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
     .ledger-hero { padding:24px; display:grid; grid-template-columns:1fr auto; gap:24px; align-items:center; border-radius:19px; color:#fff; background:linear-gradient(120deg,#10234c,#176377); }
     .ledger-hero h2 { margin:0 0 7px; }.ledger-hero p { margin:0; color:#bad2df; font-size:11px; max-width:650px; line-height:1.6; }
     .seal { width:112px; height:112px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.22); border-radius:50%; text-align:center; background:rgba(255,255,255,.08); }
@@ -216,7 +230,7 @@
     @media (min-width:1600px) { .research-evidence{grid-template-columns:repeat(5,minmax(0,1fr))} }
     @media (max-width:1180px) { .research-shell{grid-template-columns:220px minmax(0,1fr)} }
     @media (max-width:1050px) { .app{grid-template-columns:82px 1fr}.brand-text,.nav button span:not(.nav-icon),.nav-label,.research-badge{display:none}.brand{justify-content:center;padding-left:0;padding-right:0}.nav button{justify-content:center}.kpis{grid-template-columns:1fr 1fr}.hero-grid,.review-grid{grid-template-columns:1fr}.model-grid{grid-template-columns:1fr 1fr}.research-shell{grid-template-columns:1fr}.research-rail{display:none} }
-    @media (max-width:720px) { .app{display:block}.sidebar{display:none}.topbar{padding:0 12px;gap:8px}.top-title,.top-actions .live{display:none}.top-actions{gap:7px;flex:0 0 auto}main{padding:18px 14px 35px}.hero{padding:25px 21px}.hero-grid{gap:22px}.kpis,.two-col,.model-grid{grid-template-columns:1fr}.process{grid-template-columns:1fr 1fr}.process::before{display:none}.review-grid{grid-template-columns:1fr}form{grid-template-columns:1fr}.risk-header{grid-template-columns:1fr}.ledger-hero{grid-template-columns:1fr}.seal{width:90px;height:90px}.mobile-menu{display:flex;gap:3px;overflow:auto;min-width:0}.mobile-menu button{border:0;padding:7px;color:var(--muted);background:transparent;font-size:10px;white-space:nowrap}.factor{grid-template-columns:105px 1fr 35px}.research-dossier{padding:20px 15px}.research-top{display:block}.research-status{margin-top:13px}.research-controls{grid-template-columns:1fr}.research-evidence{grid-template-columns:1fr 1fr}.score-compare{grid-template-columns:1fr}.score-arrow{transform:rotate(90deg)}.research-details{grid-template-columns:1fr} }
+    @media (max-width:720px) { .app{display:block}.sidebar{display:none}.topbar{padding:0 12px;gap:8px}.top-title,.top-actions .live{display:none}.top-actions{gap:7px;flex:0 0 auto}main{padding:18px 14px 35px}.hero{padding:25px 21px}.hero-grid{gap:22px}.kpis,.two-col,.model-grid{grid-template-columns:1fr}.process{grid-template-columns:1fr 1fr}.process::before{display:none}.review-grid{grid-template-columns:1fr}form{grid-template-columns:1fr}.risk-header{grid-template-columns:1fr}.journey-shell{padding:16px 12px}.journey-head{align-items:flex-start}.journey-state{max-width:145px;white-space:normal;text-align:right}.lifecycle-rail{grid-template-columns:repeat(5,minmax(56px,1fr));gap:5px;padding:3px 0 8px}.lifecycle-rail::before{display:none}.lifecycle-stage::before{width:30px;height:30px}.lifecycle-stage b{font-size:9px}.ledger-hero{grid-template-columns:1fr}.seal{width:90px;height:90px}.mobile-menu{display:flex;gap:3px;overflow:auto;min-width:0}.mobile-menu button{border:0;padding:7px;color:var(--muted);background:transparent;font-size:10px;white-space:nowrap}.factor{grid-template-columns:105px 1fr 35px}.research-dossier{padding:20px 15px}.research-top{display:block}.research-status{margin-top:13px}.research-controls{grid-template-columns:1fr}.research-evidence{grid-template-columns:1fr 1fr}.score-compare{grid-template-columns:1fr}.score-arrow{transform:rotate(90deg)}.research-details{grid-template-columns:1fr} }
     @media (prefers-reduced-motion:reduce) { html{scroll-behavior:auto}.view,.research-shell.running .trace-node::before{animation:none!important}.toast,.demo-step,.trace-node::before{transition:none!important} }
   </style>
 </head>
@@ -250,7 +264,7 @@
               <div class="eyebrow" data-i18n="heroEyebrow">Демонстрация замкнутого контура DAIBM-SCF</div>
               <h1 data-i18n="heroTitle">От заявки до контролируемого решения — прозрачно и проверяемо</h1>
               <p data-i18n="heroText">Система объединяет данные заявки, объяснимую оценку риска, решение о финансировании и защищённый аудиторский след в одном демонстрационном сценарии.</p>
-              <div class="hero-actions"><button class="btn btn-primary" onclick="startDemo()"><span>▶</span><span data-i18n="startDemo">Запустить демонстрацию</span></button><button class="btn btn-light" onclick="switchView('review')" data-i18n="newRequest">Новая заявка</button></div>
+              <div class="hero-actions"><button id="beginFinancing" class="btn btn-primary" onclick="beginFinancingJourney()"><span>＋</span><span data-i18n="createFinancing">Создать заявку на финансирование</span></button><button id="loadPresetCases" class="btn btn-light" onclick="startDemo()" data-i18n="presetCases">Загрузить 3 готовых кейса</button></div>
             </div>
             <div class="demo-card">
               <h3 data-i18n="demoScript">Сценарий выступления · 3 минуты</h3>
@@ -293,18 +307,28 @@
 
       <section id="view-review" class="view">
         <div class="page-heading"><div><h1 data-i18n="reviewTitle">Оценка заявки</h1><p data-i18n="reviewSub">Создайте кейс или выберите существующий для анализа факторов риска</p></div><button class="btn btn-soft" onclick="startDemo()" data-i18n="reloadDemo">Перезагрузить демо-кейсы</button></div>
+        <div class="journey-shell">
+          <div class="journey-head"><div><h2 data-i18n="journeyTitle">Жизненный цикл финансирования</h2><p data-i18n="journeySub">Одна заявка проходит путь от регистрации до проверяемого аудиторского следа</p></div><span id="journeyState" class="journey-state" data-i18n="journeyDraft">Этап 1 · ввод данных</span></div>
+          <ol id="financingLifecycle" class="lifecycle-rail" data-state="draft" aria-label="Financing lifecycle">
+            <li class="lifecycle-stage active" data-step="01" data-journey-stage="application"><b data-i18n="journeyApplication">Заявка</b></li>
+            <li class="lifecycle-stage" data-step="02" data-journey-stage="assessment"><b data-i18n="journeyAssessment">Оценка риска</b></li>
+            <li class="lifecycle-stage" data-step="03" data-journey-stage="decision"><b data-i18n="journeyDecision">Решение</b></li>
+            <li class="lifecycle-stage" data-step="04" data-journey-stage="control"><b data-i18n="journeyControl">Контроль</b></li>
+            <li class="lifecycle-stage" data-step="05" data-journey-stage="audit"><b data-i18n="journeyAudit">Аудит</b></li>
+          </ol>
+        </div>
         <div class="review-grid">
           <div class="panel">
             <div class="panel-head"><div><h2 data-i18n="formTitle">Параметры финансирования</h2><p data-i18n="formSub">Все поля используются прозрачной базовой моделью</p></div></div>
             <form id="requestForm">
-              <label><span data-i18n="fieldCompany">Идентификатор компании</span><input name="applicant_id" value="supplier-new-04" required></label>
-              <label><span data-i18n="fieldAmount">Сумма финансирования</span><input name="amount" type="number" value="900000" min="1" required></label>
-              <label><span data-i18n="fieldTerm">Срок, дней</span><input name="term_days" type="number" value="60" min="7" max="365" required></label>
-              <label><span data-i18n="fieldDelay">Просрочка платежа, дней</span><input name="payment_delay_days" type="number" value="8" min="0" required></label>
-              <label><span data-i18n="fieldCounterparty">Риск контрагента, 0–1</span><input name="counterparty_risk" type="number" value="0.25" min="0" max="1" step="0.01" required></label>
+              <label><span data-i18n="fieldCompany">Идентификатор компании</span><input name="applicant_id" value="supplier-demo-01" required></label>
+              <label><span data-i18n="fieldAmount">Сумма финансирования</span><input name="amount" type="number" value="1200000" min="1" required></label>
+              <label><span data-i18n="fieldTerm">Срок, дней</span><input name="term_days" type="number" value="90" min="7" max="365" required></label>
+              <label><span data-i18n="fieldDelay">Просрочка платежа, дней</span><input name="payment_delay_days" type="number" value="18" min="0" required></label>
+              <label><span data-i18n="fieldCounterparty">Риск контрагента, 0–1</span><input name="counterparty_risk" type="number" value="0.58" min="0" max="1" step="0.01" required></label>
               <label><span data-i18n="fieldRelationship">Срок отношений, мес.</span><input name="relationship_months" type="number" value="18" min="0" required></label>
               <label><span data-i18n="fieldTransactions">Сделок за 30 дней</span><input name="transactions_last_30d" type="number" value="12" min="0" required></label>
-              <label class="checkbox"><input name="invoice_mismatch" type="checkbox"><span data-i18n="fieldInvoice">Расхождение в счёте-фактуре</span></label>
+              <label class="checkbox"><input name="invoice_mismatch" type="checkbox" checked><span data-i18n="fieldInvoice">Расхождение в счёте-фактуре</span></label>
               <button class="btn btn-primary form-submit" type="submit" data-i18n="submitRequest">Рассчитать риск и принять решение</button>
             </form>
           </div>
@@ -394,6 +418,12 @@
   Object.assign(I18N.zh, {
     navResearch:'科研核心',researchTitle:'模型决策证据档案',researchSubtitle:'在可复现合成数据上执行真实 TGNN 推理，并形成策略决策和可验证审计轨迹。',researchRailTitle:'证据链轨道',researchRailText:'每一阶段均由标识、哈希和执行时间相互关联。',researchLoading:'正在载入状态',researchReady:'模型已就绪',researchUnavailable:'模型不可用',researchEnterprise:'企业',researchInfer:'执行模型推理',researchInject:'注入风险场景',researchReset:'重置场景',researchDataset:'数据',researchGraph:'时序图',researchModel:'模型',researchPolicy:'策略',researchLedger:'审计轨迹',researchConnections:'关联企业',researchEmpty:'选择企业并执行模型推理',researchEmptyHint:'结果将与策略决策及三条审计事件一起持久化。',researchBefore:'场景注入前',researchAfter:'场景注入后',researchCurrent:'当前推理',researchChangedInputs:'发生变化的可观测特征',researchNoChanges:'普通推理不应用场景变更。',researchTrace:'决策追溯',researchInferenceReady:'模型推理已完成并留痕',researchScenarioReady:'风险场景已注入并重新推理',researchResetDone:'已选择基准场景第 0 版',researchHash:'哈希',researchWindow:'窗口',researchEvents:'事件',researchDecision:'策略决策',researchAction:'允许的控制动作',researchScore:'风险分数',researchProvenance:'数据来源',researchStatusHint:'500 家企业 · 24 个月',noIncident:'请先执行模拟篡改。',normal_monitoring:'正常监测',additional_verification:'追加核验',financing_review:'融资审查',NORMAL:'正常监测',ADDITIONAL_CHECK:'追加核验',FINANCING_REVIEW:'融资审查',MODEL_INFERENCE_COMPLETED:'模型推理完成',RISK_POLICY_TRIGGERED:'风险策略触发',CONTROL_ACTION_REQUESTED:'控制动作请求',SIMULATED_RISK_INJECTED:'合成风险注入',INTEGRITY_VIOLATION_DETECTED:'完整性异常留痕',LEDGER_RECOVERY_COMPLETED:'恢复操作完成',boundaryText:'这是基于合成数据的计算机验证。系统已实现最小 TGNN 训练、ONNX 推理，以及作为防篡改审计记录的 PostgreSQL 哈希链；不声称实现 Fabric、PoA+、ZKP 或生产级银行集成。',modelRiskText:'已训练的最小 TGNN 由 GCN、BiLSTM 和 MLP 组成；透明基线仅用于对照。',modelProofText:'原型验证可复现的数据→图→模型→策略→审计路径，不证明工业部署效果，也不声称复现原论文指标。'
   });
+  Object.assign(I18N.ru, {
+    createFinancing:'Создать заявку на финансирование',presetCases:'Загрузить 3 готовых кейса',journeyTitle:'Жизненный цикл финансирования',journeySub:'Одна заявка проходит путь от регистрации до проверяемого аудиторского следа.',journeyApplication:'Заявка',journeyAssessment:'Оценка риска',journeyDecision:'Решение',journeyControl:'Контроль',journeyAudit:'Аудит',journeyDraft:'Этап 1 · ввод данных',journeyProcessing:'Этап 2 · выполняется оценка',journeyComplete:'5 этапов завершены · доказательства сохранены',viewAuditEvidence:'Открыть аудиторский след',viewResearchEvidence:'Открыть доказательства модели'
+  });
+  Object.assign(I18N.zh, {
+    createFinancing:'创建供应链融资申请',presetCases:'载入 3 组预置案例',journeyTitle:'供应链融资业务生命周期',journeySub:'一笔申请从登记开始，经过风险评估、融资决策和控制，最终形成可验证审计证据。',journeyApplication:'创建申请',journeyAssessment:'风险评估',journeyDecision:'融资决策',journeyControl:'控制措施',journeyAudit:'审计留痕',journeyDraft:'第 1 阶段 · 录入申请',journeyProcessing:'第 2 阶段 · 正在评估',journeyComplete:'5 个阶段已完成 · 证据已保存',viewAuditEvidence:'查看审计证据',viewResearchEvidence:'查看科研证据'
+  });
 
   let lang = localStorage.getItem('daibm-lang') || 'ru';
   let requestsState = [];
@@ -417,6 +447,13 @@
   function setLanguage(next){ document.querySelector('#toast').classList.remove('show'); lang=next; localStorage.setItem('daibm-lang',lang); document.documentElement.lang=lang==='ru'?'ru':'zh-CN'; document.title=lang==='ru'?'DAIBM-SCF — демонстрационная система':'DAIBM-SCF — 供应链金融风险审计演示系统'; document.querySelectorAll('[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===lang)); document.querySelectorAll('[data-i18n]').forEach(el=>{ const value=I18N[lang][el.dataset.i18n]; if(value) el.textContent=value; }); document.querySelectorAll('[data-i18n-title]').forEach(el=>el.title=t(el.dataset.i18nTitle)); renderAll(); }
   function switchView(view){ document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id===`view-${view}`)); document.querySelectorAll('[data-view-button]').forEach(el=>el.classList.toggle('active',el.dataset.viewButton===view)); if(view==='research'&&!researchStatusState) refreshResearchStatus(); window.scrollTo({top:0,behavior:'smooth'}); }
   function toast(message){ const el=document.querySelector('#toast'); el.textContent=message; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer=setTimeout(()=>el.classList.remove('show'),3200); }
+  function setJourneyState(state){
+    const rail=document.querySelector('#financingLifecycle'), stages=[...rail.querySelectorAll('.lifecycle-stage')];
+    rail.dataset.state=state;
+    stages.forEach((stage,index)=>{ stage.classList.toggle('done',state==='complete'||(state==='processing'&&index===0)); stage.classList.toggle('active',state==='draft'?index===0:state==='processing'&&index===1); });
+    document.querySelector('#journeyState').textContent=t(state==='complete'?'journeyComplete':state==='processing'?'journeyProcessing':'journeyDraft');
+  }
+  function beginFinancingJourney(){ selectedId=null; document.querySelector('#requestForm').reset(); renderDetail(); switchView('review'); setTimeout(()=>document.querySelector('#requestForm input[name="applicant_id"]')?.focus(),250); }
 
   async function refreshAll(){
     [dashboardState,requestsState,ledgerState,verificationState]=await Promise.all([api('/api/dashboard'),api('/api/requests'),api('/api/ledger?limit=100'),api('/api/ledger/verify')]);
@@ -444,9 +481,10 @@
   function openRequest(id){ selectedId=id; switchView('review'); renderDetail(); }
   function renderDetail(){
     const el=document.querySelector('#riskDetail'), r=requestsState.find(item=>item.request_id===selectedId);
-    if(!r){ el.innerHTML=`<div class="empty-detail"><div><div class="circle">◎</div><b>${t('selectCase')}</b><p>${t('selectCaseSub')}</p></div></div>`; return; }
+    if(!r){ setJourneyState('draft'); el.innerHTML=`<div class="empty-detail"><div><div class="circle">◎</div><b>${t('selectCase')}</b><p>${t('selectCaseSub')}</p></div></div>`; return; }
+    setJourneyState('complete');
     const factors=r.explanations.map(f=>`<div class="factor"><span>${t(f.feature)}</span><div class="factor-track"><i style="width:${Math.min(100,f.weighted_contribution/.25*100)}%"></i></div><b>${Number(f.weighted_contribution).toFixed(3)}</b></div>`).join('');
-    el.innerHTML=`<div class="risk-header"><div class="gauge" style="--score:${r.risk_score*100};background:conic-gradient(${scoreColor(r.risk_score)} ${r.risk_score*100}%,#edf0f5 0)"><span>${r.risk_score.toFixed(3)}<small>${t('thRisk')}</small></span></div><div class="detail-title"><span class="pill ${r.decision}">${t(r.decision)}</span><h3>${esc(r.applicant_id)}</h3><p>ID · ${esc(r.request_id)}</p><div class="meta"><span>${t('thAmount')}<b>${currency(r.amount)}</b></span><span>${t('thTerm')}<b>${r.term_days} ${t('days')}</b></span><span>${t('fieldDelay')}<b>${r.features.payment_delay_days} ${t('days')}</b></span></div></div></div><div class="factors"><h4>${t('riskFactors')}</h4>${factors}</div><div class="decision-callout"><div><b>${t('decisionResult')}: ${t(r.decision)}</b><small>${t(r.control_action)}</small></div><div><span class="pill ${r.decision}">${t(r.decision)}</span> <button class="btn btn-soft" onclick="printDecision()">${t('printReport')}</button></div></div>`;
+    el.innerHTML=`<div class="risk-header"><div class="gauge" style="--score:${r.risk_score*100};background:conic-gradient(${scoreColor(r.risk_score)} ${r.risk_score*100}%,#edf0f5 0)"><span>${r.risk_score.toFixed(3)}<small>${t('thRisk')}</small></span></div><div class="detail-title"><span class="pill ${r.decision}">${t(r.decision)}</span><h3>${esc(r.applicant_id)}</h3><p>ID · ${esc(r.request_id)}</p><div class="meta"><span>${t('thAmount')}<b>${currency(r.amount)}</b></span><span>${t('thTerm')}<b>${r.term_days} ${t('days')}</b></span><span>${t('fieldDelay')}<b>${r.features.payment_delay_days} ${t('days')}</b></span></div></div></div><div class="factors"><h4>${t('riskFactors')}</h4>${factors}</div><div class="decision-callout"><div><b>${t('decisionResult')}: ${t(r.decision)}</b><small>${t(r.control_action)}</small></div><div><span class="pill ${r.decision}">${t(r.decision)}</span> <button class="btn btn-soft" onclick="printDecision()">${t('printReport')}</button></div></div><div class="result-actions"><button class="btn btn-soft" data-result-action="research" onclick="switchView('research')">${t('viewResearchEvidence')}</button><button class="btn btn-primary" data-result-action="ledger" onclick="switchView('ledger')">${t('viewAuditEvidence')}</button></div>`;
   }
   function renderLedger(){
     document.querySelector('#ledgerCountLabel').textContent=ledgerState.length;
@@ -543,7 +581,8 @@
   function printDecision(){ document.body.classList.add('printing-report'); window.print(); setTimeout(()=>document.body.classList.remove('printing-report'),400); }
   document.querySelector('#requestForm').addEventListener('submit',async event=>{
     event.preventDefault(); const f=new FormData(event.target); const body={applicant_id:f.get('applicant_id'),amount:Number(f.get('amount')),term_days:Number(f.get('term_days')),payment_delay_days:Number(f.get('payment_delay_days')),counterparty_risk:Number(f.get('counterparty_risk')),invoice_mismatch:f.get('invoice_mismatch')==='on',relationship_months:Number(f.get('relationship_months')),transactions_last_30d:Number(f.get('transactions_last_30d'))};
-    try { const result=await api('/api/requests',{method:'POST',body:JSON.stringify(body)}); selectedId=result.request_id; await refreshAll(); renderDetail(); toast(`${t('requestCreated')}: ${t(result.decision)} · ${result.risk_score.toFixed(3)}`); } catch(error){ toast(error.message); }
+    setJourneyState('processing');
+    try { const result=await api('/api/requests',{method:'POST',body:JSON.stringify(body)}); selectedId=result.request_id; await refreshAll(); setJourneyState('complete'); renderDetail(); toast(`${t('requestCreated')}: ${t(result.decision)} · ${result.risk_score.toFixed(3)}`); } catch(error){ setJourneyState('draft'); toast(error.message); }
   });
   setLanguage(lang);
   refreshAll().catch(error=>toast(error.message));

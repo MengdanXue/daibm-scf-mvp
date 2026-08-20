@@ -81,3 +81,35 @@ def test_postgresql_ledger_is_not_presented_as_blockchain():
     )
     assert all(phrase not in html for phrase in forbidden)
     assert "tamper-evident" in html
+
+
+def test_financing_creation_is_the_primary_defense_journey():
+    html = _html()
+
+    assert 'id="beginFinancing"' in html
+    assert 'onclick="beginFinancingJourney()"' in html
+    assert 'data-i18n="createFinancing"' in html
+    assert 'id="loadPresetCases"' in html
+    assert 'onclick="startDemo()"' in html
+
+
+def test_financing_journey_exposes_five_bilingual_business_stages():
+    html = _html()
+
+    assert 'id="financingLifecycle"' in html
+    for index, stage in enumerate(
+        ("application", "assessment", "decision", "control", "audit"), start=1
+    ):
+        assert f'data-journey-stage="{stage}"' in html
+        assert f'data-step="0{index}"' in html
+        assert html.count(f"journey{stage.title()}:") == 2
+
+
+def test_created_financing_links_to_audit_and_research_evidence():
+    html = _html()
+
+    assert "setJourneyState('complete')" in html
+    assert 'data-result-action="ledger"' in html
+    assert 'data-result-action="research"' in html
+    assert html.count("viewAuditEvidence:") == 2
+    assert html.count("viewResearchEvidence:") == 2
