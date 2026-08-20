@@ -65,7 +65,7 @@ def create_app(
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
-        version="0.4.0",
+        version="0.5.0",
         description=(
             "Scenario demonstrator for an auditable supply-chain finance "
             "risk loop."
@@ -96,6 +96,16 @@ def create_app(
                     "message": "PostgreSQL is unavailable",
                 },
             ) from error
+        if not verification["valid"]:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "ledger_integrity_failed",
+                    "message": (
+                        "Audit ledger integrity verification failed"
+                    ),
+                },
+            )
         research_health = request.app.state.research_service.health()
         if (
             research_health["status"] != "ready"

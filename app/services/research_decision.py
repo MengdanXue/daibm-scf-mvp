@@ -48,18 +48,39 @@ class ResearchDecisionService:
         )
         decision = self.policy_engine.evaluate(assessment)
         with self.session_factory.begin() as session:
+            snapshot = self.research_repository.get_snapshot(
+                session, assessment.graph_snapshot_id
+            )
+            if snapshot is None:
+                raise RuntimeError("Verified graph snapshot disappeared")
+            snapshot_lineage = {
+                "graph_snapshot_sha256": snapshot.content_sha256,
+                "synthetic_scenario_id": (
+                    str(snapshot.synthetic_scenario_id)
+                    if snapshot.synthetic_scenario_id is not None
+                    else None
+                ),
+                "scenario_revision": snapshot.scenario_revision,
+                "overlay_sha256": snapshot.overlay_sha256,
+                "normalization_id": snapshot.normalization_id,
+                "node_ordering_sha256": snapshot.node_ordering_sha256,
+                "adjacency_sha256": snapshot.adjacency_sha256,
+                "feature_sha256": snapshot.feature_sha256,
+            }
             self.research_repository.add_assessment(session, assessment)
             self.research_repository.add_policy_decision(session, decision)
             events = self.ledger_repository.append_many(
                 session,
                 assessment.risk_assessment_id,
-                self._event_specs(assessment, decision),
+                self._event_specs(assessment, decision, snapshot_lineage),
                 stream_id="global",
             )
             event_dicts = [
                 self.ledger_repository._event_to_dict(event) for event in events
             ]
-        return self._trace(assessment, decision, event_dicts)
+        return self._trace(
+            assessment, decision, event_dicts, snapshot_lineage
+        )
 
     def get_trace(self, risk_assessment_id: uuid.UUID) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -74,6 +95,7 @@ class ResearchDecisionService:
         self,
         assessment: RiskAssessment,
         decision: PolicyDecision,
+        snapshot_lineage: dict[str, Any],
     ) -> list[tuple[str, dict[str, Any]]]:
         artifact = self.inference_service.artifact
         if artifact is None:
@@ -88,7 +110,7 @@ class ResearchDecisionService:
             "checkpoint_sha256": manifest["checkpoint_sha256"],
             "dataset_content_sha256": manifest["dataset"]["content_sha256"],
             "feature_schema_version": manifest["feature_schema"]["version"],
-            "graph_snapshot_sha256": manifest["snapshot_sha256"],
+            **snapshot_lineage,
             "input_sha256": assessment.input_sha256,
             "risk_score": assessment.risk_score,
             "inferred_at": assessment.inferred_at.isoformat(),
@@ -133,6 +155,7 @@ class ResearchDecisionService:
         assessment: RiskAssessment,
         decision: PolicyDecision,
         ledger_events: list[dict[str, Any]],
+        snapshot_lineage: dict[str, Any],
     ) -> dict[str, Any]:
         artifact = self.inference_service.artifact
         assert artifact is not None
@@ -160,9 +183,7 @@ class ResearchDecisionService:
                 "feature_schema_version": artifact.manifest["feature_schema"][
                     "version"
                 ],
-                "graph_snapshot_sha256": artifact.manifest[
-                    "snapshot_sha256"
-                ],
+                **snapshot_lineage,
                 "input_sha256": assessment.input_sha256,
                 "model_version_id": str(assessment.model_version_id),
             },

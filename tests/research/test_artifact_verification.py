@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import numpy as np
 import pytest
@@ -99,4 +100,45 @@ def test_artifact_verifier_rejects_corrupted_onnx(tmp_path):
     artifact.write_bytes(artifact.read_bytes() + b"corruption")
 
     with pytest.raises(ArtifactVerificationError, match="hash"):
+        verify_reference_artifact(reference)
+
+
+def test_artifact_verifier_rejects_feature_schema_sidecar_mismatch(tmp_path):
+    reference = tmp_path / "reference"
+    shutil.copytree("artifacts/reference", reference)
+    schema_path = reference / "feature-schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["names"][0] = "silently_reordered_feature"
+    schema_path.write_text(
+        json.dumps(schema, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArtifactVerificationError, match="feature schema"):
+        verify_reference_artifact(reference)
+
+
+def test_artifact_verifier_rejects_dataset_and_node_ordering_mismatch(tmp_path):
+    reference = tmp_path / "reference"
+    shutil.copytree("artifacts/reference", reference)
+    dataset_path = reference / "dataset-manifest.json"
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    dataset["dataset_version"] = "incompatible"
+    dataset_path.write_text(
+        json.dumps(dataset, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ArtifactVerificationError, match="dataset manifest"):
+        verify_reference_artifact(reference)
+
+    shutil.rmtree(reference)
+    shutil.copytree("artifacts/reference", reference)
+    model_path = reference / "model-manifest.json"
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    model["node_ordering_sha256"] = "0" * 64
+    model_path.write_text(
+        json.dumps(model, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ArtifactVerificationError, match="node ordering"):
         verify_reference_artifact(reference)

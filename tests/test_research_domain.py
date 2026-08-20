@@ -57,4 +57,3 @@ def test_research_domain_values_are_immutable():
         value.risk_score = 0.9
 
     assert isinstance(value.risk_assessment_id, UUID)
-

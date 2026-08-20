@@ -54,12 +54,14 @@ def promote_tgnn(
         adjacency=sample_adjacency,
         anchor=np.asarray(reference_samples.anchors[:1], dtype=np.int16),
     )
-    (reference / "dataset-manifest.json").write_text(
+    dataset_manifest_path = reference / "dataset-manifest.json"
+    dataset_manifest_path.write_text(
         json.dumps(dataset_manifest, ensure_ascii=False, indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
-    (reference / "feature-schema.json").write_text(
+    feature_schema_path = reference / "feature-schema.json"
+    feature_schema_path.write_text(
         json.dumps(feature_schema, ensure_ascii=False, indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
@@ -69,9 +71,11 @@ def promote_tgnn(
         "artifact_sha256": _sha256(promoted_onnx),
         "checkpoint_sha256": trained.checkpoint_sha256,
         "dataset": dataset_manifest,
+        "dataset_manifest_sha256": _sha256(dataset_manifest_path),
         "deployment_slot": "default",
         "feature_count": int(sample_x.shape[-1]),
         "feature_schema": feature_schema,
+        "feature_schema_sha256": _sha256(feature_schema_path),
         "inference_format": "onnx",
         "input_bundle": input_bundle.name,
         "input_bundle_sha256": _sha256(input_bundle),
@@ -81,6 +85,12 @@ def promote_tgnn(
         "model_family": "tgnn",
         "model_name": "minimal-gcn-bilstm",
         "node_count": int(sample_x.shape[2]),
+        "node_ordering_sha256": hashlib.sha256(
+            "\n".join(
+                f"E{index:04d}"
+                for index in range(1, int(sample_x.shape[2]) + 1)
+            ).encode("ascii")
+        ).hexdigest(),
         "normalization_id": reference_samples.normalization.normalization_id,
         "onnx_opset": 18,
         "parity_max_absolute_difference": parity,

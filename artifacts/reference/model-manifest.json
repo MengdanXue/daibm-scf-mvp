@@ -47,6 +47,7 @@
       "last_month": 24
     }
   },
+  "dataset_manifest_sha256": "e0e68b43bbe78c3bffa301aed582d502a9b14e0cffdbcb99bef26a99af407edc",
   "deployment_slot": "default",
   "feature_count": 17,
   "feature_schema": {
@@ -75,6 +76,7 @@
     "sequence_length": 12,
     "version": "graph-features-v1"
   },
+  "feature_schema_sha256": "27393481001c6973e1bc33a08a8a1d9e150ea52b7e9c999be2d1e63e49f2c435",
   "inference_format": "onnx",
   "input_bundle": "reference-inputs.npz",
   "input_bundle_sha256": "88a065796cbf789ffc1e39eb5512c7b1188e97fe3b00e376442d439d7f60c5d1",
@@ -104,6 +106,7 @@
   "model_family": "tgnn",
   "model_name": "minimal-gcn-bilstm",
   "node_count": 500,
+  "node_ordering_sha256": "3112198057fd376b2895642cc15596f4d0d2ce94720460f003c46ff146f0ff3b",
   "normalization_id": "3d0b0e25d9f6a5c8ca362aaf901ad53db3374fa8cf32c777672abc87496cddac",
   "onnx_opset": 18,
   "parity_max_absolute_difference": 2.384185791015625e-07,

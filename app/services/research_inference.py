@@ -201,14 +201,15 @@ class ResearchInferenceService:
             }
             for index in top
         )
-        input_digest = hashlib.sha256()
-        input_digest.update(self.artifact.manifest["artifact_sha256"].encode())
-        input_digest.update(str(graph_snapshot_id).encode())
-        input_digest.update(enterprise_id.encode())
-        input_digest.update(
-            np.ascontiguousarray(
-                active_x[:, :, enterprise_index].astype("<f4")
-            ).tobytes()
+        input_sha256 = self._input_sha256(
+            artifact_sha256=self.artifact.manifest["artifact_sha256"],
+            feature_schema_version=self.artifact.manifest["feature_schema"][
+                "version"
+            ],
+            graph_snapshot_id=graph_snapshot_id,
+            enterprise_id=enterprise_id,
+            node_features=active_x,
+            adjacency=active_adjacency,
         )
         band = "low" if score < 0.40 else "medium" if score < 0.75 else "high"
         return RiskAssessment(
@@ -216,7 +217,7 @@ class ResearchInferenceService:
             enterprise_id=enterprise_id,
             graph_snapshot_id=graph_snapshot_id,
             model_version_id=model_version_id,
-            input_sha256=input_digest.hexdigest(),
+            input_sha256=input_sha256,
             risk_score=score,
             band=band,
             explanations=explanations,
@@ -244,6 +245,36 @@ class ResearchInferenceService:
     def _require_available(self) -> None:
         if not self.available:
             raise ResearchModelUnavailable
+
+    @staticmethod
+    def _input_sha256(
+        *,
+        artifact_sha256: str,
+        feature_schema_version: str,
+        graph_snapshot_id: uuid.UUID,
+        enterprise_id: str,
+        node_features: np.ndarray,
+        adjacency: np.ndarray,
+    ) -> str:
+        digest = hashlib.sha256()
+        for identity in (
+            artifact_sha256,
+            feature_schema_version,
+            str(graph_snapshot_id),
+            enterprise_id,
+        ):
+            encoded = identity.encode("utf-8")
+            digest.update(len(encoded).to_bytes(4, "big"))
+            digest.update(encoded)
+        for tensor in (node_features, adjacency):
+            canonical = np.ascontiguousarray(
+                np.asarray(tensor, dtype="<f4")
+            )
+            digest.update(len(canonical.shape).to_bytes(1, "big"))
+            for dimension in canonical.shape:
+                digest.update(int(dimension).to_bytes(8, "big"))
+            digest.update(canonical.tobytes())
+        return digest.hexdigest()
 
     def _enterprise_index(self, enterprise_id: str) -> int:
         try:

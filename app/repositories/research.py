@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.ledger import canonical_timestamp
@@ -35,6 +35,19 @@ def reference_uuid(kind: str, identity: str) -> uuid.UUID:
 
 
 class ResearchRepository:
+    @staticmethod
+    def scenario_lock_key(
+        dataset_version_id: uuid.UUID,
+        name: str,
+    ) -> int:
+        return int.from_bytes(
+            hashlib.sha256(
+                f"{dataset_version_id}:{name}".encode("utf-8")
+            ).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+
     def ensure_reference_registry(
         self,
         session: Session,
@@ -274,6 +287,13 @@ class ResearchRepository:
                     "graph_snapshot_sha256",
                     "input_sha256",
                     "model_version_id",
+                    "synthetic_scenario_id",
+                    "scenario_revision",
+                    "overlay_sha256",
+                    "normalization_id",
+                    "node_ordering_sha256",
+                    "adjacency_sha256",
+                    "feature_sha256",
                 )
             },
             "inference_engine": "onnxruntime-cpu",
@@ -288,6 +308,13 @@ class ResearchRepository:
         dataset_version_id: uuid.UUID,
         name: str,
     ) -> int:
+        lock_key = ResearchRepository.scenario_lock_key(
+            dataset_version_id, name
+        )
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        )
         latest = session.scalar(
             select(func.max(SyntheticScenarioModel.revision)).where(
                 SyntheticScenarioModel.dataset_version_id == dataset_version_id,

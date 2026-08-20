@@ -1,70 +1,78 @@
-# MVP Design
+# Research Core v0.4 — Frozen MVP Design
 
 ## Objective
 
-Demonstrate the smallest defensible DAIBM-SCF loop:
+Demonstrate the smallest defensible research and engineering loop for the thesis:
 
 ```text
-financing request
-    -> auditable request event
-    -> explainable risk score
-    -> financing decision
-    -> control action
-    -> auditable feedback event
+deterministic synthetic data
+    -> temporal supply-chain graph
+    -> promoted TGNN inference
+    -> explicit policy decision
+    -> atomic PostgreSQL evidence
+    -> tamper detection and evidence-preserving recovery
 ```
 
-## Components
+The application is a computer-simulation demonstrator. It proves that this path can be implemented and traced; it does not prove production banking performance or reproduce unavailable thesis data.
 
-### API and UI
+## Runtime topology
 
-FastAPI provides the JSON API, generated OpenAPI documentation, and a dependency-free HTML dashboard.
+Docker Compose contains exactly two services: `postgres` and `mvp`. PostgreSQL 17 is the only database. FastAPI serves both JSON APIs and the dependency-free bilingual page. SQLAlchemy 2 is the shared persistence layer and Alembic is the only schema-management path.
 
-### PostgreSQL data layer
+The application constructs its connection from the five `POSTGRES_*` settings. There is no SQLite mode and no database-type switch. `RESEARCH_ARTIFACT_DIR` points to the promoted reference bundle inside the application container, and the shipped profile requires that bundle to verify successfully.
 
-PostgreSQL 17 is the only database. SQLAlchemy repositories isolate persistence from the FastAPI routes, while Alembic is the only schema-management path. Financing identifiers use UUID, monetary amounts use `NUMERIC(14,2)`, timestamps use `TIMESTAMPTZ`, and variable feature/explanation payloads use JSONB.
+## Research evidence chain
 
-Creating a financing request and its four audit events is one database transaction. PostgreSQL transaction-level advisory locking serializes chain-head updates so concurrent requests cannot create two branches from the same previous hash.
+### Data and graph
 
-### Audit ledger
+`synthetic-scf-v1` is deterministically generated with seed `20260815` for 500 enterprises over 24 months. It contains no real enterprise records. The graph builder retains directed supplier-to-customer relationships, creates symmetric self-loop-normalized adjacency for the GCN, and uses 12-month feature windows with future 3-month labels. Temporal train, validation, and test anchors are fixed to prevent leakage.
 
-Every event includes the previous event hash. The current event hash is calculated from the previous hash, timestamp, type, entity ID, and canonical JSON payload. `GET /api/ledger/verify` recomputes the chain and reports the first invalid event.
+### Models
 
-This is a tamper-evident log persisted in PostgreSQL, not a distributed blockchain.
+The offline research package trains an XGBoost comparison and a minimal temporal graph neural network:
 
-### Risk baseline
+```text
+32-dimensional GCN
+    -> bidirectional LSTM (32 units per direction)
+    -> MLP 64 → 32 → 1
+```
 
-The baseline converts six transparent features into normalized risk factors:
+The promoted TGNN is exported to ONNX and checked for PyTorch/ONNX parity. FastAPI never trains at startup. It verifies the artifact SHA-256, feature schema, dataset identity, and reference inputs, then performs real CPU inference with ONNX Runtime. It does not silently fall back to the rule baseline.
 
-- requested amount;
-- recent payment delay;
-- counterparty risk;
-- invoice mismatch;
-- relationship age;
-- recent transaction velocity.
+### Policy and atomic trace
 
-The factors are combined into a logistic score. The API returns each contribution so that a reviewer can explain why a scenario was approved, rejected, or sent to manual review.
+Policy `scf-risk-policy-v0.4` maps scores to `NORMAL`, `ADDITIONAL_CHECK`, or `FINANCING_REVIEW` at thresholds `0.40` and `0.75`. A successful inference transaction persists the risk assessment, policy decision, and three linked ledger events together. Failure rolls back the whole trace.
 
-### Closed-loop action
+### Risk scenario
 
-- Low risk: standard monitoring.
-- Medium risk: request additional documents and enhanced validation.
-- High risk: suspend automatic approval and require enhanced validation.
+Risk injection changes only a versioned synthetic input overlay. It cannot accept a caller-provided score or decision. The graph is rebuilt and the same promoted ONNX model reruns; the UI displays changed observable inputs, before/after scores, policy outcomes, lineage hashes, related enterprises, and ledger event IDs.
 
-The action is written back to the audit ledger, providing the minimal AI-to-control feedback loop described by the thesis architecture.
+## PostgreSQL audit ledger
 
-## Non-goals for v0.1
+Each event hash binds the previous hash, timestamp, event type, entity ID, and canonical JSON payload. A transaction-level advisory lock serializes global chain-head updates. This is a tamper-evident application audit ledger stored in PostgreSQL, not a distributed blockchain.
 
-- distributed consensus;
-- production identity and access management;
-- cryptographic privacy proofs;
-- trained graph or temporal models;
-- claims of financial or operational improvement;
-- integration with external financial institutions.
+Simulated tampering leaves the chain invalid and creates an unresolved integrity incident. Recovery restores only the affected trusted synthetic event, appends `INTEGRITY_VIOLATION_DETECTED` and `LEDGER_RECOVERY_COMPLETED`, and then verifies the extended chain. This is distinct from the explicitly destructive demo reset.
 
-## Next defensible increments
+## User interface
 
-1. Replace the baseline with a reproducible XGBoost experiment on a documented synthetic dataset.
-2. Add supply-chain graph construction and a temporal split protocol.
-3. Add a TGNN research module with fixed seeds and comparison baselines.
-4. Move the audit adapter behind an interface and add a Hyperledger Fabric implementation.
-5. Add privacy-preserving fields only after a concrete threat model is defined.
+Russian is the default language; every Research Core action and result also has Chinese copy. The Research Core page presents a visual evidence rail for data, graph, model, policy, and audit. It labels real model execution as `REAL MODEL INFERENCE` and generated inputs as `SYNTHETIC DATA`.
+
+The page is responsive, keyboard-focusable, reduced-motion aware, and uses only local assets. No external network API is needed during a defense demonstration.
+
+## Health and startup contract
+
+`start-demo.cmd` builds both containers and opens `http://127.0.0.1:8010` only when `/api/health` semantically confirms:
+
+- PostgreSQL is reachable;
+- the audit ledger is valid;
+- the required promoted research artifact is ready.
+
+A missing or incompatible model, unreachable database, or invalid ledger returns HTTP 503. Training is never part of startup.
+
+## Evidence boundaries
+
+Implemented in v0.4: PostgreSQL application state, Alembic schema, deterministic synthetic generator, temporal graph builder, XGBoost comparison, minimal GCN–BiLSTM TGNN, ONNX Runtime inference, model/data/graph registries, policy engine, atomic decision trace, risk injection, hash-chain verification, and evidence-preserving recovery.
+
+Not implemented or not claimed: real enterprise data, numerical reproduction of the original thesis results, the full thesis TGNN, production credit decisioning, Hyperledger Fabric, PoA+, chaincode, ZKP, production identity infrastructure, online learning, or external bank integration.
+
+The canonical claim-to-evidence mapping is `docs/thesis-traceability.md`; no second matrix should be maintained.

@@ -5,8 +5,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-daibm_scf}
       POSTGRES_USER: ${POSTGRES_USER:-daibm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
-      RESEARCH_ARTIFACT_DIR: /app/artifacts/reference
-      RESEARCH_CORE_REQUIRED: "true"
     healthcheck:
       test:
         - CMD-SHELL
@@ -27,6 +25,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-daibm_scf}
       POSTGRES_USER: ${POSTGRES_USER:-daibm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
+      RESEARCH_ARTIFACT_DIR: /app/artifacts/reference
+      RESEARCH_CORE_REQUIRED: "true"
     depends_on:
       postgres:
         condition: service_healthy

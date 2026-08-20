@@ -279,9 +279,8 @@ class PolicyEngine:
 - Produces documented commands `python -m research.cli generate`, `train-xgboost`, `train-tgnn`, `promote`, and `verify`.
 - Preserves one-command Docker demonstration at `http://127.0.0.1:8010`.
 
-- [ ] Write failing executable release-contract tests for CLI help, artifact verification, launcher health payload, and canonical status/provenance values.
-- [ ] Run them and verify current documentation/launcher gaps.
-- [ ] Update bilingual startup/demo guidance and traceability evidence without claiming original-thesis reproduction or production validation.
-- [ ] Run full unit/integration suite, clean-database Alembic upgrade and drift check, deterministic regeneration, Docker clean-volume startup, and Playwright RU/ZH/tamper/recovery flows.
-- [ ] Run `git diff --check`, request code review, resolve findings, verify the private remote, commit `docs: freeze Research Core v0.4 evidence`, and push `main`.
-
+- [x] Write failing executable release-contract tests for CLI help, artifact verification, launcher health payload, and canonical status/provenance values.
+- [x] Run them and verify current documentation/launcher gaps.
+- [x] Update bilingual startup/demo guidance and traceability evidence without claiming original-thesis reproduction or production validation.
+- [x] Run full unit/integration suite, clean-database Alembic upgrade and drift check, deterministic regeneration, Docker clean-volume startup, and Playwright RU/ZH/tamper/recovery flows.
+- [x] Run `git diff --check`, request code review, resolve findings, verify the private remote, commit `docs: freeze Research Core v0.4 evidence`, and push `main`.

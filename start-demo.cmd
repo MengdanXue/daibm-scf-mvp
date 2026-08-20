@@ -18,7 +18,7 @@ echo [DAIBM-SCF] Waiting for the verified health endpoint...
 set /a HEALTH_ATTEMPT=0
 
 :wait_health
-powershell -NoProfile -Command "try { $response = Invoke-WebRequest -UseBasicParsing -Uri '%DEMO_URL%/api/health' -TimeoutSec 2; if ($response.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>nul
+powershell -NoProfile -Command "try { $payload = Invoke-RestMethod -Uri '%DEMO_URL%/api/health' -TimeoutSec 2; if (($payload.status -eq 'ok') -and ($payload.database.backend -eq 'postgresql') -and ($payload.database.reachable -eq $true) -and ($payload.ledger.valid -eq $true) -and ($payload.research_core.status -eq 'ready')) { exit 0 } } catch {}; exit 1" >nul 2>nul
 if not errorlevel 1 goto ready
 set /a HEALTH_ATTEMPT+=1
 if %HEALTH_ATTEMPT% GEQ 60 goto startup_timeout

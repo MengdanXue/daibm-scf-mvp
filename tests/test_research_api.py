@@ -1,12 +1,14 @@
 from pathlib import Path
 from uuid import uuid4
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import ResearchSettings
 from app.database import Database
 from app.main import create_app
+from app.services.research_inference import ResearchInferenceService
 
 
 @pytest.fixture
@@ -89,6 +91,37 @@ def test_research_inference_rejects_unknown_model(research_client):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Research model or snapshot not found"}
+
+
+def test_input_hash_covers_non_target_nodes_and_full_adjacency():
+    features = np.zeros((1, 2, 3, 2), dtype=np.float32)
+    adjacency = np.zeros((1, 2, 3, 3), dtype=np.float32)
+    arguments = {
+        "artifact_sha256": "a" * 64,
+        "feature_schema_version": "graph-features-v1",
+        "graph_snapshot_id": uuid4(),
+        "enterprise_id": "E0001",
+    }
+    baseline = ResearchInferenceService._input_sha256(
+        node_features=features,
+        adjacency=adjacency,
+        **arguments,
+    )
+    changed_feature = features.copy()
+    changed_feature[0, 0, 2, 1] = 1.0
+    changed_adjacency = adjacency.copy()
+    changed_adjacency[0, 1, 1, 2] = 1.0
+
+    assert ResearchInferenceService._input_sha256(
+        node_features=changed_feature,
+        adjacency=adjacency,
+        **arguments,
+    ) != baseline
+    assert ResearchInferenceService._input_sha256(
+        node_features=features,
+        adjacency=changed_adjacency,
+        **arguments,
+    ) != baseline
 
 
 def test_optional_missing_artifact_keeps_engineering_health_and_returns_503(
