@@ -57,6 +57,8 @@ Simulated tampering leaves the chain invalid and creates an unresolved integrity
 
 Russian is the default language; every Research Core action and result also has Chinese copy. The Research Core page presents a visual evidence rail for data, graph, model, policy, and audit. It labels real model execution as `REAL MODEL INFERENCE` and generated inputs as `SYNTHETIC DATA`.
 
+Integrated application v0.6 adds a database-backed five-role workflow around the frozen Research Core: supplier, core enterprise, financier, risk manager, and auditor. HttpOnly sessions and server-side authorization control visibility and transitions. The modular-monolith state machine advances a versioned application from draft to audited; each transition, workflow action, and ledger event is committed atomically. This workflow is engineering evidence for the thesis demonstrator and does not expand the scientific claim of Research Core v0.4.
+
 The page is responsive, keyboard-focusable, reduced-motion aware, and uses only local assets. No external network API is needed during a defense demonstration.
 
 ## Health and startup contract

@@ -148,4 +148,22 @@ def test_health_rejects_an_invalid_ledger(client):
 
 
 def test_integrated_application_version_advances_after_acceptance(client):
-    assert client.get("/openapi.json").json()["info"]["version"] == "0.5.0"
+    assert client.get("/openapi.json").json()["info"]["version"] == "0.6.0"
+
+
+def test_release_documentation_lists_five_demo_roles_and_workflow():
+    readme = _read("README.md")
+    demo = _read("docs/demo-script.md")
+
+    for username in (
+        "supplier.demo",
+        "core.demo",
+        "financier.demo",
+        "risk.demo",
+        "auditor.demo",
+    ):
+        assert username in readme
+        assert username in demo
+    assert "Demo123!" in readme
+    assert "draft → submitted" in readme
+    assert "/api/v1/applications" in readme

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daibm-scf-mvp"
-version = "0.1.0"
-description = "Minimal scenario MVP for an auditable supply-chain finance risk loop"
+version = "0.6.0"
+description = "Bilingual multi-role supply-chain finance workflow and auditable research MVP"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

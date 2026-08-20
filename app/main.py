@@ -75,7 +75,7 @@ def create_app(
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
-        version="0.5.0",
+        version="0.6.0",
         description=(
             "Scenario demonstrator for an auditable supply-chain finance "
             "risk loop."
