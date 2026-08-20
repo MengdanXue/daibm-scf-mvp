@@ -1,7 +1,7 @@
 {
   "artifact": "tgnn-v0.4.onnx",
   "artifact_sha256": "158d273db310c3f1abf4be7cb06aee78568e475ebb7564ebbeaa16d3efeeb0e5",
-  "xgboost_manifest_sha256": "d2da360964550254732a830f365ad4a0e8015a7bed89ca92507fd4f2b9b39a2a",
+  "xgboost_manifest_sha256": "f010a8d9d4e42ce4790469058dfc824cceb914c9bb21cb2d625a3a0f7d511307",
   "checkpoint_sha256": "47de64d9cea91abe492771a4b0c6d3694d4bfffd6e7b4834dac0d5ae617c4cab",
   "dataset": {
     "content_sha256": "f784faa8bdef23625888d64de75c2f29a80c0a51e266e0822652569507648353",
@@ -48,7 +48,7 @@
       "last_month": 24
     }
   },
-  "dataset_manifest_sha256": "e0e68b43bbe78c3bffa301aed582d502a9b14e0cffdbcb99bef26a99af407edc",
+  "dataset_manifest_sha256": "9cd6c7118dd2ed90c46fb3e0239a91ebae4a0c1af5bd3b6847384a9bff824fff",
   "deployment_slot": "default",
   "feature_count": 17,
   "feature_schema": {
@@ -77,7 +77,7 @@
     "sequence_length": 12,
     "version": "graph-features-v1"
   },
-  "feature_schema_sha256": "27393481001c6973e1bc33a08a8a1d9e150ea52b7e9c999be2d1e63e49f2c435",
+  "feature_schema_sha256": "10aae62419c9d1b84f17542b8010f56353dc05b4ff4aca1e6db54f7ea259c47f",
   "inference_format": "onnx",
   "input_bundle": "reference-inputs.npz",
   "input_bundle_sha256": "88a065796cbf789ffc1e39eb5512c7b1188e97fe3b00e376442d439d7f60c5d1",

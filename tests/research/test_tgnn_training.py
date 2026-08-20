@@ -76,6 +76,8 @@ def test_tgnn_trainer_fits_and_emits_checkpoint_and_metrics(tmp_path):
     assert len(result.checkpoint_sha256) == 64
     assert 1 <= len(result.history) <= 4
     assert result.test_probabilities.shape == (8,)
+    assert result.run_manifest_path.read_bytes().endswith(b"\n")
+    assert b"\r\n" not in result.run_manifest_path.read_bytes()
     assert set(result.metrics) == {
         "roc_auc",
         "pr_auc",

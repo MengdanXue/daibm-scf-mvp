@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from research.artifacts.json_io import write_canonical_json
 from research.graph.builder import TemporalSamples
 from research.training.export_onnx import verify_onnx_parity
 from research.training.train_tgnn import TrainedTGNN
@@ -55,17 +55,9 @@ def promote_tgnn(
         anchor=np.asarray(reference_samples.anchors[:1], dtype=np.int16),
     )
     dataset_manifest_path = reference / "dataset-manifest.json"
-    dataset_manifest_path.write_text(
-        json.dumps(dataset_manifest, ensure_ascii=False, indent=2, sort_keys=True)
-        + "\n",
-        encoding="utf-8",
-    )
+    write_canonical_json(dataset_manifest_path, dataset_manifest)
     feature_schema_path = reference / "feature-schema.json"
-    feature_schema_path.write_text(
-        json.dumps(feature_schema, ensure_ascii=False, indent=2, sort_keys=True)
-        + "\n",
-        encoding="utf-8",
-    )
+    write_canonical_json(feature_schema_path, feature_schema)
     manifest = {
         "artifact": promoted_onnx.name,
         "artifact_sha256": _sha256(promoted_onnx),
@@ -101,10 +93,7 @@ def promote_tgnn(
         "snapshot_sha256": reference_samples.snapshot_sha256[0],
         "training_configuration": trained.configuration.to_dict(),
     }
-    (reference / "model-manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_canonical_json(reference / "model-manifest.json", manifest)
 
     from research.artifacts.verification import verify_reference_artifact
 

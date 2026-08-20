@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ import torch
 from numpy.typing import NDArray
 from torch import Tensor, nn
 
+from research.artifacts.json_io import write_canonical_json
 from research.graph.builder import TemporalSamples
 from research.graph.split import TemporalSplit
 from research.models.tgnn import TemporalGCNBiLSTM
@@ -158,24 +158,18 @@ def train_tgnn(
         checkpoint_path.read_bytes()
     ).hexdigest()
     run_manifest_path = destination / "tgnn-run.json"
-    run_manifest_path.write_text(
-        json.dumps(
-            {
-                "checkpoint": checkpoint_path.name,
-                "checkpoint_sha256": checkpoint_sha256,
-                "configuration": active.to_dict(),
-                "feature_count": feature_count,
-                "history": history,
-                "metrics": metrics,
-                "normalization_id": split.train.normalization.normalization_id,
-                "status": "completed",
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    write_canonical_json(
+        run_manifest_path,
+        {
+            "checkpoint": checkpoint_path.name,
+            "checkpoint_sha256": checkpoint_sha256,
+            "configuration": active.to_dict(),
+            "feature_count": feature_count,
+            "history": history,
+            "metrics": metrics,
+            "normalization_id": split.train.normalization.normalization_id,
+            "status": "completed",
+        },
     )
     return TrainedTGNN(
         model=model,

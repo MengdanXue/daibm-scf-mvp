@@ -65,6 +65,14 @@ def test_onnx_export_matches_pytorch_and_promoted_artifact_verifies(tmp_path):
     assert json.loads(
         (reference / "model-manifest.json").read_text(encoding="utf-8")
     )["checkpoint_sha256"] == trained.checkpoint_sha256
+    for name in (
+        "dataset-manifest.json",
+        "feature-schema.json",
+        "model-manifest.json",
+    ):
+        payload = (reference / name).read_bytes()
+        assert payload.endswith(b"\n")
+        assert b"\r\n" not in payload
 
 
 def test_artifact_verifier_rejects_corrupted_onnx(tmp_path):

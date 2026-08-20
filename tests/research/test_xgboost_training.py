@@ -45,6 +45,8 @@ def test_xgboost_performs_real_fit_and_emits_evidence(tmp_path):
     assert model_path.exists()
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_path.read_bytes().endswith(b"\n")
+    assert b"\r\n" not in manifest_path.read_bytes()
     assert manifest["lifecycle_status"] == "evaluated"
     assert manifest["model_family"] == "xgboost"
     assert manifest["configuration"]["max_depth"] == 4

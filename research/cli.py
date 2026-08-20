@@ -4,11 +4,13 @@ import argparse
 import hashlib
 import json
 import shutil
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from research.artifacts.json_io import write_canonical_json
 from research.artifacts.verification import verify_reference_artifact
 from research.data.generator import generate_dataset
 from research.data.manifest import build_dataset_manifest
@@ -77,14 +79,32 @@ def _load_trained(run_dir: Path) -> TrainedTGNN:
     )
 
 
+def _publish_reference_bundle(staging: Path, destination: Path) -> None:
+    backup = staging.with_name(f"{staging.name}.previous")
+    failed = staging.with_name(f"{staging.name}.failed")
+    had_previous_bundle = destination.exists()
+    if had_previous_bundle:
+        destination.replace(backup)
+    try:
+        staging.replace(destination)
+        verify_reference_artifact(destination)
+    except BaseException:
+        if destination.exists():
+            destination.replace(failed)
+        if backup.exists():
+            backup.replace(destination)
+        if failed.exists():
+            shutil.rmtree(failed)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+
+
 def command_generate(output: Path) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=True)
     dataset = generate_dataset()
     manifest = build_dataset_manifest(dataset).to_dict()
-    (output / "dataset-manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_canonical_json(output / "dataset-manifest.json", manifest)
     np.savez_compressed(
         output / "synthetic-scf-v1.npz",
         industry_codes=dataset.industry_codes,
@@ -180,33 +200,40 @@ def command_build_reference(
         reference_sample.adjacency,
         output / "tgnn" / "tgnn-v0.4.onnx",
     )
-    model_manifest = promote_tgnn(
-        trained=trained,
-        onnx_path=onnx_path,
-        reference_samples=reference_sample,
-        dataset_manifest=dataset_manifest,
-        feature_schema=_feature_schema(),
-        destination=destination,
-    )
-    shutil.copy2(
-        xgboost_result.artifact_path,
-        destination / "xgboost-v0.4.json",
-    )
-    shutil.copy2(
-        xgboost_result.manifest_path,
-        destination / "xgboost-manifest.json",
-    )
-    (destination / "metrics.json").write_text(
-        json.dumps(
-            {"tgnn": trained.metrics, "xgboost": xgboost_result.metrics},
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".{destination.name}-",
+        dir=destination.parent,
+        ignore_cleanup_errors=True,
+    ) as staging_directory:
+        staging = Path(staging_directory)
+        model_manifest = promote_tgnn(
+            trained=trained,
+            onnx_path=onnx_path,
+            reference_samples=reference_sample,
+            dataset_manifest=dataset_manifest,
+            feature_schema=_feature_schema(),
+            destination=staging,
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    verify_reference_artifact(destination)
+        shutil.copy2(
+            xgboost_result.artifact_path,
+            staging / "xgboost-v0.4.json",
+        )
+        xgboost_manifest_path = staging / "xgboost-manifest.json"
+        shutil.copy2(xgboost_result.manifest_path, xgboost_manifest_path)
+        model_manifest["xgboost_manifest_sha256"] = hashlib.sha256(
+            xgboost_manifest_path.read_bytes()
+        ).hexdigest()
+        write_canonical_json(
+            staging / "model-manifest.json",
+            model_manifest,
+        )
+        write_canonical_json(
+            staging / "metrics.json",
+            {"tgnn": trained.metrics, "xgboost": xgboost_result.metrics},
+        )
+        verify_reference_artifact(staging)
+        _publish_reference_bundle(staging, destination)
     return model_manifest
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ from xgboost import XGBClassifier
 
 from research.graph.builder import TemporalSamples
 from research.graph.split import TemporalSplit
+from research.artifacts.json_io import write_canonical_json
 from research.models.xgboost_model import XGBoostConfig
 from research.training.metrics import evaluate_binary_predictions
 
@@ -93,10 +93,7 @@ def train_xgboost(
         "validation_anchors": split.validation.anchors.astype(int).tolist(),
     }
     manifest_path = destination / "xgboost-manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_canonical_json(manifest_path, manifest)
     return TrainedXGBoost(
         model=model,
         configuration=active,
