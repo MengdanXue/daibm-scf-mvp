@@ -9,6 +9,8 @@ from sqlalchemy.pool import NullPool
 from app.config import PostgresSettings
 from app.models import Base
 import app.models_research  # noqa: F401  Registers Research Core metadata.
+import app.models_identity  # noqa: F401  Registers identity metadata.
+import app.models_workflow  # noqa: F401  Registers workflow metadata.
 
 
 config = context.config

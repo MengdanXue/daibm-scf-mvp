@@ -10,6 +10,8 @@ from testcontainers.community.postgres import PostgresContainer
 
 
 ALL_DATA_TABLES = (
+    "user_sessions",
+    "workflow_actions",
     "integrity_incidents",
     "policy_decisions",
     "risk_assessments",
@@ -20,6 +22,8 @@ ALL_DATA_TABLES = (
     "dataset_versions",
     "ledger_events",
     "financing_requests",
+    "users",
+    "organizations",
 )
 
 

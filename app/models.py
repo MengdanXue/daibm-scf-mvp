@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Identity,
     Index,
     Integer,
@@ -31,6 +32,12 @@ LEDGER_EVENT_TYPES = (
     "SIMULATED_RISK_INJECTED",
     "INTEGRITY_VIOLATION_DETECTED",
     "LEDGER_RECOVERY_COMPLETED",
+    "APPLICATION_DRAFT_CREATED",
+    "APPLICATION_UPDATED",
+    "APPLICATION_SUBMITTED",
+    "TRADE_CONFIRMED",
+    "TRADE_RETURNED",
+    "AUDIT_REVIEW_COMPLETED",
 )
 
 
@@ -50,12 +57,22 @@ class FinancingRequestModel(Base):
             name="ck_financing_requests_term_days",
         ),
         CheckConstraint(
-            "risk_score BETWEEN 0 AND 1",
+            "risk_score IS NULL OR risk_score BETWEEN 0 AND 1",
             name="ck_financing_requests_risk_score",
         ),
         CheckConstraint(
-            "decision IN ('approved', 'manual_review', 'rejected')",
+            "decision IS NULL OR decision IN ('approved', 'manual_review', 'rejected')",
             name="ck_financing_requests_decision",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'submitted', 'trade_returned', "
+            "'trade_confirmed', 'risk_assessed', 'approved', "
+            "'manual_review', 'rejected', 'controlled', 'audited')",
+            name="ck_financing_requests_status",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_financing_requests_version",
         ),
     )
 
@@ -67,17 +84,46 @@ class FinancingRequestModel(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
     applicant_id: Mapped[str] = mapped_column(Text, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     term_days: Mapped[int] = mapped_column(Integer, nullable=False)
     features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    risk_score: Mapped[float] = mapped_column(DOUBLE_PRECISION, nullable=False)
-    decision: Mapped[str] = mapped_column(Text, nullable=False)
-    explanations: Mapped[list[dict[str, Any]]] = mapped_column(
+    risk_score: Mapped[float | None] = mapped_column(DOUBLE_PRECISION)
+    decision: Mapped[str | None] = mapped_column(Text)
+    explanations: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB,
-        nullable=False,
     )
-    control_action: Mapped[str] = mapped_column(Text, nullable=False)
+    control_action: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="draft",
+        server_default="audited",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
+    )
+    supplier_organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+    )
+    core_enterprise_organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+    )
+    contract_number: Mapped[str | None] = mapped_column(Text)
+    invoice_number: Mapped[str | None] = mapped_column(Text)
 
 
 Index(
@@ -91,6 +137,23 @@ Index(
 Index(
     "ix_financing_requests_applicant_id",
     FinancingRequestModel.applicant_id,
+)
+Index("ix_financing_requests_status", FinancingRequestModel.status)
+Index(
+    "ix_financing_requests_supplier_organization_id",
+    FinancingRequestModel.supplier_organization_id,
+)
+Index(
+    "ix_financing_requests_core_enterprise_organization_id",
+    FinancingRequestModel.core_enterprise_organization_id,
+)
+Index(
+    "ix_financing_requests_created_by_user_id",
+    FinancingRequestModel.created_by_user_id,
+)
+Index(
+    "ix_financing_requests_updated_at",
+    FinancingRequestModel.updated_at.desc(),
 )
 
 

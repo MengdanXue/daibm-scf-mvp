@@ -168,9 +168,11 @@ class FinancingService:
         )
         result = assess(normalized_request)
         decision, control_action = DECISIONS[result.band]
+        created_at = datetime.now(timezone.utc)
         model = FinancingRequestModel(
             request_id=uuid.uuid4(),
-            created_at=datetime.now(timezone.utc),
+            created_at=created_at,
+            updated_at=created_at,
             applicant_id=normalized_request.applicant_id,
             amount=canonical_amount,
             term_days=normalized_request.term_days,
@@ -179,6 +181,8 @@ class FinancingService:
             decision=decision,
             explanations=result.contributions,
             control_action=control_action,
+            status="audited",
+            version=1,
         )
         self.financing_repository.add(session, model)
         self.ledger_repository.append_many(
