@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel, LedgerEventModel
 from app.models_facility import FacilityActionModel, PaymentModel
+from app.repositories.facility import FacilityRepository
 from app.schemas_facility import (
     CreateFacilityRequest,
     DecisionPaymentRequest,
@@ -275,6 +276,110 @@ def test_command_retry_is_global_and_does_not_append_duplicate_records(
             .select_from(FacilityActionModel)
             .where(FacilityActionModel.idempotency_key == key)
         ) == 1
+
+
+def test_concurrent_create_with_same_semantics_replays_one_facility(
+    session_factory,
+):
+    users = _users(session_factory)
+    request_id = _approved_application(session_factory, users)
+    key = uuid.uuid4()
+    request = _create_request(request_id, key=key)
+    barrier = threading.Barrier(2)
+
+    class FirstLookupBarrierRepository(FacilityRepository):
+        def __init__(self) -> None:
+            self._calls = 0
+            self._calls_lock = threading.Lock()
+
+        def find_action(self, session, candidate_key):
+            with self._calls_lock:
+                self._calls += 1
+                should_wait = self._calls <= 2
+            if should_wait:
+                barrier.wait(timeout=5)
+            return super().find_action(session, candidate_key)
+
+    service = FacilityService(
+        session_factory,
+        repository=FirstLookupBarrierRepository(),
+    )
+
+    def create_once():
+        return service.create(request, users["financier.demo"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: create_once(), range(2)))
+
+    assert results[0]["facility_id"] == results[1]["facility_id"]
+    with session_factory() as session:
+        assert session.scalar(
+            select(func.count()).select_from(FacilityActionModel)
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(LedgerEventModel)
+        ) == 1
+
+
+def test_same_actor_cannot_reuse_key_for_another_command(facility_context):
+    service, users, request_id = facility_context
+    key = uuid.uuid4()
+    facility = service.create(
+        _create_request(request_id, key=key),
+        users["financier.demo"],
+    )
+
+    with pytest.raises(FacilityConflict):
+        service.initiate_disbursement(
+            facility["facility_id"],
+            _command(facility["version"], key),
+            users["financier.demo"],
+        )
+
+
+def test_same_actor_cannot_reuse_key_for_another_facility_scope(session_factory):
+    users = _users(session_factory)
+    request_a = _approved_application(session_factory, users)
+    request_b = _approved_application(session_factory, users)
+    service = FacilityService(session_factory)
+    key = uuid.uuid4()
+    service.create(_create_request(request_a, key=key), users["financier.demo"])
+
+    with pytest.raises(FacilityConflict):
+        service.create(
+            _create_request(request_b, key=key),
+            users["financier.demo"],
+        )
+
+
+def test_same_actor_cannot_reuse_key_with_changed_payload(facility_context):
+    service, users, request_id = facility_context
+    facility = service.create(_create_request(request_id), users["financier.demo"])
+    key = uuid.uuid4()
+    facility = service.initiate_disbursement(
+        facility["facility_id"],
+        _command(facility["version"], key),
+        users["financier.demo"],
+    )
+
+    with pytest.raises(FacilityConflict):
+        service.initiate_disbursement(
+            facility["facility_id"],
+            _command(facility["version"], key),
+            users["financier.demo"],
+        )
+
+
+def test_action_persists_canonical_command_fingerprint(facility_context):
+    service, users, request_id = facility_context
+    service.create(_create_request(request_id), users["financier.demo"])
+
+    with service.session_factory() as session:
+        payload = session.scalar(select(FacilityActionModel.payload))
+
+    assert payload["command_name"] == "create"
+    assert payload["scope"] == {"request_id": str(request_id)}
+    assert len(payload["command_fingerprint_sha256"]) == 64
 
 
 def test_stale_version_and_wrong_role_are_rejected_without_side_effects(

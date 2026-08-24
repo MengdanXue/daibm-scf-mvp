@@ -20,7 +20,7 @@ from app.domain.facility import (
 )
 from app.domain.workflow import Role
 from app.identity import AuthenticatedUser
-from app.ledger import canonical_timestamp
+from app.ledger import canonical_json, canonical_timestamp
 from app.models import FinancingRequestModel
 from app.models_facility import (
     FacilityActionModel,
@@ -38,6 +38,7 @@ from app.schemas_facility import (
     SubmitPaymentRequest,
     VersionedFacilityCommand,
 )
+from pydantic import BaseModel
 
 
 class FacilityError(Exception):
@@ -79,8 +80,18 @@ class FacilityService:
         request: CreateFacilityRequest,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        semantic = self._command_semantic(
+            FacilityAction.CREATE.value,
+            {"request_id": str(request.request_id)},
+            request,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, request.idempotency_key, user)
+            replay = self._replay(
+                session,
+                request.idempotency_key,
+                user,
+                semantic,
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.FINANCIER)
@@ -94,6 +105,14 @@ class FacilityService:
             )
             if application is None:
                 raise FacilityNotFound(str(request.request_id))
+            replay = self._replay(
+                session,
+                request.idempotency_key,
+                user,
+                semantic,
+            )
+            if replay is not None:
+                return replay
             if application.status != "audited" or application.decision != "approved":
                 raise FacilityConflict(
                     "Facility creation requires an approved audited application"
@@ -142,6 +161,7 @@ class FacilityService:
                 action=FacilityAction.CREATE,
                 idempotency_key=request.idempotency_key,
                 expected_version=1,
+                semantic=semantic,
                 event_types=[
                     (
                         "FACILITY_CREATED",
@@ -162,13 +182,23 @@ class FacilityService:
         command: VersionedFacilityCommand,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.INITIATE_DISBURSEMENT.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, command.idempotency_key, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.FINANCIER)
-            facility = self._load_for_command(session, facility_id, user)
-            replay = self._replay(session, command.idempotency_key, user)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
@@ -192,6 +222,7 @@ class FacilityService:
                 action=FacilityAction.INITIATE_DISBURSEMENT,
                 idempotency_key=command.idempotency_key,
                 expected_version=command.version,
+                semantic=semantic,
                 event_types=[
                     (
                         "DISBURSEMENT_INITIATED",
@@ -210,13 +241,23 @@ class FacilityService:
         command: VersionedFacilityCommand,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.CONFIRM_DISBURSEMENT.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, command.idempotency_key, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.FINANCIER)
-            facility = self._load_for_command(session, facility_id, user)
-            replay = self._replay(session, command.idempotency_key, user)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
@@ -235,6 +276,7 @@ class FacilityService:
                 action=FacilityAction.CONFIRM_DISBURSEMENT,
                 idempotency_key=command.idempotency_key,
                 expected_version=command.version,
+                semantic=semantic,
                 event_types=[
                     (
                         "DISBURSEMENT_CONFIRMED",
@@ -253,13 +295,26 @@ class FacilityService:
         request: SubmitPaymentRequest,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.SUBMIT_PAYMENT.value,
+            {
+                "facility_id": str(normalized_id),
+                "installment_id": str(request.installment_id),
+            },
+            request,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, request.idempotency_key, user)
+            replay = self._replay(
+                session, request.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.SUPPLIER)
-            facility = self._load_for_command(session, facility_id, user)
-            replay = self._replay(session, request.idempotency_key, user)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(
+                session, request.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._check_version(facility, request.version)
@@ -307,6 +362,7 @@ class FacilityService:
                 action=FacilityAction.SUBMIT_PAYMENT,
                 idempotency_key=request.idempotency_key,
                 expected_version=request.version,
+                semantic=semantic,
                 event_types=[
                     (
                         "REPAYMENT_SUBMITTED",
@@ -328,14 +384,27 @@ class FacilityService:
         request: DecisionPaymentRequest,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        normalized_payment_id = self._normalize_uuid(payment_id)
+        semantic = self._command_semantic(
+            "decide_payment",
+            {
+                "facility_id": str(normalized_id),
+                "payment_id": str(normalized_payment_id),
+            },
+            request,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, request.idempotency_key, user)
+            replay = self._replay(
+                session, request.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.FINANCIER)
-            normalized_payment_id = self._normalize_uuid(payment_id)
-            facility = self._load_for_command(session, facility_id, user)
-            replay = self._replay(session, request.idempotency_key, user)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(
+                session, request.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._check_version(facility, request.version)
@@ -435,6 +504,7 @@ class FacilityService:
                 action=action,
                 idempotency_key=request.idempotency_key,
                 expected_version=request.version,
+                semantic=semantic,
                 event_types=events,
             )
             return self._serialize(session, facility, user)
@@ -446,14 +516,27 @@ class FacilityService:
         command: VersionedFacilityCommand,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        normalized_installment_id = self._normalize_uuid(installment_id)
+        semantic = self._command_semantic(
+            FacilityAction.MARK_OVERDUE.value,
+            {
+                "facility_id": str(normalized_id),
+                "installment_id": str(normalized_installment_id),
+            },
+            command,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, command.idempotency_key, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.RISK_MANAGER)
-            normalized_installment_id = self._normalize_uuid(installment_id)
-            facility = self._load_for_command(session, facility_id, user)
-            replay = self._replay(session, command.idempotency_key, user)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
@@ -478,6 +561,7 @@ class FacilityService:
                 action=FacilityAction.MARK_OVERDUE,
                 idempotency_key=command.idempotency_key,
                 expected_version=command.version,
+                semantic=semantic,
                 event_types=[
                     (
                         "FACILITY_MARKED_OVERDUE",
@@ -496,13 +580,23 @@ class FacilityService:
         command: VersionedFacilityCommand,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.CLOSE.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
         with self.session_factory.begin() as session:
-            replay = self._replay(session, command.idempotency_key, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._require_role(user, Role.AUDITOR)
-            facility = self._load_for_command(session, facility_id, user)
-            replay = self._replay(session, command.idempotency_key, user)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(
+                session, command.idempotency_key, user, semantic
+            )
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
@@ -522,6 +616,7 @@ class FacilityService:
                 action=FacilityAction.CLOSE,
                 idempotency_key=command.idempotency_key,
                 expected_version=command.version,
+                semantic=semantic,
                 event_types=[
                     (
                         "FACILITY_CLOSED",
@@ -593,12 +688,23 @@ class FacilityService:
         session: Session,
         key: uuid.UUID,
         user: AuthenticatedUser,
+        semantic: dict[str, Any],
     ) -> dict[str, Any] | None:
         action = self.repository.find_action(session, key)
         if action is None:
             return None
         if action.actor_user_id != user.user_id:
             raise ForbiddenFacility("Idempotency key belongs to another actor")
+        stored = action.payload
+        if (
+            stored.get("command_name") != semantic["command_name"]
+            or stored.get("scope") != semantic["scope"]
+            or stored.get("command_fingerprint_sha256")
+            != semantic["command_fingerprint_sha256"]
+        ):
+            raise FacilityConflict(
+                "Idempotency key was already used for different command semantics"
+            )
         facility = session.get(FinancingFacilityModel, action.facility_id)
         if facility is None:
             raise FacilityNotFound(str(action.facility_id))
@@ -706,6 +812,7 @@ class FacilityService:
         action: FacilityAction,
         idempotency_key: uuid.UUID,
         expected_version: int,
+        semantic: dict[str, Any],
         event_types: list[tuple[str, dict[str, Any]]],
     ) -> None:
         now = self._now()
@@ -718,7 +825,10 @@ class FacilityService:
                 idempotency_key=idempotency_key,
                 expected_version=expected_version,
                 resulting_version=facility.version,
-                payload={"ledger_event_types": [item[0] for item in event_types]},
+                payload={
+                    **semantic,
+                    "ledger_event_types": [item[0] for item in event_types],
+                },
                 created_at=now,
             )
         )
@@ -737,6 +847,26 @@ class FacilityService:
                 for event_type, payload in event_types
             ],
         )
+
+    @staticmethod
+    def _command_semantic(
+        command_name: str,
+        scope: dict[str, str],
+        payload: BaseModel,
+    ) -> dict[str, Any]:
+        material = {
+            "command_name": command_name,
+            "scope": scope,
+            "payload": payload.model_dump(mode="json"),
+        }
+        fingerprint = hashlib.sha256(
+            canonical_json(material).encode("utf-8")
+        ).hexdigest()
+        return {
+            "command_name": command_name,
+            "scope": scope,
+            "command_fingerprint_sha256": fingerprint,
+        }
 
     def _serialize(
         self,
