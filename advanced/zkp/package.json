@@ -1,0 +1,21 @@
+{
+  "name": "@daibm/invoice-limit-zkp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "node scripts/build-artifacts.mjs",
+    "verify:artifacts": "node scripts/verify-artifacts.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "circomlib": "2.0.5",
+    "snarkjs": "0.7.6"
+  },
+  "devDependencies": {
+    "circom2": "0.2.23"
+  }
+}

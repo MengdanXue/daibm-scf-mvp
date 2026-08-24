@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "circuit": "invoice_limit",
+  "protocol": "groth16",
+  "curve": "bn128",
+  "compiler": {
+    "name": "circom",
+    "version": "2.2.3",
+    "npm_wrapper": "circom2@0.2.23"
+  },
+  "prover": {
+    "name": "snarkjs",
+    "version": "0.7.6"
+  },
+  "circomlib_version": "2.0.5",
+  "amount_encoding": "unsigned-64-bit-minor-units",
+  "private_inputs": [
+    "invoiceAmount",
+    "salt"
+  ],
+  "public_signals": [
+    "commitment",
+    "financingLimit"
+  ],
+  "demo_trusted_setup": true,
+  "trust_boundary": "Fixed local demo parameters; do not treat them as production ceremony evidence.",
+  "artifacts": {
+    "invoice_limit.r1cs": {
+      "sha256": "4df42a591e77ac48481e02afb669f305a841f4a245193559e126c027f48378d6",
+      "bytes": 101264
+    },
+    "invoice_limit.sym": {
+      "sha256": "674b69dcce0120c31b3fd9823acad9c0590664500f4e7dd34eaee3efc15be61e",
+      "bytes": 39924
+    },
+    "invoice_limit.wasm": {
+      "sha256": "7985dffe1ccec63b18ace704cdded8249e467168bcde258379cfec7d28acf9c9",
+      "bytes": 1752342
+    },
+    "invoice_limit_final.zkey": {
+      "sha256": "5a16be4af71e152ae4a587fac22c0ce545b00a4014c7839ba76d2b34cc6cc3f3",
+      "bytes": 342944
+    },
+    "verification_key.json": {
+      "sha256": "b75101a67ab99c954f818f80ee04c108cff2ba5bea1b5dec270c26fa0e7e7dec",
+      "bytes": 3112
+    }
+  }
+}
