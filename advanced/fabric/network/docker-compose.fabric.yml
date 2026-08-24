@@ -112,6 +112,45 @@ services:
     networks:
       - fabric
 
+  gateway:
+    build:
+      context: ../../gateway
+      dockerfile: Dockerfile
+    image: daibm-fabric-anchor-gateway:local
+    container_name: daibm-fabric-anchor-gateway
+    environment:
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: "8090"
+      FABRIC_PEER_ENDPOINT: peer0.org1.example.com:7051
+      FABRIC_PEER_HOST_ALIAS: peer0.org1.example.com
+      FABRIC_TLS_ROOT_CERT: /fabric/tls/ca.crt
+      FABRIC_IDENTITY_CERT_DIR: /fabric/msp/signcerts
+      FABRIC_IDENTITY_KEY_DIR: /fabric/msp/keystore
+    expose:
+      - "8090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+      - /run/fabric-credentials:size=1m,noexec,nosuid,nodev,mode=0700
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    depends_on:
+      peer0.org1.example.com:
+        condition: service_started
+    volumes:
+      - ../../../output/fabric/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/signcerts:/fabric/msp/signcerts:ro
+      - ../../../output/fabric/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/keystore:/fabric/msp/keystore:ro
+      - ../../../output/fabric/crypto-config/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/fabric/tls/ca.crt:ro
+    networks:
+      - fabric
+
 networks:
   fabric:
     name: daibm-fabric-demo-network
