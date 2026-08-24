@@ -179,7 +179,7 @@ def build_calibration_candidate(
     *,
     config: CalibrationTrainingConfig | None = None,
 ) -> CalibrationCandidate:
-    """Fit a deterministic candidate-only Platt calibration layer."""
+    """Fit a deterministic Platt calibration layer for governed deployment."""
 
     active_config = config or CalibrationTrainingConfig()
     ordered, labels, bounded_scores, summary = _prepare_dataset(
@@ -219,12 +219,11 @@ def build_calibration_candidate(
         limitations.append("single_class")
     elif positive_count < 5 or negative_count < 5:
         limitations.append("insufficient_class_support")
-    limitations.append("candidate_not_used_for_inference")
+    limitations.append("activation_gate_required")
 
     dataset_sha256 = summary.dataset_sha256
     artifact: dict[str, object] = {
-        "artifact_schema": "daibm.calibration-candidate.v1",
-        "candidate_only": True,
+        "artifact_schema": "daibm.platt-calibration.v2",
         "coefficients": {
             "intercept": intercept,
             "slope": slope,
@@ -242,13 +241,16 @@ def build_calibration_candidate(
             "sample_count": sample_count,
             "sha256": dataset_sha256,
         },
+        "deployment": {
+            "gate_policy": "fixed_v1",
+            "initial_status": "not_deployed",
+        },
         "limitations": limitations,
         "metrics": {
             "after": after,
             "before": before,
         },
         "model_family": "platt_logistic_calibration",
-        "promotion_status": "not_promoted",
         "status": (
             "eligible_candidate" if eligible else "exploratory_candidate"
         ),

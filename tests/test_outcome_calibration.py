@@ -59,8 +59,11 @@ def test_candidate_is_deterministic_and_reports_independently_checked_baseline_m
     )
     assert first.metrics_after["brier_score"] < first.metrics_before["brier_score"]
     assert first.metrics_after["log_loss"] < first.metrics_before["log_loss"]
-    assert first.artifact["candidate_only"] is True
-    assert first.artifact["promotion_status"] == "not_promoted"
+    assert first.artifact["artifact_schema"] == "daibm.platt-calibration.v2"
+    assert first.artifact["deployment"] == {
+        "gate_policy": "fixed_v1",
+        "initial_status": "not_deployed",
+    }
     assert first.artifact["training_input"] == "logit(original_risk_score)"
     assert json.dumps(
         first.artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -91,7 +94,7 @@ def test_single_class_data_stays_finite_and_is_explicitly_exploratory():
     assert candidate.artifact["limitations"] == [
         "small_sample",
         "single_class",
-        "candidate_not_used_for_inference",
+        "activation_gate_required",
     ]
     assert math.isfinite(candidate.slope)
     assert math.isfinite(candidate.intercept)
