@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.api import facility_router
 from app.api.anchors import router as anchor_router
+from app.api.outcomes import router as outcome_router
 from app.api.auth import router as auth_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
@@ -30,6 +31,7 @@ from app.services.integrity import (
     NoIntegrityViolation,
 )
 from app.services.anchor_dispatch import AnchorDispatchService, FabricGatewayClient
+from app.services.outcomes import OutcomeService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -38,6 +40,7 @@ def create_app(
     database: Database | None = None,
     *,
     research_settings: ResearchSettings | None = None,
+    calibration_artifact_dir: Path | None = None,
 ) -> FastAPI:
     owns_database = database is None
     active_database = database or Database.create(
@@ -65,6 +68,16 @@ def create_app(
         active_database.session_factory,
         FabricGatewayClient(FabricGatewaySettings.from_env()),
     )
+    outcome_service = OutcomeService(
+        active_database.session_factory,
+        artifact_root=(
+            calibration_artifact_dir
+            or Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "candidates"
+            / "calibration"
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -78,6 +91,7 @@ def create_app(
         application.state.workflow_service = workflow_service
         application.state.facility_service = facility_service
         application.state.anchor_dispatch_service = anchor_dispatch_service
+        application.state.outcome_service = outcome_service
         identity_service.seed_demo_accounts()
         research_service.initialize()
         yield
@@ -103,6 +117,7 @@ def create_app(
     application.include_router(workflow_router)
     application.include_router(facility_router)
     application.include_router(anchor_router)
+    application.include_router(outcome_router)
 
     @application.get("/", include_in_schema=False)
     def index():

@@ -1,0 +1,269 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import ResearchSettings
+from app.database import Database
+from app.main import create_app
+from app.models import FinancingRequestModel
+from app.models_facility import FinancingFacilityModel
+from app.models_research import (
+    DatasetVersionModel,
+    GraphSnapshotModel,
+    ModelRunModel,
+    ModelVersionModel,
+    RiskAssessmentModel,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+NOW = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def outcome_client(migrated_engine, session_factory, tmp_path):
+    database = Database(migrated_engine, session_factory)
+    application = create_app(
+        database,
+        research_settings=ResearchSettings(
+            reference_dir=ROOT / "artifacts" / "reference",
+            required=True,
+        ),
+        calibration_artifact_dir=tmp_path,
+    )
+    with TestClient(application) as client:
+        yield client
+
+
+def _seed_closed_facility(session_factory) -> uuid.UUID:
+    from app.models_identity import UserModel
+
+    with session_factory() as session:
+        financier_id = session.query(UserModel.user_id).filter_by(
+            username="financier.demo"
+        ).scalar()
+    dataset_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    model_run_id = uuid.uuid4()
+    model_version_id = uuid.uuid4()
+    assessment_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    facility_id = uuid.uuid4()
+    with session_factory.begin() as session:
+        session.add(
+            DatasetVersionModel(
+                dataset_version_id=dataset_id,
+                name="outcome-api",
+                version=str(uuid.uuid4()),
+                generation_seed=1,
+                schema_version="v1",
+                manifest={},
+                content_sha256=uuid.uuid4().hex * 2,
+                created_at=NOW,
+            )
+        )
+        session.add(
+            GraphSnapshotModel(
+                graph_snapshot_id=snapshot_id,
+                dataset_version_id=dataset_id,
+                synthetic_scenario_id=None,
+                scenario_revision=None,
+                overlay_sha256=None,
+                anchor_month=12,
+                window_start_month=1,
+                window_end_month=12,
+                feature_schema_version="v1",
+                normalization_id="norm-v1",
+                node_ordering_sha256="1" * 64,
+                adjacency_sha256="2" * 64,
+                feature_sha256="3" * 64,
+                content_sha256=uuid.uuid4().hex * 2,
+                storage_locator="memory://snapshot",
+                created_at=NOW,
+            )
+        )
+        session.add(
+            ModelRunModel(
+                model_run_id=model_run_id,
+                model_family="tgnn",
+                run_seed=1,
+                dataset_version_id=dataset_id,
+                configuration={},
+                status="completed",
+                started_at=NOW,
+                ended_at=NOW,
+                metrics={},
+            )
+        )
+        session.add(
+            ModelVersionModel(
+                model_version_id=model_version_id,
+                model_name="tgnn-api",
+                semantic_version=str(uuid.uuid4()),
+                model_family="tgnn",
+                source_run_id=model_run_id,
+                dataset_version_id=dataset_id,
+                feature_schema_version="v1",
+                inference_format="onnx",
+                artifact_locator="memory://model",
+                checkpoint_sha256="4" * 64,
+                metrics={},
+                lifecycle_status="candidate",
+                deployment_slot=None,
+                created_at=NOW,
+            )
+        )
+        session.add(
+            RiskAssessmentModel(
+                risk_assessment_id=assessment_id,
+                enterprise_id="E0001",
+                graph_snapshot_id=snapshot_id,
+                model_version_id=model_version_id,
+                input_sha256="5" * 64,
+                risk_score=0.70,
+                band="HIGH",
+                explanations=[],
+                inferred_at=NOW,
+            )
+        )
+        session.add(
+            FinancingRequestModel(
+                request_id=request_id,
+                created_at=NOW,
+                updated_at=NOW,
+                applicant_id="E0001",
+                amount=Decimal("1000.00"),
+                term_days=30,
+                features={},
+                risk_score=0.70,
+                decision="approved",
+                status="audited",
+                version=1,
+                risk_assessment_id=assessment_id,
+                risk_input_sha256="5" * 64,
+            )
+        )
+        session.add(
+            FinancingFacilityModel(
+                facility_id=facility_id,
+                request_id=request_id,
+                principal=Decimal("1000.00"),
+                outstanding_amount=Decimal("0.00"),
+                currency="CNY",
+                status="closed",
+                version=7,
+                created_by_user_id=financier_id,
+                created_at=NOW,
+                updated_at=NOW,
+                closed_at=NOW,
+            )
+        )
+    return facility_id
+
+
+def _login(client: TestClient, username: str) -> None:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": username, "password": "Demo123!"},
+    )
+    assert response.status_code == 200
+
+
+def _payload(key: uuid.UUID | None = None) -> dict:
+    return {
+        "idempotency_key": str(key or uuid.uuid4()),
+        "defaulted": False,
+        "days_past_due": 0,
+        "loss_amount": "0.00",
+        "observed_at": "2026-08-24T12:00:00Z",
+        "evidence_sha256": "a" * 64,
+        "provenance": "CONTROLLED_DEMO",
+    }
+
+
+def test_outcome_routes_are_auditor_only(outcome_client, session_factory):
+    facility_id = _seed_closed_facility(session_factory)
+    assert outcome_client.get("/api/v1/outcomes").status_code == 401
+
+    _login(outcome_client, "financier.demo")
+    assert outcome_client.get("/api/v1/outcomes").status_code == 403
+    assert outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
+    ).status_code == 403
+
+
+def test_auditor_submits_and_queries_outcome_and_candidate_run(
+    outcome_client,
+    session_factory,
+):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    payload = _payload()
+
+    created = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome",
+        json=payload,
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["outcome"]["facility_id"] == str(facility_id)
+    assert body["calibration_run"]["status"] == "exploratory_candidate"
+    assert body["calibration_run"]["promotion_status"] == "not_promoted"
+    assert "artifact_locator" not in created.text
+    outcome_id = body["outcome"]["outcome_id"]
+    run_id = body["calibration_run"]["calibration_run_id"]
+    assert outcome_client.get("/api/v1/outcomes").json() == [body["outcome"]]
+    assert outcome_client.get(f"/api/v1/outcomes/{outcome_id}").json() == body[
+        "outcome"
+    ]
+    assert outcome_client.get("/api/v1/calibration-runs").json() == [
+        body["calibration_run"]
+    ]
+    assert outcome_client.get(f"/api/v1/calibration-runs/{run_id}").json() == body[
+        "calibration_run"
+    ]
+
+    replay = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome",
+        json=payload,
+    )
+    assert replay.status_code == 201
+    assert replay.json() == body
+
+
+def test_outcome_api_maps_validation_conflict_and_not_found_without_path_leaks(
+    outcome_client,
+    session_factory,
+):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    invalid = _payload()
+    invalid["evidence_sha256"] = "A" * 64
+    assert outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=invalid
+    ).status_code == 422
+
+    created_payload = _payload()
+    assert outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=created_payload
+    ).status_code == 201
+    conflict = _payload(uuid.UUID(created_payload["idempotency_key"]))
+    conflict["days_past_due"] = 1
+    response = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=conflict
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "outcome_conflict"
+    assert "AppData" not in response.text and "artifacts" not in response.text
+    assert outcome_client.get(f"/api/v1/outcomes/{uuid.uuid4()}").status_code == 404
+    assert (
+        outcome_client.get(f"/api/v1/calibration-runs/{uuid.uuid4()}").status_code
+        == 404
+    )

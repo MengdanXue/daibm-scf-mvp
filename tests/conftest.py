@@ -10,6 +10,8 @@ from testcontainers.community.postgres import PostgresContainer
 
 
 ALL_DATA_TABLES = (
+    "calibration_runs",
+    "actual_outcomes",
     "user_sessions",
     "workflow_actions",
     "integrity_incidents",
