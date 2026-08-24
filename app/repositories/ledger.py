@@ -14,6 +14,7 @@ from app.ledger import (
     canonical_timestamp,
 )
 from app.models import LedgerEventModel
+from app.repositories.anchors import AnchorOutboxRepository
 
 __all__ = ["LedgerEventSpec", "LedgerRepository"]
 
@@ -22,6 +23,13 @@ LEDGER_LOCK_KEY = 0x444149424D
 
 
 class LedgerRepository:
+    def __init__(
+        self,
+        *,
+        anchor_repository: AnchorOutboxRepository | None = None,
+    ) -> None:
+        self.anchor_repository = anchor_repository or AnchorOutboxRepository()
+
     @staticmethod
     def acquire_global_lock(session: Session) -> None:
         session.execute(
@@ -65,6 +73,7 @@ class LedgerRepository:
             )
             session.add(event)
             session.flush()
+            self.anchor_repository.enqueue(session, event)
             appended.append(event)
             previous_hash = event.event_hash
         return appended

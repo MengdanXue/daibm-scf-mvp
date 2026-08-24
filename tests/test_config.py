@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import PostgresSettings
+from app.config import FabricGatewaySettings, PostgresSettings
 
 
 def test_settings_build_psycopg_url_without_exposing_password():
@@ -46,3 +46,24 @@ def test_settings_reject_invalid_port(monkeypatch, port):
 
     with pytest.raises(ValueError, match="POSTGRES_PORT"):
         PostgresSettings.from_env()
+
+
+def test_fabric_gateway_uses_fixed_internal_default():
+    assert FabricGatewaySettings.from_env({}) == FabricGatewaySettings(
+        base_url="http://fabric-gateway:8090",
+        timeout_seconds=5.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://user:secret@fabric-gateway:8090",
+        "http://fabric-gateway:8090/network/private/client.pem",
+        "http://fabric-gateway:8090?token=secret",
+        "file:///network/private/client.pem",
+    ],
+)
+def test_fabric_gateway_rejects_credentials_paths_and_non_http_urls(url):
+    with pytest.raises(ValueError, match="FABRIC_GATEWAY_URL"):
+        FabricGatewaySettings.from_env({"FABRIC_GATEWAY_URL": url})

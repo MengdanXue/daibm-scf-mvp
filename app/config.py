@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 
 from sqlalchemy import URL
 
@@ -68,3 +69,33 @@ class ResearchSettings:
             ),
             required=raw_required == "true",
         )
+
+
+@dataclass(frozen=True)
+class FabricGatewaySettings:
+    base_url: str
+    timeout_seconds: float = 5.0
+
+    @classmethod
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> "FabricGatewaySettings":
+        values = os.environ if environ is None else environ
+        raw_url = values.get(
+            "FABRIC_GATEWAY_URL", "http://fabric-gateway:8090"
+        ).strip()
+        parsed = urlsplit(raw_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "FABRIC_GATEWAY_URL must be an HTTP(S) service origin without "
+                "credentials, path, query, or fragment"
+            )
+        return cls(base_url=raw_url.rstrip("/"), timeout_seconds=5.0)

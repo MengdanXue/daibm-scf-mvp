@@ -9,11 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api import facility_router
+from app.api.anchors import router as anchor_router
 from app.api.auth import router as auth_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
 from app.api.workflow import router as workflow_router
-from app.config import PostgresSettings, ResearchSettings
+from app.config import FabricGatewaySettings, PostgresSettings, ResearchSettings
 from app.database import Database
 from app.schemas import FinancingRequestCreate, IntegrityRecoveryRequest
 from app.service import FinancingService
@@ -28,6 +29,7 @@ from app.services.integrity import (
     IntegrityService,
     NoIntegrityViolation,
 )
+from app.services.anchor_dispatch import AnchorDispatchService, FabricGatewayClient
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -59,6 +61,10 @@ def create_app(
     identity_service = IdentityService(active_database.session_factory)
     workflow_service = WorkflowService(active_database.session_factory)
     facility_service = FacilityService(active_database.session_factory)
+    anchor_dispatch_service = AnchorDispatchService(
+        active_database.session_factory,
+        FabricGatewayClient(FabricGatewaySettings.from_env()),
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -71,6 +77,7 @@ def create_app(
         application.state.identity_service = identity_service
         application.state.workflow_service = workflow_service
         application.state.facility_service = facility_service
+        application.state.anchor_dispatch_service = anchor_dispatch_service
         identity_service.seed_demo_accounts()
         research_service.initialize()
         yield
@@ -95,6 +102,7 @@ def create_app(
     application.include_router(auth_router)
     application.include_router(workflow_router)
     application.include_router(facility_router)
+    application.include_router(anchor_router)
 
     @application.get("/", include_in_schema=False)
     def index():
