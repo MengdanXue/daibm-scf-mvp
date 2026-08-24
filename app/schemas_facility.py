@@ -11,6 +11,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    WithJsonSchema,
     field_validator,
     model_validator,
 )
@@ -35,6 +36,7 @@ Money = Annotated[
     Decimal,
     BeforeValidator(_parse_money),
     AfterValidator(exact_money),
+    WithJsonSchema({"type": "string"}),
 ]
 
 

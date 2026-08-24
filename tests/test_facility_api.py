@@ -366,6 +366,7 @@ def test_facility_openapi_documents_resource_actions_and_string_money(
 ):
     schema = facility_client.get("/openapi.json").json()
     paths = schema["paths"]
+    components = schema["components"]["schemas"]
     for path in (
         "/api/v1/facilities",
         "/api/v1/facilities/{facility_id}",
@@ -378,9 +379,27 @@ def test_facility_openapi_documents_resource_actions_and_string_money(
     ):
         assert path in paths
     assert "201" in paths["/api/v1/facilities"]["post"]["responses"]
-    facility_schema = schema["components"]["schemas"]["FacilityResponse"]
+    assert components["CreateFacilityRequest"]["properties"]["principal"] == {
+        "type": "string",
+        "title": "Principal",
+    }
+    assert components["InstallmentRequest"]["properties"]["amount"] == {
+        "type": "string",
+        "title": "Amount",
+    }
+    assert components["SubmitPaymentRequest"]["properties"]["amount"] == {
+        "type": "string",
+        "title": "Amount",
+    }
+
+    facility_schema = components["FacilityResponse"]
     assert facility_schema["properties"]["principal"]["type"] == "string"
     assert (
         facility_schema["properties"]["outstanding_amount"]["type"]
         == "string"
     )
+    installment_schema = components["FacilityInstallmentResponse"]
+    assert installment_schema["properties"]["amount"]["type"] == "string"
+    assert installment_schema["properties"]["paid_amount"]["type"] == "string"
+    payment_schema = components["FacilityPaymentResponse"]
+    assert payment_schema["properties"]["amount"]["type"] == "string"
