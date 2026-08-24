@@ -34,73 +34,97 @@ def test_research_cli_exposes_reproducibility_commands():
 
 def test_verify_multiseed_cli_does_not_import_training_frameworks(tmp_path):
     pack = tmp_path / "pack"
-    seed_dir = pack / "seeds" / "7"
-    seed_dir.mkdir(parents=True)
-    labels = np.asarray([0, 1], dtype=np.uint8)
-    tgnn = np.asarray([0.2, 0.8], dtype=np.float32)
-    xgboost = np.asarray([0.3, 0.7], dtype=np.float32)
-    np.save(seed_dir / "labels.npy", labels, allow_pickle=False)
-    np.save(seed_dir / "tgnn-probabilities.npy", tgnn, allow_pickle=False)
-    np.save(seed_dir / "xgboost-probabilities.npy", xgboost, allow_pickle=False)
-    tgnn_artifact = seed_dir / "tgnn-artifact.pt"
-    xgboost_artifact = seed_dir / "xgboost-artifact.json"
-    tgnn_artifact.write_bytes(b"standalone-tgnn-artifact")
-    xgboost_artifact.write_text("{}\n", encoding="utf-8")
-
     def digest(path):
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
-    perfect_metrics = {
-        "roc_auc": 1.0,
-        "pr_auc": 1.0,
-        "f1": 1.0,
-        "precision": 1.0,
-        "recall": 1.0,
-        "confusion_matrix": [[1, 0], [0, 1]],
-        "brier_score": 0.04,
-    }
-    evidence = {
-        "artifact_sha256": {
-            "tgnn": digest(tgnn_artifact),
-            "xgboost": digest(xgboost_artifact),
-        },
-        "dataset_sha256": "c" * 64,
-        "labels": [0, 1],
-        "metrics": {
-            "tgnn": perfect_metrics,
-            "xgboost": {**perfect_metrics, "brier_score": 0.09},
-        },
-        "probabilities": {
-            "tgnn": [float(value) for value in tgnn],
-            "xgboost": [float(value) for value in xgboost],
-        },
-        "seed": 7,
-        "split_anchors": {"train": [12], "validation": [17], "test": [19]},
-    }
-    evidence_path = seed_dir / "evidence.json"
-    evidence_path.write_text(
-        json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-
-    files = {
-        str(path.relative_to(pack)).replace("\\", "/"): digest(path)
-        for path in (
-            evidence_path,
-            seed_dir / "labels.npy",
-            seed_dir / "tgnn-probabilities.npy",
-            seed_dir / "xgboost-probabilities.npy",
-            tgnn_artifact,
-            xgboost_artifact,
+    entries = []
+    for seed in (7, 8):
+        seed_dir = pack / "seeds" / str(seed)
+        seed_dir.mkdir(parents=True)
+        labels = np.asarray([0, 1], dtype=np.uint8)
+        tgnn = np.asarray([0.25, 0.75], dtype=np.float32)
+        xgboost = np.asarray([0.125, 0.875], dtype=np.float32)
+        np.save(seed_dir / "labels.npy", labels, allow_pickle=False)
+        np.save(seed_dir / "tgnn-probabilities.npy", tgnn, allow_pickle=False)
+        np.save(seed_dir / "xgboost-probabilities.npy", xgboost, allow_pickle=False)
+        tgnn_artifact = seed_dir / "tgnn-artifact.pt"
+        xgboost_artifact = seed_dir / "xgboost-artifact.json"
+        tgnn_artifact.write_bytes(f"standalone-tgnn-{seed}".encode("ascii"))
+        xgboost_artifact.write_text(
+            json.dumps({"seed": seed}) + "\n", encoding="utf-8"
         )
-    }
+        perfect_metrics = {
+            "roc_auc": 1.0,
+            "pr_auc": 1.0,
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "confusion_matrix": [[1, 0], [0, 1]],
+        }
+        evidence = {
+            "artifact_sha256": {
+                "tgnn": digest(tgnn_artifact),
+                "xgboost": digest(xgboost_artifact),
+            },
+            "dataset_sha256": f"{seed:064x}",
+            "labels": [0, 1],
+            "metrics": {
+                "tgnn": {**perfect_metrics, "brier_score": 0.0625},
+                "xgboost": {**perfect_metrics, "brier_score": 0.015625},
+            },
+            "probabilities": {
+                "tgnn": [0.25, 0.75],
+                "xgboost": [0.125, 0.875],
+            },
+            "seed": seed,
+            "split_anchors": {"train": [12], "validation": [17], "test": [19]},
+        }
+        evidence_path = seed_dir / "evidence.json"
+        evidence_path.write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        files = {
+            str(path.relative_to(pack)).replace("\\", "/"): digest(path)
+            for path in (
+                evidence_path,
+                seed_dir / "labels.npy",
+                seed_dir / "tgnn-probabilities.npy",
+                seed_dir / "xgboost-probabilities.npy",
+                tgnn_artifact,
+                xgboost_artifact,
+            )
+        }
+        entries.append({"seed": seed, "files": files})
+
+    def constant_summary(value):
+        return {
+            "n": 2,
+            "mean": value,
+            "sample_sd": 0.0,
+            "ci95_low": value,
+            "ci95_high": value,
+        }
+
     (pack / "manifest.json").write_text(
         json.dumps(
             {
                 "format_version": 1,
                 "provenance": "2026_EXPLORATORY_SENSITIVITY",
                 "reporting_threshold": 0.5,
-                "seed_entries": [{"seed": 7, "files": files}],
-                "seeds": [7],
+                "seed_entries": entries,
+                "seeds": [7, 8],
+                "summary": {
+                    "tgnn": {
+                        "roc_auc": constant_summary(1.0),
+                        "pr_auc": constant_summary(1.0),
+                        "brier_score": constant_summary(0.0625),
+                    },
+                    "xgboost": {
+                        "roc_auc": constant_summary(1.0),
+                        "pr_auc": constant_summary(1.0),
+                        "brier_score": constant_summary(0.015625),
+                    },
+                },
             },
             indent=2,
             sort_keys=True,

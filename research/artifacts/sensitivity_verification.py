@@ -8,6 +8,9 @@ from typing import Any
 
 import numpy as np
 
+from research.experiments.sensitivity import SeedEvidence, summarize_runs
+from research.training.metrics import evaluate_binary_predictions
+
 
 class SensitivityVerificationError(RuntimeError):
     """Raised when an exploratory sensitivity pack is incomplete or altered."""
@@ -91,7 +94,36 @@ def _finite_metric_payload(metrics: object, model: str) -> None:
         raise SensitivityVerificationError(f"{model} confusion matrix is invalid")
 
 
-def _verify_seed(root: Path, entry: object) -> dict[str, Any]:
+def _equivalent(actual: object, expected: object) -> bool:
+    if isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and set(actual) == set(expected)
+            and all(_equivalent(actual[key], value) for key, value in expected.items())
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                _equivalent(actual_value, expected_value)
+                for actual_value, expected_value in zip(actual, expected, strict=True)
+            )
+        )
+    if isinstance(expected, float):
+        return (
+            isinstance(actual, (int, float))
+            and not isinstance(actual, bool)
+            and math.isclose(float(actual), expected, rel_tol=1e-12, abs_tol=1e-12)
+        )
+    return actual == expected
+
+
+def _verify_seed(
+    root: Path,
+    entry: object,
+    reporting_threshold: float,
+) -> dict[str, Any]:
     if not isinstance(entry, dict) or not isinstance(entry.get("seed"), int):
         raise SensitivityVerificationError("seed entry is invalid")
     seed = int(entry["seed"])
@@ -169,6 +201,15 @@ def _verify_seed(root: Path, entry: object) -> dict[str, Any]:
                 f"seed {seed} {model} probabilities do not match evidence"
             )
         _finite_metric_payload(metrics[model], model)
+        recomputed = evaluate_binary_predictions(
+            labels.astype(np.uint8),
+            array,
+            threshold=reporting_threshold,
+        )
+        if not _equivalent(metrics[model], recomputed):
+            raise SensitivityVerificationError(
+                f"seed {seed} {model} metrics do not match labels and probabilities"
+            )
 
     anchors = evidence.get("split_anchors")
     if not isinstance(anchors, dict) or set(anchors) != {"train", "validation", "test"}:
@@ -201,14 +242,14 @@ def verify_sensitivity_pack(path: str | Path) -> dict[str, Any]:
     if (
         isinstance(threshold, bool)
         or not isinstance(threshold, (int, float))
-        or not 0 < float(threshold) < 1
+        or float(threshold) != 0.50
     ):
-        raise SensitivityVerificationError("reporting threshold is invalid")
+        raise SensitivityVerificationError("reporting threshold must be 0.50")
     seeds = manifest.get("seeds")
     entries = manifest.get("seed_entries")
     if (
         not isinstance(seeds, list)
-        or not seeds
+        or len(seeds) < 2
         or any(isinstance(seed, bool) or not isinstance(seed, int) for seed in seeds)
         or len(set(seeds)) != len(seeds)
         or not isinstance(entries, list)
@@ -216,7 +257,26 @@ def verify_sensitivity_pack(path: str | Path) -> dict[str, Any]:
         != seeds
     ):
         raise SensitivityVerificationError("seed manifest is invalid")
-    evidence = [_verify_seed(root, entry) for entry in entries]
+    evidence = [_verify_seed(root, entry, float(threshold)) for entry in entries]
+    records = [
+        SeedEvidence(
+            seed=payload["seed"],
+            dataset_sha256=payload["dataset_sha256"],
+            labels=tuple(payload["labels"]),
+            probabilities={
+                model: tuple(values)
+                for model, values in payload["probabilities"].items()
+            },
+            metrics=payload["metrics"],
+            artifact_sha256=payload["artifact_sha256"],
+        )
+        for payload in evidence
+    ]
+    expected_summary = summarize_runs(records)
+    if not _equivalent(manifest.get("summary"), expected_summary):
+        raise SensitivityVerificationError(
+            "manifest summary does not match verified seed evidence"
+        )
     return {
         "manifest": manifest,
         "manifest_sha256": _sha256(manifest_path),

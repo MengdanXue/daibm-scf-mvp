@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,11 @@ from research.artifacts.sensitivity_verification import (
     SensitivityVerificationError,
     verify_sensitivity_pack,
 )
-from research.experiments.runner import SensitivityConfig, run_sensitivity
+from research.experiments.runner import (
+    SensitivityConfig,
+    _publish_sensitivity_bundle,
+    run_sensitivity,
+)
 
 
 def _metrics(labels: np.ndarray, probabilities: np.ndarray) -> dict[str, object]:
@@ -157,6 +162,66 @@ def test_verifier_rejects_a_tampered_declared_file(tmp_path, monkeypatch):
         verify_sensitivity_pack(tmp_path / "pack")
 
 
+def _refresh_declared_hash(pack: Path, path: Path) -> None:
+    manifest_path = pack / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    relative = path.relative_to(pack).as_posix()
+    for entry in manifest["seed_entries"]:
+        if relative in entry["files"]:
+            entry["files"][relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            break
+    else:
+        raise AssertionError(f"undeclared test fixture path: {relative}")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def test_verifier_recomputes_metrics_instead_of_trusting_evidence(
+    tmp_path, monkeypatch
+):
+    _run_fake_pack(tmp_path, monkeypatch)
+    pack = tmp_path / "pack"
+    evidence_path = pack / "seeds" / "11" / "evidence.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["metrics"]["tgnn"]["brier_score"] = 0.999
+    evidence_path.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    _refresh_declared_hash(pack, evidence_path)
+
+    with pytest.raises(SensitivityVerificationError, match="metrics do not match"):
+        verify_sensitivity_pack(pack)
+
+
+def test_verifier_recomputes_summary_instead_of_trusting_manifest(
+    tmp_path, monkeypatch
+):
+    _run_fake_pack(tmp_path, monkeypatch)
+    manifest_path = tmp_path / "pack" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["summary"]["tgnn"]["roc_auc"]["mean"] = 0.999
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(SensitivityVerificationError, match="summary does not match"):
+        verify_sensitivity_pack(tmp_path / "pack")
+
+
+def test_verifier_rejects_non_reporting_threshold(tmp_path, monkeypatch):
+    _run_fake_pack(tmp_path, monkeypatch)
+    manifest_path = tmp_path / "pack" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["reporting_threshold"] = 0.40
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(SensitivityVerificationError, match="0.50"):
+        verify_sensitivity_pack(tmp_path / "pack")
+
+
 def test_failed_run_does_not_replace_previous_verified_pack(tmp_path, monkeypatch):
     _run_fake_pack(tmp_path, monkeypatch, seeds=(11, 12))
     previous = verify_sensitivity_pack(tmp_path / "pack")["manifest_sha256"]
@@ -171,6 +236,56 @@ def test_failed_run_does_not_replace_previous_verified_pack(tmp_path, monkeypatc
         )
 
     assert verify_sensitivity_pack(tmp_path / "pack")["manifest_sha256"] == previous
+
+
+@pytest.mark.parametrize("relationship", ["equal", "output_contains", "destination_contains"])
+def test_runner_rejects_overlapping_output_and_destination_before_writing(
+    tmp_path, monkeypatch, relationship
+):
+    _run_fake_pack(tmp_path, monkeypatch)
+    pack = tmp_path / "pack"
+    previous = verify_sensitivity_pack(pack)["manifest_sha256"]
+    if relationship == "equal":
+        output, destination = pack, pack
+    elif relationship == "output_contains":
+        output, destination = tmp_path, pack
+    else:
+        output, destination = pack / "new-runs", pack
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_sensitivity(
+            SensitivityConfig(seeds=(13,), max_epochs=1, patience=1),
+            output,
+            destination,
+        )
+
+    assert verify_sensitivity_pack(pack)["manifest_sha256"] == previous
+    assert not (pack / "new-runs").exists()
+
+
+def test_publish_failure_after_replacement_restores_previous_pack(
+    tmp_path, monkeypatch
+):
+    _run_fake_pack(tmp_path, monkeypatch)
+    destination = tmp_path / "pack"
+    previous = verify_sensitivity_pack(destination)["manifest_sha256"]
+    staging = tmp_path / "publish-staging"
+    shutil.copytree(destination, staging)
+
+    def fail_final_verification(path):
+        assert Path(path) == destination
+        raise RuntimeError("injected final verification failure")
+
+    monkeypatch.setattr(
+        "research.experiments.runner.verify_sensitivity_pack",
+        fail_final_verification,
+    )
+    with pytest.raises(RuntimeError, match="injected final verification failure"):
+        _publish_sensitivity_bundle(staging, destination)
+
+    assert verify_sensitivity_pack(destination)["manifest_sha256"] == previous
+    assert not staging.with_name(f"{staging.name}.previous").exists()
+    assert not staging.with_name(f"{staging.name}.failed").exists()
 
 
 @pytest.mark.parametrize(

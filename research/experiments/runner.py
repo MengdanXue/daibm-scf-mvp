@@ -55,6 +55,17 @@ def _validate_config(config: SensitivityConfig) -> None:
         raise ValueError("threshold must remain the fixed reporting threshold 0.50")
 
 
+def _validate_distinct_trees(output: Path, destination: Path) -> None:
+    output_root = output.resolve()
+    destination_root = destination.resolve()
+    if (
+        output_root == destination_root
+        or output_root in destination_root.parents
+        or destination_root in output_root.parents
+    ):
+        raise ValueError("output and destination must not overlap")
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -235,6 +246,7 @@ def run_sensitivity(
     _validate_config(config)
     run_output = Path(output)
     pack_destination = Path(destination)
+    _validate_distinct_trees(run_output, pack_destination)
     run_output.mkdir(parents=True, exist_ok=True)
     pack_destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
