@@ -48,14 +48,13 @@ class ActualOutcomeModel(Base):
     )
     risk_assessment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("risk_assessments.risk_assessment_id", ondelete="RESTRICT"),
         nullable=False,
         unique=True,
     )
-    model_version_id: Mapped[uuid.UUID] = mapped_column(
+    model_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("model_versions.model_version_id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     submitted_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
@@ -71,6 +70,7 @@ class ActualOutcomeModel(Base):
     evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     provenance: Mapped[str] = mapped_column(Text, nullable=False)
     original_risk_score: Mapped[float] = mapped_column(DOUBLE_PRECISION, nullable=False)
+    risk_engine_version: Mapped[str] = mapped_column(Text, nullable=False)
     risk_input_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

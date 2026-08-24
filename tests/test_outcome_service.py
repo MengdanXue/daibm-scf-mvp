@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
+from threading import Barrier
 
 import pytest
 from sqlalchemy import func, select
@@ -278,7 +280,10 @@ def test_submission_requires_auditor_closed_zero_balance_lineage_and_loss_cap(
         service.submit(facility_id, _payload(), auditor)
 
 
-@pytest.mark.parametrize("missing_field", ("risk_input_sha256", "risk_engine_version"))
+@pytest.mark.parametrize(
+    "missing_field",
+    ("risk_input_sha256", "risk_engine_version", "risk_assessed_at"),
+)
 def test_submission_rejects_incomplete_request_side_prediction_lineage(
     session_factory,
     tmp_path,
@@ -507,6 +512,36 @@ def test_unrecoverable_lazy_publication_is_durably_failed_and_audited(
     assert recovered["status"] == "failed"
     assert recovered["failure_code"] == "artifact_write_failed"
     assert recovered["artifact_integrity"] == "not_applicable"
+    with session_factory() as session:
+        event_types = list(session.scalars(select(LedgerEventModel.event_type)))
+    assert event_types.count("CALIBRATION_CANDIDATE_FAILED") == 1
+
+
+def test_concurrent_lazy_failures_append_one_durable_failure_event(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    created = service.submit(facility_id, _payload(), auditor)
+    run_id = created["calibration_run"]["calibration_run_id"]
+    barrier = Barrier(2)
+
+    def fail_recovery(*_args, **_kwargs):
+        barrier.wait(timeout=10)
+        return "missing"
+
+    monkeypatch.setattr(
+        "app.services.outcomes.recover_candidate_artifact",
+        fail_recovery,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(lambda _index: service.get_run(run_id, auditor), range(2))
+        )
+
+    assert {item["status"] for item in results} == {"failed"}
     with session_factory() as session:
         event_types = list(session.scalars(select(LedgerEventModel.event_type)))
     assert event_types.count("CALIBRATION_CANDIDATE_FAILED") == 1

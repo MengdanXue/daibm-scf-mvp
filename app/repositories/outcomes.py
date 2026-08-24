@@ -76,6 +76,17 @@ class OutcomeRepository:
     ) -> CalibrationRunModel | None:
         return session.get(CalibrationRunModel, run_id)
 
+    def get_run_for_update(
+        self,
+        session: Session,
+        run_id: uuid.UUID,
+    ) -> CalibrationRunModel | None:
+        return session.scalar(
+            select(CalibrationRunModel)
+            .where(CalibrationRunModel.calibration_run_id == run_id)
+            .with_for_update()
+        )
+
     def list_outcomes(
         self,
         session: Session,

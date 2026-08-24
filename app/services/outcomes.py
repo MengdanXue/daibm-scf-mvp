@@ -51,6 +51,9 @@ class OutcomeConflict(OutcomeError):
     """The outcome conflicts with immutable state or required lineage."""
 
 
+BUSINESS_BASELINE_ENGINE = "transparent_logistic_baseline_v0.1"
+
+
 Trainer = Callable[..., CalibrationCandidate]
 ArtifactWriter = Callable[[Path, CalibrationCandidate], StagedCalibrationArtifact]
 
@@ -134,6 +137,7 @@ class OutcomeService:
                     or application.risk_score is None
                     or not application.risk_input_sha256
                     or not application.risk_engine_version
+                    or application.risk_assessed_at is None
                 ):
                     raise OutcomeConflict(
                         "Facility request prediction lineage is incomplete"
@@ -142,30 +146,40 @@ class OutcomeService:
                     RiskAssessmentModel, application.risk_assessment_id
                 )
                 if assessment is None:
-                    raise OutcomeConflict("Risk-assessment lineage is missing")
-                model_version = session.get(
-                    ModelVersionModel, assessment.model_version_id
-                )
-                if model_version is None:
-                    raise OutcomeConflict("Model-version lineage is missing")
-                expected_engine_version = (
-                    f"{model_version.model_name}@{model_version.semantic_version}"
-                )
-                if application.risk_engine_version != expected_engine_version:
-                    raise OutcomeConflict(
-                        "Request engine lineage disagrees with assessed model version"
+                    if application.risk_engine_version != BUSINESS_BASELINE_ENGINE:
+                        raise OutcomeConflict(
+                            "Unregistered prediction engine lineage is not supported"
+                        )
+                    model_version_id = None
+                    original_risk_score = float(application.risk_score)
+                    risk_input_sha256 = application.risk_input_sha256
+                else:
+                    model_version = session.get(
+                        ModelVersionModel, assessment.model_version_id
                     )
-                if not math.isclose(
-                    float(application.risk_score),
-                    float(assessment.risk_score),
-                    rel_tol=0.0,
-                    abs_tol=1e-12,
-                ):
-                    raise OutcomeConflict("Request and assessment scores disagree")
-                if application.risk_input_sha256 != assessment.input_sha256:
-                    raise OutcomeConflict(
-                        "Request and assessment input lineage disagree"
+                    if model_version is None:
+                        raise OutcomeConflict("Model-version lineage is missing")
+                    expected_engine_version = (
+                        f"{model_version.model_name}@{model_version.semantic_version}"
                     )
+                    if application.risk_engine_version != expected_engine_version:
+                        raise OutcomeConflict(
+                            "Request engine lineage disagrees with assessed model version"
+                        )
+                    if not math.isclose(
+                        float(application.risk_score),
+                        float(assessment.risk_score),
+                        rel_tol=0.0,
+                        abs_tol=1e-12,
+                    ):
+                        raise OutcomeConflict("Request and assessment scores disagree")
+                    if application.risk_input_sha256 != assessment.input_sha256:
+                        raise OutcomeConflict(
+                            "Request and assessment input lineage disagree"
+                        )
+                    model_version_id = assessment.model_version_id
+                    original_risk_score = float(assessment.risk_score)
+                    risk_input_sha256 = assessment.input_sha256
 
                 now = self._now()
                 outcome = self.repository.add_outcome(
@@ -174,8 +188,8 @@ class OutcomeService:
                         outcome_id=uuid.uuid4(),
                         facility_id=facility.facility_id,
                         request_id=facility.request_id,
-                        risk_assessment_id=assessment.risk_assessment_id,
-                        model_version_id=assessment.model_version_id,
+                        risk_assessment_id=application.risk_assessment_id,
+                        model_version_id=model_version_id,
                         submitted_by_user_id=user.user_id,
                         idempotency_key=payload.idempotency_key,
                         request_sha256=request_sha256,
@@ -185,8 +199,9 @@ class OutcomeService:
                         observed_at=payload.observed_at,
                         evidence_sha256=payload.evidence_sha256,
                         provenance=payload.provenance,
-                        original_risk_score=float(assessment.risk_score),
-                        risk_input_sha256=assessment.input_sha256,
+                        original_risk_score=original_risk_score,
+                        risk_engine_version=application.risk_engine_version,
+                        risk_input_sha256=risk_input_sha256,
                         recorded_at=now,
                     ),
                 )
@@ -378,7 +393,7 @@ class OutcomeService:
         run_id: uuid.UUID,
     ) -> datetime:
         with self.session_factory.begin() as session:
-            run = self.repository.get_run(session, run_id)
+            run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
             if run.status == "failed":
@@ -462,7 +477,11 @@ class OutcomeService:
                     "facility_id": str(outcome.facility_id),
                     "request_id": str(outcome.request_id),
                     "risk_assessment_id": str(outcome.risk_assessment_id),
-                    "model_version_id": str(outcome.model_version_id),
+                    "model_version_id": (
+                        str(outcome.model_version_id)
+                        if outcome.model_version_id is not None
+                        else None
+                    ),
                     "request_risk_engine_version": request_risk_engine_version,
                     "original_risk_score": outcome.original_risk_score,
                     "defaulted": outcome.defaulted,
@@ -498,7 +517,12 @@ class OutcomeService:
             "facility_id": str(outcome.facility_id),
             "request_id": str(outcome.request_id),
             "risk_assessment_id": str(outcome.risk_assessment_id),
-            "model_version_id": str(outcome.model_version_id),
+            "model_version_id": (
+                str(outcome.model_version_id)
+                if outcome.model_version_id is not None
+                else None
+            ),
+            "risk_engine_version": outcome.risk_engine_version,
             "defaulted": outcome.defaulted,
             "days_past_due": outcome.days_past_due,
             "loss_amount": f"{Decimal(outcome.loss_amount):.2f}",
@@ -568,7 +592,12 @@ class OutcomeService:
             facility_id=str(outcome.facility_id),
             request_id=str(outcome.request_id),
             risk_assessment_id=str(outcome.risk_assessment_id),
-            model_version_id=str(outcome.model_version_id),
+            model_version_id=(
+                str(outcome.model_version_id)
+                if outcome.model_version_id is not None
+                else None
+            ),
+            risk_engine_version=outcome.risk_engine_version,
             risk_input_sha256=outcome.risk_input_sha256,
             evidence_sha256=outcome.evidence_sha256,
             original_score=outcome.original_risk_score,

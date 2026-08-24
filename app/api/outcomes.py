@@ -31,7 +31,8 @@ class ActualOutcomeResponse(BaseModel):
     facility_id: str
     request_id: str
     risk_assessment_id: str
-    model_version_id: str
+    model_version_id: str | None
+    risk_engine_version: str
     defaulted: bool
     days_past_due: int
     loss_amount: str

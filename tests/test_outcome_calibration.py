@@ -25,6 +25,7 @@ def _observation(index: int, score: float, defaulted: bool) -> CalibrationObserv
         request_id=f"20000000-0000-0000-0000-{index:012d}",
         risk_assessment_id=f"30000000-0000-0000-0000-{index:012d}",
         model_version_id=f"40000000-0000-0000-0000-{index:012d}",
+        risk_engine_version="tgnn-test@v1",
         risk_input_sha256=suffix,
         evidence_sha256=f"{index + 1:064x}",
         original_score=score,

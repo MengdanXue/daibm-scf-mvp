@@ -190,6 +190,139 @@ def _payload(key: uuid.UUID | None = None) -> dict:
     }
 
 
+def _command(version: int) -> dict:
+    return {"version": version, "idempotency_key": str(uuid.uuid4())}
+
+
+def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_client):
+    _login(outcome_client, "supplier.demo")
+    created = outcome_client.post(
+        "/api/v1/applications",
+        json={
+            "core_enterprise_organization_code": "CORE-001",
+            "contract_number": "SCF-OUTCOME-E2E-001",
+            "invoice_number": "INV-OUTCOME-E2E-001",
+            "amount": 1000,
+            "term_days": 90,
+            "payment_delay_days": 5,
+            "counterparty_risk": 0.2,
+            "invoice_mismatch": False,
+            "relationship_months": 36,
+            "transactions_last_30d": 20,
+        },
+    ).json()
+    request_id = created["request_id"]
+    submitted = outcome_client.post(
+        f"/api/v1/applications/{request_id}/submit",
+        json={"version": created["version"]},
+    ).json()
+
+    _login(outcome_client, "core.demo")
+    confirmed = outcome_client.post(
+        f"/api/v1/applications/{request_id}/trade-confirmation",
+        json={
+            "version": submitted["version"],
+            "confirmed": True,
+            "comment": "Verified",
+        },
+    ).json()
+
+    _login(outcome_client, "financier.demo")
+    assessed = outcome_client.post(
+        f"/api/v1/applications/{request_id}/risk-assessment",
+        json={"version": confirmed["version"]},
+    ).json()
+    decided = outcome_client.post(
+        f"/api/v1/applications/{request_id}/decision",
+        json={
+            "version": assessed["version"],
+            "decision": "approved",
+            "comment": "Approved",
+        },
+    ).json()
+
+    _login(outcome_client, "risk.demo")
+    controlled = outcome_client.post(
+        f"/api/v1/applications/{request_id}/control-action",
+        json={"version": decided["version"], "comment": "Controls complete"},
+    ).json()
+
+    _login(outcome_client, "auditor.demo")
+    audited = outcome_client.post(
+        f"/api/v1/applications/{request_id}/audit-review",
+        json={"version": controlled["version"], "comment": "Audit complete"},
+    ).json()
+
+    _login(outcome_client, "financier.demo")
+    facility_response = outcome_client.post(
+        "/api/v1/facilities",
+        json={
+            **_command(1),
+            "request_id": request_id,
+            "principal": "1000.00",
+            "currency": "RUB",
+            "installments": [
+                {"sequence": 1, "due_date": "2026-12-01", "amount": "1000.00"}
+            ],
+        },
+    )
+    assert facility_response.status_code == 201, facility_response.text
+    facility = facility_response.json()
+    facility_id = facility["facility_id"]
+    initiated = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/initiate-disbursement",
+        json=_command(facility["version"]),
+    ).json()
+    active = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/confirm-disbursement",
+        json=_command(initiated["version"]),
+    ).json()
+
+    _login(outcome_client, "supplier.demo")
+    payment_state = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/payments",
+        json={
+            **_command(active["version"]),
+            "installment_id": active["installments"][0]["installment_id"],
+            "amount": "1000.00",
+            "payment_reference": "PAY-OUTCOME-E2E-001",
+        },
+    ).json()
+    payment_id = payment_state["payments"][0]["payment_id"]
+
+    _login(outcome_client, "financier.demo")
+    repaid = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/payments/{payment_id}/decision",
+        json={
+            **_command(payment_state["version"]),
+            "decision": "confirmed",
+            "comment": "Payment verified",
+        },
+    ).json()
+
+    _login(outcome_client, "auditor.demo")
+    closed = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/close",
+        json=_command(repaid["version"]),
+    )
+    assert closed.status_code == 200, closed.text
+    outcome_payload = _payload()
+    outcome_payload["observed_at"] = datetime.now(timezone.utc).isoformat()
+
+    result = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome",
+        json=outcome_payload,
+    )
+
+    assert result.status_code == 201, result.text
+    body = result.json()
+    assert body["outcome"]["risk_engine_version"] == (
+        "transparent_logistic_baseline_v0.1"
+    )
+    assert body["outcome"]["model_version_id"] is None
+    assert body["calibration_run"]["artifact_integrity"] == "verified"
+
+
 def test_outcome_routes_are_auditor_only(outcome_client, session_factory):
     facility_id = _seed_closed_facility(session_factory)
     assert outcome_client.get("/api/v1/outcomes").status_code == 401

@@ -17,7 +17,8 @@ class CalibrationObservation:
     facility_id: str
     request_id: str
     risk_assessment_id: str
-    model_version_id: str
+    model_version_id: str | None
+    risk_engine_version: str
     risk_input_sha256: str
     evidence_sha256: str
     original_score: float
@@ -115,6 +116,7 @@ def _observation_payload(item: CalibrationObservation) -> dict[str, object]:
         "evidence_sha256": item.evidence_sha256,
         "facility_id": item.facility_id,
         "model_version_id": item.model_version_id,
+        "risk_engine_version": item.risk_engine_version,
         "observed_at": item.observed_at,
         "original_score": item.original_score,
         "outcome_id": item.outcome_id,
