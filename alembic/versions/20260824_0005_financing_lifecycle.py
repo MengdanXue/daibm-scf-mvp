@@ -18,7 +18,54 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+_PREVIOUS_LEDGER_EVENT_TYPES = (
+    "FINANCING_REQUEST",
+    "RISK_ASSESSMENT",
+    "FINANCING_DECISION",
+    "CONTROL_ACTION",
+    "MODEL_INFERENCE_COMPLETED",
+    "RISK_POLICY_TRIGGERED",
+    "CONTROL_ACTION_REQUESTED",
+    "SIMULATED_RISK_INJECTED",
+    "INTEGRITY_VIOLATION_DETECTED",
+    "LEDGER_RECOVERY_COMPLETED",
+    "APPLICATION_DRAFT_CREATED",
+    "APPLICATION_UPDATED",
+    "APPLICATION_SUBMITTED",
+    "TRADE_CONFIRMED",
+    "TRADE_RETURNED",
+    "AUDIT_REVIEW_COMPLETED",
+)
+_FACILITY_LEDGER_EVENT_TYPES = (
+    "FACILITY_CREATED",
+    "DISBURSEMENT_INITIATED",
+    "DISBURSEMENT_CONFIRMED",
+    "REPAYMENT_SUBMITTED",
+    "REPAYMENT_CONFIRMED",
+    "REPAYMENT_REJECTED",
+    "FACILITY_MARKED_OVERDUE",
+    "FACILITY_REPAID",
+    "FACILITY_CLOSED",
+)
+
+
+def _event_type_check(values: tuple[str, ...]) -> str:
+    return "event_type IN (" + ", ".join(f"'{value}'" for value in values) + ")"
+
+
 def upgrade() -> None:
+    op.drop_constraint(
+        "ck_ledger_events_event_type",
+        "ledger_events",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_ledger_events_event_type",
+        "ledger_events",
+        _event_type_check(
+            _PREVIOUS_LEDGER_EVENT_TYPES + _FACILITY_LEDGER_EVENT_TYPES
+        ),
+    )
     op.create_table(
         "financing_facilities",
         sa.Column("facility_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -341,3 +388,14 @@ def downgrade() -> None:
     ):
         op.drop_index(index, table_name="financing_facilities")
     op.drop_table("financing_facilities")
+
+    op.drop_constraint(
+        "ck_ledger_events_event_type",
+        "ledger_events",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_ledger_events_event_type",
+        "ledger_events",
+        _event_type_check(_PREVIOUS_LEDGER_EVENT_TYPES),
+    )
