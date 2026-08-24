@@ -110,8 +110,15 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
         "status",
         "artifact_locator",
         "artifact_sha256",
-        "failure_code",
-        "started_at",
+            "failure_code",
+            "deployment_status",
+            "deployment_scope",
+            "activation_mode",
+            "activated_at",
+            "deactivated_at",
+            "previous_active_run_id",
+            "activation_reason",
+            "started_at",
         "completed_at",
     }
     assert outcome_columns["model_version_id"]["nullable"] is True

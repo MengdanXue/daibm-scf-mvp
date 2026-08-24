@@ -55,6 +55,11 @@ LEDGER_EVENT_TYPES = (
     "ACTUAL_OUTCOME_RECORDED",
     "CALIBRATION_CANDIDATE_TRAINED",
     "CALIBRATION_CANDIDATE_FAILED",
+    "CALIBRATION_AUTO_ACTIVATED",
+    "CALIBRATION_AUTO_REJECTED",
+    "CALIBRATION_ROLLED_BACK",
+    "RISK_CALIBRATION_APPLIED",
+    "RISK_CALIBRATION_FALLBACK",
 )
 
 
@@ -76,6 +81,17 @@ class FinancingRequestModel(Base):
         CheckConstraint(
             "risk_score IS NULL OR risk_score BETWEEN 0 AND 1",
             name="ck_financing_requests_risk_score",
+        ),
+        CheckConstraint(
+            "raw_risk_score IS NULL OR raw_risk_score BETWEEN 0 AND 1",
+            name="ck_financing_requests_raw_risk_score",
+        ),
+        CheckConstraint(
+            "(calibration_run_id IS NULL OR (raw_risk_score IS NOT NULL "
+            "AND calibration_fallback_code IS NULL)) AND "
+            "(calibration_fallback_code IS NULL OR (calibration_run_id IS NULL "
+            "AND raw_risk_score IS NOT NULL))",
+            name="ck_financing_requests_calibration_lineage",
         ),
         CheckConstraint(
             "decision IS NULL OR decision IN ('approved', 'manual_review', 'rejected')",
@@ -129,6 +145,17 @@ class FinancingRequestModel(Base):
     term_days: Mapped[int] = mapped_column(Integer, nullable=False)
     features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     risk_score: Mapped[float | None] = mapped_column(DOUBLE_PRECISION)
+    raw_risk_score: Mapped[float | None] = mapped_column(DOUBLE_PRECISION)
+    calibration_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "calibration_runs.calibration_run_id",
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="financing_requests_calibration_run_id_fkey",
+        ),
+    )
+    calibration_fallback_code: Mapped[str | None] = mapped_column(Text)
     decision: Mapped[str | None] = mapped_column(Text)
     explanations: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB,
@@ -175,6 +202,10 @@ class FinancingRequestModel(Base):
 Index(
     "ix_financing_requests_created_at",
     FinancingRequestModel.created_at.desc(),
+)
+Index(
+    "ix_financing_requests_calibration_run_id",
+    FinancingRequestModel.calibration_run_id,
 )
 Index(
     "ix_financing_requests_decision",

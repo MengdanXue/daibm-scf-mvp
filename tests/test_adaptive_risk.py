@@ -3,13 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from app.services.adaptive_risk import (
     ActiveCalibration,
+    AdaptiveRiskInferenceService,
     apply_platt_calibration,
     evaluate_activation_gate,
+    is_strictly_newer_candidate,
     load_verified_calibration,
 )
 from app.services.outcome_calibration import CalibrationCandidate
@@ -29,6 +32,7 @@ def _candidate(
         "artifact_schema": "daibm.platt-calibration.v2",
         "coefficients": {"intercept": -0.2, "slope": 1.3},
         "configuration": {"probability_epsilon": 1e-6},
+        "dataset": {"sha256": "1" * 64},
     }
     artifact_bytes = json.dumps(
         artifact,
@@ -113,6 +117,7 @@ def test_verified_v2_artifact_applies_hand_checked_platt_transform(tmp_path):
         "artifact_schema": "daibm.platt-calibration.v2",
         "coefficients": {"intercept": 0.0, "slope": 2.0},
         "configuration": {"probability_epsilon": 1e-6},
+        "dataset": {"sha256": "1" * 64},
     }
     artifact_bytes = json.dumps(
         artifact,
@@ -129,6 +134,7 @@ def test_verified_v2_artifact_applies_hand_checked_platt_transform(tmp_path):
         expected_sha256=expected_sha256,
         run_id="00000000-0000-0000-0000-000000000001",
         deployment_scope="controlled_demo",
+        expected_dataset_sha256="1" * 64,
     )
 
     assert calibration == ActiveCalibration(
@@ -153,6 +159,7 @@ def test_artifact_loader_rejects_corruption_or_unsafe_parameters(tmp_path, mutat
         "artifact_schema": "daibm.platt-calibration.v2",
         "coefficients": {"intercept": 0.0, "slope": 1.0},
         "configuration": {"probability_epsilon": 1e-6},
+        "dataset": {"sha256": "1" * 64},
     }
     if mutation == "schema":
         artifact["artifact_schema"] = "daibm.calibration-candidate.v1"
@@ -176,7 +183,41 @@ def test_artifact_loader_rejects_corruption_or_unsafe_parameters(tmp_path, mutat
             expected_sha256=actual_sha256,
             run_id="00000000-0000-0000-0000-000000000001",
             deployment_scope="controlled_demo",
+            expected_dataset_sha256="1" * 64,
         )
+
+
+def test_artifact_loader_rejects_dataset_lineage_mismatch(tmp_path):
+    artifact = {
+        "artifact_schema": "daibm.platt-calibration.v2",
+        "coefficients": {"intercept": 0.0, "slope": 1.0},
+        "configuration": {"probability_epsilon": 1e-6},
+        "dataset": {"sha256": "1" * 64},
+    }
+    artifact_bytes = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+    path = tmp_path / "artifact.json"
+    path.write_bytes(artifact_bytes)
+
+    with pytest.raises(ValueError, match="calibration artifact"):
+        load_verified_calibration(
+            path,
+            expected_sha256=sha256,
+            run_id="run",
+            deployment_scope="controlled_demo",
+            expected_dataset_sha256="2" * 64,
+        )
+
+
+def test_replacement_order_never_allows_an_older_dataset_to_supersede_newer():
+    assert is_strictly_newer_candidate(21, active_sample_count=20) is True
+    assert is_strictly_newer_candidate(20, active_sample_count=20) is False
+    assert is_strictly_newer_candidate(20, active_sample_count=21) is False
 
 
 @pytest.mark.parametrize("score", (-0.1, 1.1, math.nan, math.inf))
@@ -193,3 +234,71 @@ def test_platt_transform_rejects_invalid_baseline_probability(score):
     with pytest.raises(ValueError, match="baseline probability"):
         apply_platt_calibration(score, calibration)
 
+
+def test_inference_service_applies_the_single_active_verified_artifact(tmp_path):
+    artifact = {
+        "artifact_schema": "daibm.platt-calibration.v2",
+        "coefficients": {"intercept": 0.0, "slope": 2.0},
+        "configuration": {"probability_epsilon": 1e-6},
+        "dataset": {"sha256": "1" * 64},
+    }
+    artifact_bytes = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+    path = tmp_path / f"{sha256}.json"
+    path.write_bytes(artifact_bytes)
+    run = SimpleNamespace(
+        calibration_run_id="00000000-0000-0000-0000-000000000001",
+        artifact_locator=str(path),
+        artifact_sha256=sha256,
+        deployment_scope="controlled_demo",
+        dataset_sha256="1" * 64,
+    )
+
+    class Repository:
+        def get_active_run(self, _session):
+            return run
+
+    result = AdaptiveRiskInferenceService(repository=Repository()).assess(
+        object(),
+        0.8,
+    )
+
+    assert result.raw_score == 0.8
+    assert result.final_score == pytest.approx(16 / 17)
+    assert result.calibration_run_id == str(run.calibration_run_id)
+    assert result.deployment_scope == "controlled_demo"
+    assert result.fallback_code is None
+
+
+def test_inference_service_falls_back_to_baseline_on_active_artifact_corruption(
+    tmp_path,
+):
+    path = tmp_path / "corrupt.json"
+    path.write_text("{}", encoding="utf-8")
+    run = SimpleNamespace(
+        calibration_run_id="00000000-0000-0000-0000-000000000001",
+        artifact_locator=str(path),
+        artifact_sha256="1" * 64,
+        deployment_scope="controlled_demo",
+        dataset_sha256="1" * 64,
+    )
+
+    class Repository:
+        def get_active_run(self, _session):
+            return run
+
+    result = AdaptiveRiskInferenceService(repository=Repository()).assess(
+        object(),
+        0.8,
+    )
+
+    assert result.final_score == 0.8
+    assert result.calibration_run_id is None
+    assert result.deployment_scope is None
+    assert result.fallback_code == "active_artifact_invalid"
+    assert result.attempted_calibration_run_id == str(run.calibration_run_id)

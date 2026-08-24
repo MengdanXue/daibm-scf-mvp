@@ -307,12 +307,17 @@ body.authenticated .auth-gate { display: none; }
 .outcome-lineage dt { color: #60718b; font-size: 7px; text-transform: uppercase; }
 .outcome-lineage dd { margin: 4px 0 0; overflow: hidden; color: #10264a; font: 800 8px Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
 .calibration-candidate { margin-top: 12px; border: 1px solid #b9cfe0; background: #10264a; color: #fff; }
-.candidate-never-promoted { padding: 8px 11px; color: #fff; background: #d55e00; font-size: 9px; font-weight: 900; letter-spacing: .05em; }
-.candidate-kpis { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); }
+.deployment-banner { padding: 8px 11px; color: #fff; background: #64748b; font-size: 9px; font-weight: 900; letter-spacing: .05em; }
+.deployment-banner[data-deployment-status="active"] { background: #176344; }
+.deployment-banner[data-deployment-status="rejected"],.deployment-banner[data-deployment-status="activation_failed"] { background: #9b3b2f; }
+.deployment-banner[data-deployment-status="superseded"] { background: #596579; }
+.candidate-kpis { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
 .candidate-kpis article { min-width: 0; padding: 11px; border-right: 1px solid rgba(255,255,255,.14); }
 .candidate-kpis span { display: block; color: #b9cbe0; font-size: 7px; }
 .candidate-kpis b { display: block; margin-top: 5px; overflow-wrap: anywhere; font: 800 8px Consolas,monospace; }
-.calibration-candidate > p { margin: 0; padding: 0 11px 10px; color: #b9cbe0; font-size: 7px; }
+.deployment-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; }
+.deployment-actions p { margin: 0; color: #b9cbe0; font-size: 7px; }
+.deployment-actions .btn { min-height: 32px; }
 
 .fabric-anchor-panel { margin: 18px 0; padding: 22px; border: 1px solid #c7d7e8; border-radius: 14px; background: linear-gradient(135deg,#f7fbff 0%,#fff 62%); box-shadow: 0 12px 34px rgba(16,38,74,.08); color: var(--wf-ink); }
 .fabric-anchor-bridge { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin-bottom: 16px; color: #51657f; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
@@ -404,6 +409,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .outcome-heading { display: grid; }
   .actual-outcome-form,.outcome-lineage dl,.candidate-kpis { grid-template-columns: 1fr; }
   .outcome-evidence-reference { grid-column: auto; }
+  .deployment-actions { align-items: stretch; flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

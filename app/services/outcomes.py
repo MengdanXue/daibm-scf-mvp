@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import uuid
 from collections.abc import Callable
@@ -20,6 +21,12 @@ from app.models_research import ModelVersionModel, RiskAssessmentModel
 from app.repositories.ledger import LedgerRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import ActualOutcomeCreate
+from app.services.adaptive_risk import (
+    evaluate_activation_gate,
+    is_strictly_newer_candidate,
+    load_verified_calibration,
+    resolve_deployment_scope,
+)
 from app.services.outcome_calibration import (
     CalibrationCandidate,
     CalibrationDatasetSummary,
@@ -59,7 +66,7 @@ ArtifactWriter = Callable[[Path, CalibrationCandidate], StagedCalibrationArtifac
 
 
 class OutcomeService:
-    """Record immutable outcomes and train candidate-only calibration layers."""
+    """Record immutable outcomes and govern adaptive calibration deployments."""
 
     def __init__(
         self,
@@ -151,7 +158,11 @@ class OutcomeService:
                             "Unregistered prediction engine lineage is not supported"
                         )
                     model_version_id = None
-                    original_risk_score = float(application.risk_score)
+                    original_risk_score = float(
+                        application.raw_risk_score
+                        if application.raw_risk_score is not None
+                        else application.risk_score
+                    )
                     risk_input_sha256 = application.risk_input_sha256
                 else:
                     model_version = session.get(
@@ -209,6 +220,8 @@ class OutcomeService:
                     self._observation(item)
                     for item in self.repository.list_all_outcomes(session)
                 )
+                provenances = tuple(item.provenance for item in observations)
+                deployment_scope = resolve_deployment_scope(provenances)
                 summary = self._fallback_summary(observations)
                 candidate: CalibrationCandidate | None = None
                 failure_code: str | None = None
@@ -265,6 +278,17 @@ class OutcomeService:
                             else None
                         ),
                         failure_code=failure_code,
+                        deployment_status="not_deployed",
+                        deployment_scope=deployment_scope,
+                        activation_mode=None,
+                        activated_at=None,
+                        deactivated_at=None,
+                        previous_active_run_id=None,
+                        activation_reason=(
+                            "not_evaluated"
+                            if candidate is not None and failure_code is None
+                            else failure_code or "training_failed"
+                        ),
                         started_at=now,
                         completed_at=completed_at,
                     ),
@@ -291,6 +315,13 @@ class OutcomeService:
                 assert outcome_id is not None and run_id is not None
                 self._mark_publication_failed(outcome_id, run_id)
                 self._discard_failed_publication(staged)
+            else:
+                assert candidate is not None
+                self._evaluate_deployment(
+                    run_id,
+                    candidate,
+                    provenances=provenances,
+                )
 
         assert outcome_id is not None and run_id is not None
         with self.session_factory() as session:
@@ -358,6 +389,96 @@ class OutcomeService:
                 )
             ]
 
+    def reconcile_deployments(self) -> None:
+        with self.session_factory() as session:
+            pending_ids = [
+                run.calibration_run_id
+                for run in self.repository.list_pending_deployment_runs(session)
+            ]
+        for run_id in pending_ids:
+            try:
+                with self.session_factory() as session:
+                    run = self.repository.get_run(session, run_id)
+                    if run is None:
+                        continue
+                    candidate = self._candidate_from_run(run)
+                    dataset = candidate.artifact.get("dataset")
+                    if not isinstance(dataset, dict):
+                        raise ValueError("calibration dataset manifest is invalid")
+                    outcome_ids = {
+                        str(value) for value in dataset.get("outcome_ids", [])
+                    }
+                    provenances = tuple(
+                        item.provenance
+                        for item in self.repository.list_all_outcomes(session)
+                        if str(item.outcome_id) in outcome_ids
+                    )
+                self._evaluate_deployment(
+                    run_id,
+                    candidate,
+                    provenances=provenances,
+                )
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                self._reject_unrecoverable_deployment(run_id)
+
+    def get_active_deployment(self, user: AuthenticatedUser) -> dict[str, Any]:
+        self._require_auditor(user)
+        with self.session_factory() as session:
+            run = self.repository.get_active_run(session)
+            if run is None:
+                raise OutcomeNotFound("active calibration deployment")
+            return self._serialize_run(run)
+
+    def rollback(
+        self,
+        expected_active_run_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        self._require_auditor(user)
+        expected_id = self._uuid(expected_active_run_id)
+        with self.session_factory.begin() as session:
+            self.repository.acquire_training_lock(session)
+            current = self.repository.get_active_run(session, for_update=True)
+            if current is None:
+                raise OutcomeNotFound("active calibration deployment")
+            if current.calibration_run_id != expected_id:
+                raise OutcomeConflict("active calibration changed; refresh and retry")
+            if current.previous_active_run_id is None:
+                raise OutcomeConflict("active calibration has no rollback predecessor")
+            restored = self.repository.get_run_for_update(
+                session,
+                current.previous_active_run_id,
+            )
+            if restored is None or restored.deployment_status != "superseded":
+                raise OutcomeConflict("rollback predecessor is unavailable")
+
+            now = self._now()
+            current.deployment_status = "superseded"
+            current.deactivated_at = now
+            session.flush()
+            restored.deployment_status = "active"
+            restored.activation_mode = "manual_rollback"
+            restored.activated_at = now
+            restored.deactivated_at = None
+            restored.activation_reason = "manual_rollback"
+            session.flush()
+            self.ledger_repository.append_many(
+                session,
+                restored.calibration_run_id,
+                [
+                    (
+                        "CALIBRATION_ROLLED_BACK",
+                        {
+                            "deactivated_run_id": str(current.calibration_run_id),
+                            "restored_run_id": str(restored.calibration_run_id),
+                            "deployment_scope": restored.deployment_scope,
+                            "expected_active_run_id": str(expected_id),
+                        },
+                    )
+                ],
+            )
+            return self._serialize_run(restored)
+
     def _replay(
         self,
         session: Session,
@@ -398,11 +519,15 @@ class OutcomeService:
                 raise RuntimeError("Committed calibration run is missing")
             if run.status == "failed":
                 return run.completed_at
+            if run.deployment_status == "active":
+                raise RuntimeError("Cannot invalidate an active deployment in place")
             run.status = "failed"
             run.artifact_locator = None
             run.artifact_sha256 = None
             run.metrics_after = None
             run.failure_code = "artifact_write_failed"
+            run.deployment_status = "activation_failed"
+            run.activation_reason = "artifact_publication_failed"
             run.completed_at = self._now()
             self.ledger_repository.append_many(
                 session,
@@ -419,13 +544,168 @@ class OutcomeService:
                             "status": "failed",
                             "artifact_sha256": None,
                             "failure_code": "artifact_write_failed",
-                            "candidate_only": True,
-                            "promotion_status": "not_promoted",
+                            "deployment_status": run.deployment_status,
+                            "activation_reason": run.activation_reason,
                         },
                     )
                 ],
             )
             return run.completed_at
+
+    def _evaluate_deployment(
+        self,
+        run_id: uuid.UUID,
+        candidate: CalibrationCandidate,
+        *,
+        provenances: tuple[str, ...],
+    ) -> None:
+        with self.session_factory.begin() as session:
+            self.repository.acquire_training_lock(session)
+            run = self.repository.get_run_for_update(session, run_id)
+            if run is None:
+                raise RuntimeError("Committed calibration run is missing")
+            if run.deployment_status != "not_deployed":
+                return
+            integrity = "not_applicable"
+            if run.artifact_locator is not None and run.artifact_sha256 is not None:
+                try:
+                    load_verified_calibration(
+                        Path(run.artifact_locator),
+                        expected_sha256=run.artifact_sha256,
+                        run_id=str(run.calibration_run_id),
+                        deployment_scope=run.deployment_scope,
+                        expected_dataset_sha256=run.dataset_sha256,
+                    )
+                    integrity = "verified"
+                except ValueError:
+                    integrity = "invalid"
+            decision = evaluate_activation_gate(
+                candidate,
+                artifact_integrity=integrity,
+                provenances=provenances,
+            )
+            run.deployment_scope = decision.deployment_scope
+            run.activation_reason = decision.reason
+            if not decision.activate:
+                run.deployment_status = "rejected"
+                event_type = "CALIBRATION_AUTO_REJECTED"
+                payload = {
+                    "calibration_run_id": str(run.calibration_run_id),
+                    "deployment_scope": decision.deployment_scope,
+                    "activation_reason": decision.reason,
+                    "sample_count": run.sample_count,
+                    "positive_count": run.positive_count,
+                    "negative_count": run.negative_count,
+                    "artifact_integrity": integrity,
+                }
+            else:
+                now = self._now()
+                previous = self.repository.get_active_run(session, for_update=True)
+                if previous is not None and not is_strictly_newer_candidate(
+                    run.sample_count,
+                    active_sample_count=previous.sample_count,
+                ):
+                    run.deployment_status = "rejected"
+                    run.activation_reason = "stale_candidate"
+                    event_type = "CALIBRATION_AUTO_REJECTED"
+                    payload = {
+                        "calibration_run_id": str(run.calibration_run_id),
+                        "deployment_scope": decision.deployment_scope,
+                        "activation_reason": run.activation_reason,
+                        "active_run_id": str(previous.calibration_run_id),
+                        "sample_count": run.sample_count,
+                        "active_sample_count": previous.sample_count,
+                        "artifact_integrity": integrity,
+                    }
+                else:
+                    if previous is not None:
+                        previous.deployment_status = "superseded"
+                        previous.deactivated_at = now
+                        session.flush()
+                    run.deployment_status = "active"
+                    run.activation_mode = "automatic"
+                    run.activated_at = now
+                    run.deactivated_at = None
+                    run.previous_active_run_id = (
+                        previous.calibration_run_id if previous is not None else None
+                    )
+                    event_type = "CALIBRATION_AUTO_ACTIVATED"
+                    payload = {
+                        "calibration_run_id": str(run.calibration_run_id),
+                        "deployment_scope": decision.deployment_scope,
+                        "activation_reason": decision.reason,
+                        "previous_active_run_id": (
+                            str(previous.calibration_run_id)
+                            if previous is not None
+                            else None
+                        ),
+                        "artifact_sha256": run.artifact_sha256,
+                        "sample_count": run.sample_count,
+                        "positive_count": run.positive_count,
+                        "negative_count": run.negative_count,
+                    }
+            self.ledger_repository.append_many(
+                session,
+                run.calibration_run_id,
+                [(event_type, payload)],
+            )
+
+    def _reject_unrecoverable_deployment(self, run_id: uuid.UUID) -> None:
+        with self.session_factory.begin() as session:
+            self.repository.acquire_training_lock(session)
+            run = self.repository.get_run_for_update(session, run_id)
+            if run is None or run.deployment_status != "not_deployed":
+                return
+            run.deployment_status = "activation_failed"
+            run.activation_reason = "artifact_unverified"
+            self.ledger_repository.append_many(
+                session,
+                run.calibration_run_id,
+                [
+                    (
+                        "CALIBRATION_AUTO_REJECTED",
+                        {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "deployment_scope": run.deployment_scope,
+                            "activation_reason": run.activation_reason,
+                            "artifact_integrity": "unavailable",
+                        },
+                    )
+                ],
+            )
+
+    @staticmethod
+    def _candidate_from_run(run: CalibrationRunModel) -> CalibrationCandidate:
+        if (
+            run.artifact_locator is None
+            or run.artifact_sha256 is None
+            or run.metrics_before is None
+            or run.metrics_after is None
+        ):
+            raise ValueError("calibration run is not deployable")
+        path = Path(run.artifact_locator)
+        if recover_candidate_artifact(path, run.artifact_sha256) != "verified":
+            raise ValueError("calibration artifact cannot be recovered")
+        artifact_bytes = path.read_bytes()
+        artifact = json.loads(artifact_bytes)
+        coefficients = artifact["coefficients"]
+        return CalibrationCandidate(
+            dataset_sha256=run.dataset_sha256,
+            sample_count=run.sample_count,
+            positive_count=run.positive_count,
+            negative_count=run.negative_count,
+            status=run.status,
+            slope=float(coefficients["slope"]),
+            intercept=float(coefficients["intercept"]),
+            metrics_before={
+                key: float(value) for key, value in run.metrics_before.items()
+            },
+            metrics_after={
+                key: float(value) for key, value in run.metrics_after.items()
+            },
+            artifact=artifact,
+            artifact_bytes=artifact_bytes,
+        )
 
     @staticmethod
     def _discard_failed_publication(staged: StagedCalibrationArtifact) -> None:
@@ -504,8 +784,8 @@ class OutcomeService:
                     "status": run.status,
                     "artifact_sha256": run.artifact_sha256,
                     "failure_code": run.failure_code,
-                    "candidate_only": True,
-                    "promotion_status": "not_promoted",
+                    "deployment_status": run.deployment_status,
+                    "activation_reason": run.activation_reason,
                 },
             ),
         ]
@@ -545,7 +825,7 @@ class OutcomeService:
                 )
             except OSError:
                 integrity = "unavailable"
-            if integrity != "verified":
+            if integrity != "verified" and run.deployment_status != "active":
                 staged = StagedCalibrationArtifact(
                     path=artifact_path,
                     staged_path=(
@@ -580,7 +860,25 @@ class OutcomeService:
             "artifact_sha256": run.artifact_sha256,
             "artifact_integrity": integrity,
             "failure_code": run.failure_code,
-            "promotion_status": "not_promoted",
+            "deployment_status": run.deployment_status,
+            "deployment_scope": run.deployment_scope,
+            "activation_mode": run.activation_mode,
+            "activation_reason": run.activation_reason,
+            "activated_at": (
+                canonical_timestamp(run.activated_at)
+                if run.activated_at is not None
+                else None
+            ),
+            "deactivated_at": (
+                canonical_timestamp(run.deactivated_at)
+                if run.deactivated_at is not None
+                else None
+            ),
+            "previous_active_run_id": (
+                str(run.previous_active_run_id)
+                if run.previous_active_run_id is not None
+                else None
+            ),
             "started_at": canonical_timestamp(run.started_at),
             "completed_at": canonical_timestamp(run.completed_at),
         }

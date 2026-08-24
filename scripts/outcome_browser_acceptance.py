@@ -189,14 +189,15 @@ def run_outcome_acceptance() -> tuple[str, Path]:
             assert "risk engine" in lineage
             assert "transparent_logistic_baseline_v0.1" in lineage
             assert expected_status in candidate
-            assert "never promoted" in candidate.lower()
+            assert "статус внедрения" in candidate
+            assert "training_not_eligible" in candidate or "gate_passed" in candidate
             assert f"n={expected_sample_count}" in candidate
             assert f"+{expected_positive_count} / −{expected_negative_count}" in candidate
             assert "brier" in candidate and "log loss" in candidate
             assert "verified" in candidate
 
             page.evaluate("window.setLanguage('zh')")
-            assert "候选未上线" in page.locator("#calibrationCandidate").inner_text()
+            assert "部署状态" in page.locator("#calibrationCandidate").inner_text()
             assert "不重训 TGNN" in page.locator("#actualOutcomePanel").inner_text()
             page.set_viewport_size({"width": 390, "height": 844})
             panel_box = page.locator("#actualOutcomePanel").bounding_box()
@@ -221,9 +222,9 @@ def run_outcome_acceptance() -> tuple[str, Path]:
             failed_badge.wait_for()
             assert "failed" in failed_badge.inner_text().lower()
             assert "exploratory" not in failed_badge.inner_text().lower()
-            assert "候选未生成" in page.locator(
-                "#calibrationCandidate .candidate-never-promoted"
-            ).inner_text()
+            assert "failed" in page.locator(
+                "#calibrationCandidate"
+            ).inner_text().lower()
             page.unroute(runs_pattern, expose_failed_run)
             assert errors == [], errors
             return facility_id, SCREENSHOT

@@ -170,13 +170,13 @@ def test_optional_fabric_mode_is_documented_without_overclaiming():
     assert "生产级区块链" in readme
 
 
-def test_actual_outcome_feedback_boundary_is_documented_without_promotion_claims():
+def test_actual_outcome_feedback_boundary_documents_governed_activation():
     readme = _read("README.md")
     demo = _read("docs/demo-script.md")
     defense = _read("docs/defense-one-page.md")
     brief = _read("docs/research-brief-en.md")
 
-    for document in (readme, demo, defense, brief):
+    for document in (demo, defense, brief):
         assert "Platt" in document
         assert "not_promoted" in document or "never promoted" in document
     for document in (defense, brief):
@@ -184,9 +184,17 @@ def test_actual_outcome_feedback_boundary_is_documented_without_promotion_claims
         assert "does not trigger on drift" in document
         assert "does not prove real-enterprise effects" in document
     assert "There is no actual-outcome feedback loop" not in brief
+    for expected in (
+        "n >= 20",
+        "Brier/log loss",
+        "единственную активную версию",
+        "仅有一个激活版本",
+        "controlled_demo",
+    ):
+        assert expected in readme
 
 
-def test_actual_outcome_browser_acceptance_covers_retry_lineage_and_candidate_boundary():
+def test_actual_outcome_browser_acceptance_covers_retry_lineage_and_deployment_boundary():
     acceptance = _read("scripts/outcome_browser_acceptance.py")
 
     for expected in (
@@ -200,7 +208,9 @@ def test_actual_outcome_browser_acceptance_covers_retry_lineage_and_candidate_bo
         "eligible_candidate",
         "expected_status",
         ".candidate-status.failed",
-        "never promoted",
+        "статус внедрения",
+        "training_not_eligible",
+        "部署状态",
         'page.set_viewport_size({"width": 390, "height": 844})',
     ):
         assert expected in acceptance
@@ -334,7 +344,7 @@ def test_health_rejects_an_invalid_ledger(client):
 
 
 def test_integrated_application_version_advances_after_acceptance(client):
-    assert client.get("/openapi.json").json()["info"]["version"] == "0.6.0"
+    assert client.get("/openapi.json").json()["info"]["version"] == "0.7.0"
 
 
 def test_ci_runs_research_suite_in_a_separate_pinned_environment():

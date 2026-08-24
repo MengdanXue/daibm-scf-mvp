@@ -20,12 +20,14 @@ from app.models_research import (
     RiskAssessmentModel,
 )
 from app.schemas_outcome import ActualOutcomeCreate
+from app.schemas_workflow import ApplicationDraftCreate
 from app.services.identity import IdentityService
 from app.services.outcomes import (
     ForbiddenOutcome,
     OutcomeConflict,
     OutcomeService,
 )
+from app.services.workflow import WorkflowService
 
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
@@ -195,7 +197,9 @@ def test_closed_facility_outcome_creates_exploratory_candidate_with_full_lineage
     assert run["artifact_integrity"] == "verified"
     assert run["artifact_sha256"]
     assert "artifact_locator" not in run
-    assert run["promotion_status"] == "not_promoted"
+    assert run["deployment_status"] == "rejected"
+    assert run["deployment_scope"] == "controlled_demo"
+    assert run["activation_reason"] == "training_not_eligible"
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(ActualOutcomeModel)) == 1
         assert session.scalar(select(func.count()).select_from(CalibrationRunModel)) == 1
@@ -203,6 +207,146 @@ def test_closed_facility_outcome_creates_exploratory_candidate_with_full_lineage
     assert {"ACTUAL_OUTCOME_RECORDED", "CALIBRATION_CANDIDATE_TRAINED"}.issubset(
         event_types
     )
+    assert "CALIBRATION_AUTO_REJECTED" in event_types
+
+
+def test_twentieth_supported_outcome_automatically_activates_verified_calibration(
+    session_factory,
+    tmp_path,
+):
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    result = None
+    auditor = None
+    for index in range(20):
+        facility_id, auditor = _seed_closed_facility(session_factory)
+        result = service.submit(
+            facility_id,
+            _payload(
+                defaulted=index < 5,
+                days_past_due=90 if index < 5 else 0,
+                loss_amount="100.00" if index < 5 else "0.00",
+                evidence_sha256=f"{index + 1:064x}",
+            ),
+            auditor,
+        )
+
+    assert result is not None and auditor is not None
+    run = result["calibration_run"]
+    assert run["sample_count"] == 20
+    assert run["positive_count"] == 5
+    assert run["negative_count"] == 15
+    assert run["deployment_status"] == "active"
+    assert run["deployment_scope"] == "controlled_demo"
+    assert run["activation_mode"] == "automatic"
+    assert run["activation_reason"] == "gate_passed"
+    assert run["activated_at"] == "2026-08-24T12:00:00.000000+00:00"
+    assert run["previous_active_run_id"] is None
+    assert service.get_active_deployment(auditor) == run
+
+    with session_factory() as session:
+        active_count = session.scalar(
+            select(func.count())
+            .select_from(CalibrationRunModel)
+            .where(CalibrationRunModel.deployment_status == "active")
+        )
+        event_types = list(session.scalars(select(LedgerEventModel.event_type)))
+    assert active_count == 1
+    assert event_types.count("CALIBRATION_AUTO_ACTIVATED") == 1
+
+    identity = IdentityService(session_factory)
+    supplier = identity.login("supplier.demo", "Demo123!").user
+    core = identity.login("core.demo", "Demo123!").user
+    financier = identity.login("financier.demo", "Demo123!").user
+    workflow = WorkflowService(session_factory)
+    draft = workflow.create_draft(
+        ApplicationDraftCreate(
+            core_enterprise_organization_code="CORE-001",
+            contract_number="SCF-AFTER-AUTO-CALIBRATION",
+            invoice_number="INV-AFTER-AUTO-CALIBRATION",
+            amount=850_000,
+            term_days=90,
+            payment_delay_days=20,
+            counterparty_risk=0.55,
+            invoice_mismatch=True,
+            relationship_months=18,
+            transactions_last_30d=12,
+        ),
+        supplier,
+    )
+    submitted = workflow.submit(draft["request_id"], draft["version"], supplier)
+    confirmed = workflow.confirm_trade(
+        draft["request_id"],
+        submitted["version"],
+        confirmed=True,
+        comment="Verified after calibration activation",
+        user=core,
+    )
+    assessed = workflow.assess_risk(
+        draft["request_id"],
+        confirmed["version"],
+        financier,
+    )
+
+    assert assessed["raw_risk_score"] != assessed["risk_score"]
+    assert (
+        assessed["risk_evidence"]["calibration_run_id"]
+        == run["calibration_run_id"]
+    )
+    assert (
+        assessed["risk_evidence"]["calibration_deployment_scope"]
+        == "controlled_demo"
+    )
+    with session_factory() as session:
+        applied_events = list(
+            session.scalars(
+                select(LedgerEventModel.event_type).where(
+                    LedgerEventModel.event_type == "RISK_CALIBRATION_APPLIED"
+                )
+            )
+        )
+    assert applied_events == ["RISK_CALIBRATION_APPLIED"]
+
+
+def test_rollback_requires_expected_active_version_and_restores_only_its_predecessor(
+    session_factory,
+    tmp_path,
+):
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    auditor = None
+    active = None
+    for index in range(21):
+        facility_id, auditor = _seed_closed_facility(session_factory)
+        result = service.submit(
+            facility_id,
+            _payload(
+                defaulted=index < 5,
+                days_past_due=90 if index < 5 else 0,
+                loss_amount="100.00" if index < 5 else "0.00",
+                evidence_sha256=f"{index + 100:064x}",
+            ),
+            auditor,
+        )
+        if result["calibration_run"]["deployment_status"] == "active":
+            active = result["calibration_run"]
+
+    assert auditor is not None and active is not None
+    assert active["previous_active_run_id"] is not None
+    with pytest.raises(OutcomeConflict, match="active calibration changed"):
+        service.rollback(uuid.uuid4(), auditor)
+
+    restored = service.rollback(active["calibration_run_id"], auditor)
+
+    assert restored["calibration_run_id"] == active["previous_active_run_id"]
+    assert restored["deployment_status"] == "active"
+    assert restored["activation_mode"] == "manual_rollback"
+    with session_factory() as session:
+        current = session.get(
+            CalibrationRunModel,
+            uuid.UUID(active["calibration_run_id"]),
+        )
+        event_types = list(session.scalars(select(LedgerEventModel.event_type)))
+    assert current is not None and current.deployment_status == "superseded"
+    assert event_types.count("CALIBRATION_ROLLED_BACK") == 1
 
 
 def test_identical_retry_is_idempotent_but_conflicting_reuse_is_rejected(
@@ -226,6 +370,35 @@ def test_identical_retry_is_idempotent_but_conflicting_reuse_is_rejected(
             ),
             auditor,
         )
+
+
+def test_startup_reconciliation_finishes_a_committed_pending_deployment(
+    session_factory,
+    tmp_path,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    created = service.submit(facility_id, _payload(), auditor)
+    run_id = uuid.UUID(created["calibration_run"]["calibration_run_id"])
+    with session_factory.begin() as session:
+        run = session.get(CalibrationRunModel, run_id)
+        assert run is not None
+        run.deployment_status = "not_deployed"
+        run.activation_reason = "not_evaluated"
+
+    service.reconcile_deployments()
+
+    with session_factory() as session:
+        reconciled = session.get(CalibrationRunModel, run_id)
+        rejection_count = session.scalar(
+            select(func.count())
+            .select_from(LedgerEventModel)
+            .where(LedgerEventModel.event_type == "CALIBRATION_AUTO_REJECTED")
+        )
+    assert reconciled is not None
+    assert reconciled.deployment_status == "rejected"
+    assert reconciled.activation_reason == "training_not_eligible"
+    assert rejection_count == 2
 
 
 def test_idempotency_normalizes_equivalent_money_and_timestamp_representations(
@@ -341,7 +514,8 @@ def test_artifact_failure_is_persisted_and_audited_without_losing_outcome(
         "failure_code": "artifact_write_failed",
         "artifact_sha256": None,
         "artifact_integrity": "not_applicable",
-        "promotion_status": "not_promoted",
+        "deployment_status": "not_deployed",
+        "activation_reason": "artifact_write_failed",
     }
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(ActualOutcomeModel)) == 1

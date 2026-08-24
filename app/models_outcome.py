@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -106,6 +106,33 @@ class CalibrationRunModel(Base):
             "failure_code IS NULL)",
             name="ck_calibration_runs_artifact_contract",
         ),
+        CheckConstraint(
+            "deployment_status IN ('not_deployed', 'active', 'superseded', "
+            "'rejected', 'activation_failed')",
+            name="ck_calibration_runs_deployment_status",
+        ),
+        CheckConstraint(
+            "deployment_scope IN ('controlled_demo', 'external_verified', 'mixed')",
+            name="ck_calibration_runs_deployment_scope",
+        ),
+        CheckConstraint(
+            "activation_mode IS NULL OR activation_mode IN "
+            "('automatic', 'manual_rollback')",
+            name="ck_calibration_runs_activation_mode",
+        ),
+        CheckConstraint(
+            "calibration_run_id IS DISTINCT FROM previous_active_run_id AND ("
+            "(deployment_status = 'active' AND status = 'eligible_candidate' "
+            "AND activation_mode IS NOT NULL "
+            "AND activated_at IS NOT NULL AND deactivated_at IS NULL) OR "
+            "(deployment_status = 'superseded' AND status = 'eligible_candidate' "
+            "AND activation_mode IS NOT NULL "
+            "AND activated_at IS NOT NULL AND deactivated_at IS NOT NULL) OR "
+            "(deployment_status IN ('not_deployed', 'rejected', 'activation_failed') "
+            "AND activation_mode IS NULL AND activated_at IS NULL "
+            "AND deactivated_at IS NULL AND previous_active_run_id IS NULL))",
+            name="ck_calibration_runs_deployment_contract",
+        ),
     )
 
     calibration_run_id: Mapped[uuid.UUID] = mapped_column(
@@ -132,12 +159,42 @@ class CalibrationRunModel(Base):
     artifact_locator: Mapped[str | None] = mapped_column(Text)
     artifact_sha256: Mapped[str | None] = mapped_column(Text)
     failure_code: Mapped[str | None] = mapped_column(Text)
+    deployment_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="not_deployed",
+        server_default="not_deployed",
+    )
+    deployment_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    activation_mode: Mapped[str | None] = mapped_column(Text)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    previous_active_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("calibration_runs.calibration_run_id", ondelete="RESTRICT"),
+    )
+    activation_reason: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="not_evaluated",
+        server_default="legacy_not_deployable",
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 Index("ix_calibration_runs_completed_at", CalibrationRunModel.completed_at.desc())
 Index("ix_calibration_runs_status", CalibrationRunModel.status)
+Index(
+    "ix_calibration_runs_previous_active_run_id",
+    CalibrationRunModel.previous_active_run_id,
+)
+Index(
+    "uq_calibration_runs_single_active",
+    CalibrationRunModel.deployment_status,
+    unique=True,
+    postgresql_where=text("deployment_status = 'active'"),
+)
 
 
 __all__ = ["ActualOutcomeModel", "CalibrationRunModel"]

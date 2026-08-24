@@ -261,6 +261,23 @@ def test_workflow_detail_exposes_trade_and_business_risk_evidence():
     assert "application.risk_evidence" in javascript
     assert javascript.count("tradeEvidence:") == 2
     assert javascript.count("businessRiskEvidence:") == 2
+
+
+def test_governed_self_training_ui_separates_training_deployment_and_score_lineage():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert '"/api/v1/calibration-deployments/active"' in javascript
+    assert '"/api/v1/calibration-deployments/rollback"' in javascript
+    assert "expected_active_run_id" in javascript
+    assert javascript.count("outcomeDeploymentStatus:") == 2
+    assert javascript.count("outcomeRollback:") == 2
+    assert "run?.deployment_status" in javascript
+    assert "active?.previous_active_run_id" in javascript
+    assert "state.activeCalibration" in javascript
+    assert "riskEvidence?.raw_score" in javascript
+    assert "riskEvidence?.final_score" in javascript
+    assert "outcomeNeverPromoted" not in javascript
+    assert "automatic promotion" not in javascript
     assert javascript.count("duplicateCheckPassed:") == 2
     assert javascript.count("researchComparisonBoundary:") == 2
 
@@ -314,7 +331,7 @@ def test_facility_tab_exposes_bilingual_lifecycle_workbench():
         assert javascript.count(f"{key}:") == 2
 
 
-def test_closed_auditor_facility_exposes_bilingual_actual_outcome_candidate_ui():
+def test_closed_auditor_facility_exposes_bilingual_governed_training_ui():
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 
     for element_id in (
@@ -336,10 +353,13 @@ def test_closed_auditor_facility_exposes_bilingual_actual_outcome_candidate_ui()
         "outcomeSubmit",
         "outcomeExploratory",
         "outcomeEligible",
-        "outcomeNeverPromoted",
         "outcomeLineageTitle",
         "outcomeMetrics",
         "outcomeArtifactIntegrity",
+        "outcomeTrainingStatus",
+        "outcomeDeploymentStatus",
+        "outcomeActivationReason",
+        "outcomeRollback",
     ):
         assert javascript.count(f"{key}:") == 2
     assert 'state.user.role === "auditor" && facility.status === "closed"' in javascript
@@ -393,7 +413,7 @@ def test_outcome_observation_default_is_second_precision_and_after_closure():
     assert 'name="observed_at" type="datetime-local" step="1"' in javascript
 
 
-def test_failed_or_missing_calibration_run_is_never_badged_as_exploratory():
+def test_failed_or_missing_training_run_is_never_badged_as_exploratory():
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 
     for status in (
@@ -403,9 +423,11 @@ def test_failed_or_missing_calibration_run_is_never_badged_as_exploratory():
         '"missing"',
     ):
         assert status in javascript
-    for key in ("outcomeFailed", "outcomeRunMissing", "outcomeNotCreated"):
+    for key in ("outcomeFailed", "outcomeRunMissing"):
         assert javascript.count(f"{key}:") == 2
-    assert 'hasCandidate ? "outcomeNeverPromoted" : "outcomeNotCreated"' in javascript
+    assert '"failed": { key: "outcomeFailed", className: "failed" }' in javascript
+    assert '"missing": { key: "outcomeRunMissing", className: "failed" }' in javascript
+    assert 'class="deployment-banner"' in javascript
     assert 'run?.status === "eligible_candidate" ? "outcomeEligible" : "outcomeExploratory"' not in javascript
 
 

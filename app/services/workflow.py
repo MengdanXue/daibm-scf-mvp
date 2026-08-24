@@ -20,6 +20,7 @@ from app.domain.workflow import (
 from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
 from app.models import FinancingRequestModel
+from app.models_outcome import CalibrationRunModel
 from app.models_workflow import WorkflowActionModel
 from app.repositories.identity import IdentityRepository
 from app.repositories.ledger import LedgerRepository
@@ -27,6 +28,7 @@ from app.repositories.workflow import WorkflowRepository
 from app.risk import assess
 from app.schemas import FinancingRequestCreate
 from app.schemas_workflow import ApplicationDraftCreate
+from app.services.adaptive_risk import AdaptiveRiskInferenceService
 
 
 class ApplicationNotFound(Exception):
@@ -59,11 +61,15 @@ class WorkflowService:
         workflow_repository: WorkflowRepository | None = None,
         identity_repository: IdentityRepository | None = None,
         ledger_repository: LedgerRepository | None = None,
+        adaptive_risk_service: AdaptiveRiskInferenceService | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.workflow_repository = workflow_repository or WorkflowRepository()
         self.identity_repository = identity_repository or IdentityRepository()
         self.ledger_repository = ledger_repository or LedgerRepository()
+        self.adaptive_risk_service = (
+            adaptive_risk_service or AdaptiveRiskInferenceService()
+        )
 
     def create_draft(
         self,
@@ -106,6 +112,9 @@ class WorkflowService:
                     term_days=payload.term_days,
                     features=risk_request.model_dump(),
                     risk_score=None,
+                    raw_risk_score=None,
+                    calibration_run_id=None,
+                    calibration_fallback_code=None,
                     decision=None,
                     explanations=None,
                     control_action=None,
@@ -267,7 +276,18 @@ class WorkflowService:
             risk_result = assess(
                 FinancingRequestCreate.model_validate(application.features)
             )
-            application.risk_score = risk_result.score
+            adaptive_result = self.adaptive_risk_service.assess(
+                session,
+                risk_result.score,
+            )
+            application.raw_risk_score = adaptive_result.raw_score
+            application.risk_score = adaptive_result.final_score
+            application.calibration_run_id = (
+                uuid.UUID(adaptive_result.calibration_run_id)
+                if adaptive_result.calibration_run_id is not None
+                else None
+            )
+            application.calibration_fallback_code = adaptive_result.fallback_code
             application.explanations = risk_result.contributions
             application.risk_assessment_id = uuid.uuid4()
             application.risk_engine_version = "transparent_logistic_baseline_v0.1"
@@ -285,14 +305,54 @@ class WorkflowService:
                 to_status=target,
                 comment=None,
                 payload={
-                    "score": risk_result.score,
-                    "band": risk_result.band,
+                    "score": adaptive_result.final_score,
+                    "raw_score": adaptive_result.raw_score,
+                    "band": self._risk_band(adaptive_result.final_score),
                     "model": "transparent_logistic_baseline_v0.1",
+                    "calibration_run_id": adaptive_result.calibration_run_id,
+                    "deployment_scope": adaptive_result.deployment_scope,
+                    "calibration_fallback_code": adaptive_result.fallback_code,
                     "assessment_id": str(application.risk_assessment_id),
                     "input_sha256": application.risk_input_sha256,
                     "provenance": "DEMO_WORKFLOW",
                 },
             )
+            if adaptive_result.calibration_run_id is not None:
+                self.ledger_repository.append_many(
+                    session,
+                    application.request_id,
+                    [
+                        (
+                            "RISK_CALIBRATION_APPLIED",
+                            {
+                                "assessment_id": str(application.risk_assessment_id),
+                                "raw_score": adaptive_result.raw_score,
+                                "final_score": adaptive_result.final_score,
+                                "calibration_run_id": adaptive_result.calibration_run_id,
+                                "deployment_scope": adaptive_result.deployment_scope,
+                            },
+                        )
+                    ],
+                )
+            elif adaptive_result.fallback_code is not None:
+                self.ledger_repository.append_many(
+                    session,
+                    application.request_id,
+                    [
+                        (
+                            "RISK_CALIBRATION_FALLBACK",
+                            {
+                                "assessment_id": str(application.risk_assessment_id),
+                                "raw_score": adaptive_result.raw_score,
+                                "final_score": adaptive_result.final_score,
+                                "fallback_code": adaptive_result.fallback_code,
+                                "attempted_calibration_run_id": (
+                                    adaptive_result.attempted_calibration_run_id
+                                ),
+                            },
+                        )
+                    ],
+                )
         return self.get(normalized_id, user)
 
     def decide(
@@ -616,6 +676,11 @@ class WorkflowService:
             )
         ]
         actions = allowed_actions(Status(application.status), Role(user.role))
+        calibration_run = (
+            session.get(CalibrationRunModel, application.calibration_run_id)
+            if application.calibration_run_id is not None
+            else None
+        )
         return {
             "request_id": str(application.request_id),
             "created_at": canonical_timestamp(application.created_at),
@@ -625,6 +690,7 @@ class WorkflowService:
             "term_days": application.term_days,
             "features": application.features,
             "risk_score": application.risk_score,
+            "raw_risk_score": application.raw_risk_score,
             "decision": application.decision,
             "explanations": application.explanations,
             "control_action": application.control_action,
@@ -663,6 +729,21 @@ class WorkflowService:
                     "input_sha256": application.risk_input_sha256,
                     "assessed_at": canonical_timestamp(application.risk_assessed_at),
                     "provenance": "DEMO_WORKFLOW",
+                    "raw_score": application.raw_risk_score,
+                    "final_score": application.risk_score,
+                    "calibration_run_id": (
+                        str(application.calibration_run_id)
+                        if application.calibration_run_id is not None
+                        else None
+                    ),
+                    "calibration_deployment_scope": (
+                        calibration_run.deployment_scope
+                        if calibration_run is not None
+                        else None
+                    ),
+                    "calibration_fallback_code": (
+                        application.calibration_fallback_code
+                    ),
                 }
                 if application.risk_assessment_id
                 and application.risk_engine_version
@@ -682,3 +763,7 @@ class WorkflowService:
             getattr(diagnostics, "constraint_name", None)
             == "uq_financing_requests_invoice_claim_sha256"
         )
+
+    @staticmethod
+    def _risk_band(score: float) -> str:
+        return "high" if score >= 0.72 else "medium" if score >= 0.45 else "low"

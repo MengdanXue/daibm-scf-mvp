@@ -27,4 +27,10 @@ class ActualOutcomeCreate(BaseModel):
         return value
 
 
-__all__ = ["ActualOutcomeCreate"]
+class CalibrationRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_active_run_id: UUID
+
+
+__all__ = ["ActualOutcomeCreate", "CalibrationRollbackRequest"]

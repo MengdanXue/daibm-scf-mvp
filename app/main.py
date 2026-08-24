@@ -94,13 +94,14 @@ def create_app(
         application.state.outcome_service = outcome_service
         identity_service.seed_demo_accounts()
         research_service.initialize()
+        outcome_service.reconcile_deployments()
         yield
         if owns_database:
             active_database.dispose()
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
-        version="0.6.0",
+        version="0.7.0",
         description=(
             "Scenario demonstrator for an auditable supply-chain finance "
             "risk loop."

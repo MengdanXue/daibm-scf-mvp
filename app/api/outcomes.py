@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import require_roles
 from app.identity import AuthenticatedUser
-from app.schemas_outcome import ActualOutcomeCreate
+from app.schemas_outcome import ActualOutcomeCreate, CalibrationRollbackRequest
 from app.services.outcomes import (
     ForbiddenOutcome,
     OutcomeConflict,
@@ -60,7 +60,13 @@ class CalibrationRunResponse(BaseModel):
     artifact_sha256: str | None
     artifact_integrity: str
     failure_code: str | None
-    promotion_status: str
+    deployment_status: str
+    deployment_scope: str
+    activation_mode: str | None
+    activation_reason: str
+    activated_at: str | None
+    deactivated_at: str | None
+    previous_active_run_id: str | None
     started_at: str
     completed_at: str
 
@@ -167,6 +173,36 @@ def get_calibration_run(
     request: Request,
 ):
     return _execute(lambda: request.app.state.outcome_service.get_run(run_id, user))
+
+
+@router.get(
+    "/api/v1/calibration-deployments/active",
+    response_model=CalibrationRunResponse,
+)
+def get_active_calibration_deployment(
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.outcome_service.get_active_deployment(user)
+    )
+
+
+@router.post(
+    "/api/v1/calibration-deployments/rollback",
+    response_model=CalibrationRunResponse,
+)
+def rollback_calibration_deployment(
+    payload: CalibrationRollbackRequest,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.outcome_service.rollback(
+            payload.expected_active_run_id,
+            user,
+        )
+    )
 
 
 __all__ = ["router"]

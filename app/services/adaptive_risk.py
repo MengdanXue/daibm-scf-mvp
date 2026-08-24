@@ -5,7 +5,9 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from app.repositories.outcomes import OutcomeRepository
 from app.services.outcome_calibration import CalibrationCandidate
 
 
@@ -26,7 +28,76 @@ class ActiveCalibration:
     deployment_scope: str
 
 
-def _deployment_scope(provenances: tuple[str, ...]) -> str:
+@dataclass(frozen=True)
+class AdaptiveRiskResult:
+    raw_score: float
+    final_score: float
+    calibration_run_id: str | None
+    deployment_scope: str | None
+    fallback_code: str | None
+    attempted_calibration_run_id: str | None = None
+
+
+class AdaptiveRiskInferenceService:
+    def __init__(self, repository: OutcomeRepository | None = None) -> None:
+        self.repository = repository or OutcomeRepository()
+
+    def assess(self, session: Any, baseline_probability: float) -> AdaptiveRiskResult:
+        active = self.repository.get_active_run(session)
+        if active is None:
+            return AdaptiveRiskResult(
+                raw_score=baseline_probability,
+                final_score=baseline_probability,
+                calibration_run_id=None,
+                deployment_scope=None,
+                fallback_code=None,
+            )
+        if active.artifact_locator is None or active.artifact_sha256 is None:
+            return self._fallback(
+                baseline_probability,
+                str(active.calibration_run_id),
+            )
+        try:
+            calibration = load_verified_calibration(
+                Path(active.artifact_locator),
+                expected_sha256=active.artifact_sha256,
+                run_id=str(active.calibration_run_id),
+                deployment_scope=active.deployment_scope,
+                expected_dataset_sha256=active.dataset_sha256,
+            )
+            final_score = apply_platt_calibration(
+                baseline_probability,
+                calibration,
+            )
+        except ValueError:
+            return self._fallback(
+                baseline_probability,
+                str(active.calibration_run_id),
+            )
+        return AdaptiveRiskResult(
+            raw_score=baseline_probability,
+            final_score=final_score,
+            calibration_run_id=str(active.calibration_run_id),
+            deployment_scope=active.deployment_scope,
+            fallback_code=None,
+        )
+
+    @staticmethod
+    def _fallback(
+        baseline_probability: float,
+        attempted_run_id: str,
+    ) -> AdaptiveRiskResult:
+        return AdaptiveRiskResult(
+            raw_score=baseline_probability,
+            final_score=baseline_probability,
+            calibration_run_id=None,
+            deployment_scope=None,
+            fallback_code="active_artifact_invalid",
+            attempted_calibration_run_id=attempted_run_id,
+        )
+
+
+def resolve_deployment_scope(provenances: tuple[str, ...]) -> str:
     normalized = set(provenances)
     if normalized == {"EXTERNAL_VERIFIED"}:
         return "external_verified"
@@ -41,7 +112,7 @@ def evaluate_activation_gate(
     artifact_integrity: str,
     provenances: tuple[str, ...],
 ) -> ActivationDecision:
-    scope = _deployment_scope(provenances)
+    scope = resolve_deployment_scope(provenances)
     if candidate.status != "eligible_candidate":
         return ActivationDecision(False, "training_not_eligible", scope)
     if candidate.sample_count < 20:
@@ -59,12 +130,21 @@ def evaluate_activation_gate(
     return ActivationDecision(True, "gate_passed", scope)
 
 
+def is_strictly_newer_candidate(
+    candidate_sample_count: int,
+    *,
+    active_sample_count: int,
+) -> bool:
+    return candidate_sample_count > active_sample_count
+
+
 def load_verified_calibration(
     path: Path,
     *,
     expected_sha256: str,
     run_id: str,
     deployment_scope: str,
+    expected_dataset_sha256: str,
 ) -> ActiveCalibration:
     try:
         artifact_bytes = Path(path).read_bytes()
@@ -75,6 +155,9 @@ def load_verified_calibration(
             raise ValueError("calibration artifact schema is not deployable")
         coefficients = artifact["coefficients"]
         configuration = artifact["configuration"]
+        dataset = artifact["dataset"]
+        if dataset.get("sha256") != expected_dataset_sha256:
+            raise ValueError("calibration artifact dataset lineage mismatch")
         slope = float(coefficients["slope"])
         intercept = float(coefficients["intercept"])
         epsilon = float(configuration["probability_epsilon"])
@@ -115,7 +198,11 @@ def apply_platt_calibration(
 __all__ = [
     "ActivationDecision",
     "ActiveCalibration",
+    "AdaptiveRiskInferenceService",
+    "AdaptiveRiskResult",
     "apply_platt_calibration",
     "evaluate_activation_gate",
+    "is_strictly_newer_candidate",
     "load_verified_calibration",
+    "resolve_deployment_scope",
 ]

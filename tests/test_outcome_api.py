@@ -351,7 +351,8 @@ def test_auditor_submits_and_queries_outcome_and_candidate_run(
     body = created.json()
     assert body["outcome"]["facility_id"] == str(facility_id)
     assert body["calibration_run"]["status"] == "exploratory_candidate"
-    assert body["calibration_run"]["promotion_status"] == "not_promoted"
+    assert body["calibration_run"]["deployment_status"] == "rejected"
+    assert body["calibration_run"]["activation_reason"] == "training_not_eligible"
     assert "artifact_locator" not in created.text
     outcome_id = body["outcome"]["outcome_id"]
     run_id = body["calibration_run"]["calibration_run_id"]
@@ -365,6 +366,10 @@ def test_auditor_submits_and_queries_outcome_and_candidate_run(
     assert outcome_client.get(f"/api/v1/calibration-runs/{run_id}").json() == body[
         "calibration_run"
     ]
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        == 404
+    )
 
     replay = outcome_client.post(
         f"/api/v1/facilities/{facility_id}/actual-outcome",

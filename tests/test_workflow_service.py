@@ -11,6 +11,7 @@ from app.models_workflow import WorkflowActionModel
 from app.repositories.ledger import LedgerRepository
 from app.schemas_workflow import ApplicationDraftCreate
 from app.services.identity import IdentityService
+from app.services.adaptive_risk import AdaptiveRiskResult
 from app.services.workflow import (
     ApplicationNotFound,
     DuplicateInvoiceClaim,
@@ -81,6 +82,7 @@ def test_five_roles_complete_one_application_with_traceable_versions(
         draft["request_id"], confirmed["version"], users["financier"]
     )
     assert 0 <= assessed["risk_score"] <= 1
+    assert assessed["raw_risk_score"] == assessed["risk_score"]
     assert assessed["explanations"]
     assert assessed["risk_evidence"]["engine_version"] == (
         "transparent_logistic_baseline_v0.1"
@@ -89,6 +91,10 @@ def test_five_roles_complete_one_application_with_traceable_versions(
     assert len(assessed["risk_evidence"]["assessment_id"]) == 36
     assert len(assessed["risk_evidence"]["input_sha256"]) == 64
     assert assessed["risk_evidence"]["provenance"] == "DEMO_WORKFLOW"
+    assert assessed["risk_evidence"]["raw_score"] == assessed["risk_score"]
+    assert assessed["risk_evidence"]["final_score"] == assessed["risk_score"]
+    assert assessed["risk_evidence"]["calibration_run_id"] is None
+    assert assessed["risk_evidence"]["calibration_fallback_code"] is None
 
     decided = service.decide(
         draft["request_id"],
@@ -142,6 +148,65 @@ def test_five_roles_complete_one_application_with_traceable_versions(
         "FINANCING_DECISION",
         "CONTROL_ACTION",
         "AUDIT_REVIEW_COMPLETED",
+    ]
+
+
+def test_invalid_active_calibration_falls_back_with_persisted_audit_lineage(
+    session_factory,
+):
+    users = demo_users(session_factory)
+
+    class CorruptActiveCalibration:
+        def assess(self, _session, baseline_score):
+            return AdaptiveRiskResult(
+                raw_score=baseline_score,
+                final_score=baseline_score,
+                calibration_run_id=None,
+                deployment_scope=None,
+                fallback_code="active_artifact_invalid",
+            )
+
+    service = WorkflowService(
+        session_factory,
+        adaptive_risk_service=CorruptActiveCalibration(),
+    )
+    draft = service.create_draft(draft_payload(), users["supplier"])
+    submitted = service.submit(draft["request_id"], 1, users["supplier"])
+    confirmed = service.confirm_trade(
+        draft["request_id"],
+        submitted["version"],
+        confirmed=True,
+        comment="Verified",
+        user=users["core_enterprise"],
+    )
+
+    assessed = service.assess_risk(
+        draft["request_id"],
+        confirmed["version"],
+        users["financier"],
+    )
+
+    assert assessed["raw_risk_score"] == assessed["risk_score"]
+    assert assessed["risk_evidence"]["calibration_run_id"] is None
+    assert (
+        assessed["risk_evidence"]["calibration_fallback_code"]
+        == "active_artifact_invalid"
+    )
+    with session_factory() as session:
+        stored = session.get(
+            FinancingRequestModel,
+            uuid.UUID(assessed["request_id"]),
+        )
+        event_types = list(
+            session.scalars(
+                select(LedgerEventModel.event_type).order_by(LedgerEventModel.id)
+            )
+        )
+    assert stored is not None
+    assert stored.calibration_fallback_code == "active_artifact_invalid"
+    assert event_types[-2:] == [
+        "RISK_ASSESSMENT",
+        "RISK_CALIBRATION_FALLBACK",
     ]
 
 

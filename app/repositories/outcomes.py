@@ -87,6 +87,40 @@ class OutcomeRepository:
             .with_for_update()
         )
 
+    def get_active_run(
+        self,
+        session: Session,
+        *,
+        for_update: bool = False,
+    ) -> CalibrationRunModel | None:
+        statement = select(CalibrationRunModel).where(
+            CalibrationRunModel.deployment_status == "active"
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return session.scalar(statement)
+
+    def list_pending_deployment_runs(
+        self,
+        session: Session,
+    ) -> list[CalibrationRunModel]:
+        return list(
+            session.scalars(
+                select(CalibrationRunModel)
+                .where(
+                    CalibrationRunModel.status.in_(
+                        ("exploratory_candidate", "eligible_candidate")
+                    ),
+                    CalibrationRunModel.deployment_status == "not_deployed",
+                    CalibrationRunModel.activation_reason == "not_evaluated",
+                )
+                .order_by(
+                    CalibrationRunModel.completed_at,
+                    CalibrationRunModel.calibration_run_id,
+                )
+            )
+        )
+
     def list_outcomes(
         self,
         session: Session,
