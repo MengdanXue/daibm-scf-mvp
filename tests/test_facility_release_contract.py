@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts import facility_browser_acceptance
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,3 +51,13 @@ def test_browser_acceptance_has_a_discoverable_cli() -> None:
     assert result.returncode == 0, result.stderr
     assert "approved audited application" in result.stdout
     assert "facility-lifecycle-acceptance.png" in result.stdout
+
+
+def test_browser_facility_plan_preserves_workflow_cny_without_fx() -> None:
+    plan = facility_browser_acceptance._facility_plan({"amount": 1000.01})
+
+    assert plan == {
+        "currency": "CNY",
+        "principal": "1000.01",
+        "installments": ("500.00", "500.01"),
+    }

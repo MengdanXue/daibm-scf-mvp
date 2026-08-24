@@ -74,6 +74,22 @@ def _money_from_cents(cents: int) -> str:
     return f"{cents // 100}.{cents % 100:02d}"
 
 
+def _facility_plan(application: dict[str, Any]) -> dict[str, Any]:
+    principal = Decimal(str(application["amount"])).quantize(Decimal("0.01"))
+    principal_cents = int(principal * 100)
+    first_cents = principal_cents // 2
+    second_cents = principal_cents - first_cents
+    assert first_cents > 0 and first_cents + second_cents == principal_cents
+    return {
+        "currency": "CNY",
+        "principal": _money_from_cents(principal_cents),
+        "installments": (
+            _money_from_cents(first_cents),
+            _money_from_cents(second_cents),
+        ),
+    }
+
+
 def _select_application(page: Any) -> tuple[dict[str, Any], set[str]]:
     applications = _fetch_json(page, "/api/v1/applications?limit=200")
     facilities = _fetch_json(page, "/api/v1/facilities?limit=200")
@@ -139,22 +155,17 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
 
             financier = pages["financier"]
             application, _ = _select_application(financier)
-            principal = Decimal(str(application["amount"])).quantize(
-                Decimal("0.01")
-            )
-            principal_cents = int(principal * 100)
-            first_cents = principal_cents // 2
-            second_cents = principal_cents - first_cents
-            assert first_cents > 0 and first_cents + second_cents == principal_cents
-            first_amount = _money_from_cents(first_cents)
-            second_amount = _money_from_cents(second_cents)
-            principal_text = _money_from_cents(principal_cents)
+            facility_plan = _facility_plan(application)
+            principal_text = facility_plan["principal"]
+            first_amount, second_amount = facility_plan["installments"]
 
             financier.locator('[data-view-button="facilities"]').first.click()
             form = financier.locator("#facilityCreateForm")
             form.locator('[name="request_id"]').fill(application["request_id"])
             form.locator('[name="principal"]').fill(principal_text)
-            form.locator('[name="currency"]').select_option("RUB")
+            form.locator('[name="currency"]').select_option(
+                facility_plan["currency"]
+            )
             due_one = date.today() + timedelta(days=30)
             due_two = date.today() + timedelta(days=60)
             form.locator('[name="due_date_1"]').fill(due_one.isoformat())
@@ -173,6 +184,7 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
             )
             assert created["request_id"] == application["request_id"]
             assert created["principal"] == principal_text
+            assert created["currency"] == "CNY"
             assert [item["amount"] for item in created["installments"]] == [
                 first_amount,
                 second_amount,
