@@ -79,7 +79,7 @@ class FacilityRepository:
             session.scalars(
                 select(PaymentModel)
                 .where(PaymentModel.facility_id == facility_id)
-                .order_by(PaymentModel.payment_reference)
+                .order_by(PaymentModel.submitted_at, PaymentModel.payment_id)
             )
         )
 

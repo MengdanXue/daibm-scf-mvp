@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -321,24 +321,34 @@ def test_repository_add_lookup_and_ordered_child_lists(session_factory):
         session.add_all(
             [
                 PaymentModel(
-                    payment_id=uuid.uuid4(),
+                    payment_id=uuid.UUID(int=3),
                     facility_id=facility.facility_id,
                     installment_id=installments[0].installment_id,
                     submitted_by_user_id=user_id,
                     amount=Decimal("100.00"),
-                    payment_reference="PAY-002",
+                    payment_reference="PAY-Z",
                     status="submitted",
                     submitted_at=now,
                 ),
                 PaymentModel(
-                    payment_id=uuid.uuid4(),
+                    payment_id=uuid.UUID(int=2),
                     facility_id=facility.facility_id,
                     installment_id=installments[0].installment_id,
                     submitted_by_user_id=user_id,
                     amount=Decimal("50.00"),
-                    payment_reference="PAY-001",
+                    payment_reference="PAY-A",
                     status="submitted",
-                    submitted_at=now,
+                    submitted_at=now + timedelta(seconds=1),
+                ),
+                PaymentModel(
+                    payment_id=uuid.UUID(int=1),
+                    facility_id=facility.facility_id,
+                    installment_id=installments[0].installment_id,
+                    submitted_by_user_id=user_id,
+                    amount=Decimal("25.00"),
+                    payment_reference="PAY-M",
+                    status="submitted",
+                    submitted_at=now + timedelta(seconds=1),
                 ),
             ]
         )
@@ -346,7 +356,10 @@ def test_repository_add_lookup_and_ordered_child_lists(session_factory):
     with session_factory() as session:
         assert repository.get_by_request(session, request_id).facility_id == facility.facility_id
         assert [item.sequence for item in repository.list_installments(session, facility.facility_id)] == [1, 2]
-        assert [item.payment_reference for item in repository.list_payments(session, facility.facility_id)] == ["PAY-001", "PAY-002"]
+        assert [
+            item.payment_reference
+            for item in repository.list_payments(session, facility.facility_id)
+        ] == ["PAY-Z", "PAY-M", "PAY-A"]
         assert repository.find_action(session, uuid.uuid4()) is None
 
 
