@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -132,6 +133,11 @@ class InstallmentModel(Base):
             "sequence",
             name="uq_facility_installments_facility_sequence",
         ),
+        UniqueConstraint(
+            "facility_id",
+            "installment_id",
+            name="uq_facility_installments_facility_installment",
+        ),
     )
 
     installment_id: Mapped[uuid.UUID] = mapped_column(
@@ -182,6 +188,15 @@ class PaymentModel(Base):
             "payment_reference",
             name="uq_facility_payments_facility_reference",
         ),
+        ForeignKeyConstraint(
+            ["facility_id", "installment_id"],
+            [
+                "facility_installments.facility_id",
+                "facility_installments.installment_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_facility_payments_owned_installment",
+        ),
     )
 
     payment_id: Mapped[uuid.UUID] = mapped_column(
@@ -195,7 +210,6 @@ class PaymentModel(Base):
     )
     installment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("facility_installments.installment_id", ondelete="RESTRICT"),
         nullable=False,
     )
     submitted_by_user_id: Mapped[uuid.UUID] = mapped_column(
@@ -221,6 +235,11 @@ class PaymentModel(Base):
 
 Index("ix_facility_payments_facility_id", PaymentModel.facility_id)
 Index("ix_facility_payments_installment_id", PaymentModel.installment_id)
+Index(
+    "ix_facility_payments_facility_installment",
+    PaymentModel.facility_id,
+    PaymentModel.installment_id,
+)
 Index("ix_facility_payments_submitted_by_user_id", PaymentModel.submitted_by_user_id)
 Index("ix_facility_payments_decided_by_user_id", PaymentModel.decided_by_user_id)
 Index("ix_facility_payments_submitted_at", PaymentModel.submitted_at)

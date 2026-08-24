@@ -236,6 +236,49 @@ def test_database_rejects_invalid_outstanding_and_duplicate_idempotency(
             )
 
 
+def test_payment_must_reference_an_installment_owned_by_the_same_facility(
+    session_factory,
+):
+    from app.models_facility import InstallmentModel, PaymentModel
+
+    request_a, user_a = _seed_prerequisites(session_factory)
+    request_b, user_b = _seed_prerequisites(session_factory)
+    facility_a = _facility(request_id=request_a, user_id=user_a)
+    facility_b = _facility(request_id=request_b, user_id=user_b)
+    installment_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    with session_factory.begin() as session:
+        session.add_all([facility_a, facility_b])
+        session.add(
+            InstallmentModel(
+                installment_id=installment_id,
+                facility_id=facility_a.facility_id,
+                sequence=1,
+                due_date=date(2026, 10, 1),
+                amount=Decimal("1000.00"),
+                paid_amount=Decimal("0.00"),
+                status="scheduled",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        with session_factory.begin() as session:
+            session.add(
+                PaymentModel(
+                    payment_id=uuid.uuid4(),
+                    facility_id=facility_b.facility_id,
+                    installment_id=installment_id,
+                    submitted_by_user_id=user_b,
+                    amount=Decimal("100.00"),
+                    payment_reference="CROSS-FACILITY",
+                    status="submitted",
+                    submitted_at=now,
+                )
+            )
+
+
 def test_repository_add_lookup_and_ordered_child_lists(session_factory):
     from app.models_facility import InstallmentModel, PaymentModel
     from app.repositories.facility import FacilityRepository

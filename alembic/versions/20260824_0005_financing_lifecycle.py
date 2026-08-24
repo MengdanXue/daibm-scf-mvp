@@ -138,6 +138,11 @@ def upgrade() -> None:
             "sequence",
             name="uq_facility_installments_facility_sequence",
         ),
+        sa.UniqueConstraint(
+            "facility_id",
+            "installment_id",
+            name="uq_facility_installments_facility_installment",
+        ),
     )
     op.create_index(
         "ix_facility_installments_facility_id",
@@ -186,9 +191,13 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
-            ["installment_id"],
-            ["facility_installments.installment_id"],
+            ["facility_id", "installment_id"],
+            [
+                "facility_installments.facility_id",
+                "facility_installments.installment_id",
+            ],
             ondelete="RESTRICT",
+            name="fk_facility_payments_owned_installment",
         ),
         sa.ForeignKeyConstraint(
             ["submitted_by_user_id"],
@@ -219,6 +228,11 @@ def upgrade() -> None:
             "facility_payments",
             [column],
         )
+    op.create_index(
+        "ix_facility_payments_facility_installment",
+        "facility_payments",
+        ["facility_id", "installment_id"],
+    )
 
     op.create_table(
         "facility_actions",
@@ -300,6 +314,7 @@ def downgrade() -> None:
 
     for index in (
         "ix_facility_payments_submitted_at",
+        "ix_facility_payments_facility_installment",
         "ix_facility_payments_decided_by_user_id",
         "ix_facility_payments_submitted_by_user_id",
         "ix_facility_payments_installment_id",
