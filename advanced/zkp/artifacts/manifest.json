@@ -24,6 +24,16 @@
   ],
   "demo_trusted_setup": true,
   "trust_boundary": "Fixed local demo parameters; do not treat them as production ceremony evidence.",
+  "sources": {
+    "circuits/invoice_limit.circom": {
+      "sha256": "f5c2ad30a362f98af50a5880e86102589ebe1e466885c595b0f121359bbdfeba",
+      "bytes": 1066
+    },
+    "package-lock.json": {
+      "sha256": "c7c6d3c0612837e0c4ce0d5b0d13c140179d09385ce73400211713ea019aa3b9",
+      "bytes": 29649
+    }
+  },
   "artifacts": {
     "invoice_limit.r1cs": {
       "sha256": "4df42a591e77ac48481e02afb669f305a841f4a245193559e126c027f48378d6",

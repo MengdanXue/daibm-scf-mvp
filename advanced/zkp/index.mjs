@@ -11,6 +11,7 @@ const WASM_PATH = fileURLToPath(new URL('./artifacts/invoice_limit.wasm', import
 const PROVING_KEY_PATH = fileURLToPath(new URL('./artifacts/invoice_limit_final.zkey', import.meta.url));
 const VERIFICATION_KEY_URL = new URL('./artifacts/verification_key.json', import.meta.url);
 let singleThreadCurvePromise;
+let artifactVerificationPromise;
 
 async function ensureSingleThreadCurve() {
   if (!singleThreadCurvePromise) {
@@ -19,6 +20,13 @@ async function ensureSingleThreadCurve() {
   // snarkjs verification does not expose a single-thread option. Supplying its
   // documented ffjavascript singleton keeps short-lived CLI/tests worker-free.
   globalThis.curve_bn128 = await singleThreadCurvePromise;
+}
+
+async function ensureArtifactsVerified() {
+  if (!artifactVerificationPromise) {
+    artifactVerificationPromise = verifyManifest();
+  }
+  return artifactVerificationPromise;
 }
 
 function requireBigInt(name, value) {
@@ -42,6 +50,7 @@ function requireFieldElement(name, value) {
 }
 
 export async function proveInvoiceLimit({ invoiceAmount, financingLimit, salt }) {
+  await ensureArtifactsVerified();
   requireUint64('invoiceAmount', invoiceAmount);
   requireUint64('financingLimit', financingLimit);
   requireFieldElement('salt', salt);
@@ -69,6 +78,7 @@ export async function proveInvoiceLimit({ invoiceAmount, financingLimit, salt })
 }
 
 export async function verifyInvoiceLimit(proof, publicSignals) {
+  await ensureArtifactsVerified();
   if (!proof || !Array.isArray(publicSignals) || publicSignals.length !== 2) {
     return false;
   }

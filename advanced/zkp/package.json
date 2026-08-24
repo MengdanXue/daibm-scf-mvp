@@ -17,5 +17,8 @@
   },
   "devDependencies": {
     "circom2": "0.2.23"
+  },
+  "overrides": {
+    "underscore": "1.13.8"
   }
 }

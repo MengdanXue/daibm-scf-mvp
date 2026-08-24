@@ -46,6 +46,7 @@ run(process.execPath, [SNARKJS, 'powersoftau', 'beacon', ptau0, ptauBeacon, BEAC
 run(process.execPath, [SNARKJS, 'powersoftau', 'prepare', 'phase2', ptauBeacon, ptauPhase2]);
 run(process.execPath, [SNARKJS, 'groth16', 'setup', r1cs, ptauPhase2, zkey0]);
 run(process.execPath, [SNARKJS, 'zkey', 'beacon', zkey0, zkeyFinal, BEACON, '10']);
+run(process.execPath, [SNARKJS, 'zkey', 'verify', r1cs, ptauPhase2, zkeyFinal]);
 
 const destinations = {
   'invoice_limit.r1cs': r1cs,
@@ -78,6 +79,10 @@ const manifest = {
   public_signals: ['commitment', 'financingLimit'],
   demo_trusted_setup: true,
   trust_boundary: 'Fixed local demo parameters; do not treat them as production ceremony evidence.',
+  sources: {
+    'circuits/invoice_limit.circom': await hashEntry(CIRCUIT),
+    'package-lock.json': await hashEntry(join(ROOT, 'package-lock.json')),
+  },
   artifacts,
 };
 await writeFile(join(ARTIFACTS, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
