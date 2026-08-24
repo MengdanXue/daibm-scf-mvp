@@ -114,3 +114,7 @@
 Если сеть недоступна, система продолжает работать локально: контейнеры FastAPI, PostgreSQL и веб-интерфейс не требуют внешнего API. Перед выступлением запустите `start-demo.cmd`, дождитесь сообщения о готовности и один раз создайте тестовую заявку.
 
 如果现场没有网络，FastAPI、PostgreSQL 和页面容器仍可完全本地运行，不依赖外部 API。建议答辩前运行 `start-demo.cmd`，等待健康检查通过，并创建一笔测试申请确认流程正常。
+
+Перед выходом выполните только читающую проверку `.\.venv\Scripts\python.exe scripts\defense_preflight.py`. Для намеренно чистого локального сброса используйте только `reset-defense-demo.cmd` и точное подтверждение `RESET DEMO`. / 上场前运行只读预检 `.\.venv\Scripts\python.exe scripts\defense_preflight.py`。如确需全新本地重置，只运行 `reset-defense-demo.cmd` 并准确输入 `RESET DEMO`。
+
+Если браузер недоступен, откройте `docs/defense-one-page.pdf` и `docs/research-brief-en.pdf`; затем при необходимости покажите `output/five-role-acceptance.png`, `output/defense-video/*.webm` и `output/research/sensitivity-pack/`. / 如果浏览器不可用，打开 `docs/defense-one-page.pdf` 与 `docs/research-brief-en.pdf`，并按需展示截图、可选视频和五种子科研证据包。

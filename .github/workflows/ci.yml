@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -29,8 +29,11 @@ jobs:
       - name: Verify promoted research artifact
         run: python -m research.cli verify --reference artifacts/reference
 
+      - name: Run defense document and preflight contracts
+        run: python -m pytest tests/test_defense_documents.py tests/test_defense_preflight.py tests/test_release_contract.py -q
+
       - name: Run application and PostgreSQL integration tests
-        run: python -m pytest tests --ignore=tests/research -q
+        run: python -m pytest tests --ignore=tests/research --ignore=tests/test_defense_documents.py --ignore=tests/test_defense_preflight.py --ignore=tests/test_release_contract.py -q
 
   research-tests:
     runs-on: ubuntu-latest
@@ -38,10 +41,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip

@@ -47,6 +47,12 @@ draft → submitted → trade_confirmed → risk_assessed
 
 完整演示讲稿：[docs/demo-script.md](docs/demo-script.md)。
 
+Одностраничные резервные материалы / 单页答辩备用材料：
+
+- [docs/defense-one-page.pdf](docs/defense-one-page.pdf) - русско-китайский лист защиты / 俄中双语答辩速查；
+- [docs/research-brief-en.pdf](docs/research-brief-en.pdf) - English research brief;
+- editable sources / 可编辑源文件: [docs/defense-one-page.md](docs/defense-one-page.md), [docs/research-brief-en.md](docs/research-brief-en.md).
+
 ## Быстрый запуск / 快速启动
 
 Требуется запущенный Docker Desktop. В Windows дважды щёлкните `start-demo.cmd`. Скрипт соберёт два контейнера, дождётся реального health check и откроет браузер.

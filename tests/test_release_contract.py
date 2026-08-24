@@ -231,6 +231,8 @@ def test_ci_runs_research_suite_in_a_separate_pinned_environment():
     workflow = _read(".github/workflows/ci.yml")
     application_job, research_job = workflow.split("  research-tests:", 1)
 
+    assert workflow.count("actions/checkout@v5") == 2
+    assert workflow.count("actions/setup-python@v6") == 2
     assert "requirements-dev.txt" in application_job
     assert "tests --ignore=tests/research" in application_job
     assert "cache-dependency-path: requirements-research.txt" in research_job
