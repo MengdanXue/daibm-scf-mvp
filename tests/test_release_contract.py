@@ -199,6 +199,7 @@ def test_actual_outcome_browser_acceptance_covers_retry_lineage_and_candidate_bo
         "exploratory_candidate",
         "eligible_candidate",
         "expected_status",
+        ".candidate-status.failed",
         "never promoted",
         'page.set_viewport_size({"width": 390, "height": 844})',
     ):

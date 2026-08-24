@@ -205,6 +205,26 @@ def run_outcome_acceptance() -> tuple[str, Path]:
 
             SCREENSHOT.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(SCREENSHOT), full_page=True)
+
+            def expose_failed_run(route: Route) -> None:
+                response = route.fetch()
+                runs = response.json()
+                for run in runs:
+                    run["status"] = "failed"
+                    run["artifact_integrity"] = "failed"
+                route.fulfill(status=200, json=runs)
+
+            runs_pattern = "**/api/v1/calibration-runs?limit=50"
+            page.route(runs_pattern, expose_failed_run)
+            page.locator("#refreshFacilities").click()
+            failed_badge = page.locator("#actualOutcomePanel .candidate-status.failed")
+            failed_badge.wait_for()
+            assert "failed" in failed_badge.inner_text().lower()
+            assert "exploratory" not in failed_badge.inner_text().lower()
+            assert "候选未生成" in page.locator(
+                "#calibrationCandidate .candidate-never-promoted"
+            ).inner_text()
+            page.unroute(runs_pattern, expose_failed_run)
             assert errors == [], errors
             return facility_id, SCREENSHOT
         finally:

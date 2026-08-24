@@ -299,6 +299,7 @@ body.authenticated .auth-gate { display: none; }
 .actual-outcome-panel[aria-busy="true"] { opacity: .68; cursor: progress; }
 .candidate-status.exploratory { border-color: #e8b37e; color: #8c4b11; background: #fff8ef; }
 .candidate-status.eligible { border-color: #9dcdb8; color: #176344; background: #f1faf6; }
+.candidate-status.failed { border-color: #dfb7bd; color: #7a2733; background: #f8e4e7; }
 .outcome-lineage { margin-top: 15px; }
 .outcome-lineage > b { color: #10264a; font-size: 10px; }
 .outcome-lineage dl { margin: 9px 0 0; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }

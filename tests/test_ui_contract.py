@@ -393,6 +393,22 @@ def test_outcome_observation_default_is_second_precision_and_after_closure():
     assert 'name="observed_at" type="datetime-local" step="1"' in javascript
 
 
+def test_failed_or_missing_calibration_run_is_never_badged_as_exploratory():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for status in (
+        '"eligible_candidate"',
+        '"exploratory_candidate"',
+        '"failed"',
+        '"missing"',
+    ):
+        assert status in javascript
+    for key in ("outcomeFailed", "outcomeRunMissing", "outcomeNotCreated"):
+        assert javascript.count(f"{key}:") == 2
+    assert 'hasCandidate ? "outcomeNeverPromoted" : "outcomeNotCreated"' in javascript
+    assert 'run?.status === "eligible_candidate" ? "outcomeEligible" : "outcomeExploratory"' not in javascript
+
+
 def test_facility_javascript_preserves_exact_money_and_covers_every_api_action():
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 
