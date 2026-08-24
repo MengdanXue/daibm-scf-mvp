@@ -25,6 +25,25 @@ def logout(page) -> None:
     page.locator("#authGate").wait_for(state="visible")
 
 
+def _wait_for_created_application(page, contract_number: str) -> str:
+    page.locator(
+        "#workflowDetail .detail-top h2",
+        has_text=contract_number,
+    ).wait_for()
+    return page.locator("#workflowDetail .detail-top p").inner_text().strip()
+
+
+def _select_application(page, application_id: str) -> None:
+    application = page.locator(
+        f'[data-application-id="{application_id}"]'
+    )
+    application.wait_for()
+    application.click()
+    page.locator("#workflowDetail .detail-top p").filter(
+        has_text=application_id
+    ).wait_for()
+
+
 def _exercise_primary(page) -> None:
     page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
@@ -51,8 +70,10 @@ def _exercise_primary(page) -> None:
             field.fill(value)
     page.locator('#applicationForm [name="invoice_mismatch"]').check()
     page.locator('#applicationForm button[type="submit"]').click()
-    page.locator('[data-workflow-action="submit"]').wait_for()
-    application_id = page.locator("#workflowDetail .detail-top p").inner_text()
+    application_id = _wait_for_created_application(
+        page,
+        values["contract_number"],
+    )
     trade_text = page.locator(".workflow-evidence").inner_text()
     assert "Проверка дублирования пройдена" in trade_text
     page.locator('[data-workflow-action="submit"]').click()
@@ -60,6 +81,7 @@ def _exercise_primary(page) -> None:
     logout(page)
 
     login(page, "core.demo")
+    _select_application(page, application_id)
     assert application_id in page.locator("#workflowDetail").inner_text()
     page.locator("#workflowComment").fill(
         "Подтверждено в демонстрационном процессе"
@@ -69,6 +91,7 @@ def _exercise_primary(page) -> None:
     logout(page)
 
     login(page, "financier.demo")
+    _select_application(page, application_id)
     assert application_id in page.locator("#workflowDetail").inner_text()
     page.locator('[data-workflow-action="assess"]').click()
     page.locator('#workflowDetail [data-status="risk_assessed"]').wait_for()
@@ -101,6 +124,7 @@ def _exercise_primary(page) -> None:
     logout(page)
 
     login(page, "risk.demo")
+    _select_application(page, application_id)
     assert application_id in page.locator("#workflowDetail").inner_text()
     page.locator("#workflowComment").fill("Назначен стандартный мониторинг")
     page.locator('[data-workflow-action="control"]').click()
@@ -108,6 +132,7 @@ def _exercise_primary(page) -> None:
     logout(page)
 
     login(page, "auditor.demo")
+    _select_application(page, application_id)
     assert application_id in page.locator("#workflowDetail").inner_text()
     timeline_before_audit = page.locator("#workflowTimeline").inner_text()
     for expected_action in (
