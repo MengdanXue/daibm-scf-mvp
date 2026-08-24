@@ -115,6 +115,34 @@ def test_launcher_opens_browser_only_after_semantic_health_check():
     assert "$payload.research_core.status -eq 'ready'" in launcher
 
 
+def test_reset_launcher_is_separate_confirmed_and_scoped():
+    reset = _read("reset-defense-demo.cmd")
+    start = _read("start-demo.cmd")
+
+    assert "RESET DEMO" in reset
+    assert 'if not "%RESET_CONFIRM%"=="RESET DEMO"' in reset
+    assert reset.count("docker compose down -v") == 1
+    assert 'call "%~dp0start-demo.cmd"' in reset
+    assert "scripts\\defense_preflight.py" in reset
+    assert reset.index("docker compose down -v") < reset.index(
+        'call "%~dp0start-demo.cmd"'
+    ) < reset.index("scripts\\defense_preflight.py")
+    assert "Remove-Item" not in reset
+    assert "rm -rf" not in reset
+    assert "docker compose down -v" not in start
+
+
+def test_reset_launcher_messages_and_documentation_are_bilingual():
+    messages = json.loads(_read("launcher-messages.json"))
+    readme = _read("README.md")
+
+    for key in ("reset_warning", "reset_cancelled", "preflight_failed"):
+        assert any("а" <= character.lower() <= "я" for character in messages[key])
+        assert any("\u4e00" <= character <= "\u9fff" for character in messages[key])
+    assert "reset-defense-demo.cmd" in readme
+    assert "scripts\\defense_preflight.py" in readme
+
+
 def test_release_documentation_exposes_reproducibility_and_true_boundaries():
     readme = _read("README.md")
     design = _read("docs/mvp-design.md")
