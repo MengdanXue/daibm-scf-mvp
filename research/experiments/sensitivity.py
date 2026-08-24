@@ -47,6 +47,17 @@ class SeedEvidence:
             MappingProxyType(dict(self.artifact_sha256)),
         )
 
+    def to_payload(self) -> dict[str, Any]:
+        """Return a detached, JSON-ready representation of this evidence."""
+        return {
+            "seed": int(self.seed),
+            "dataset_sha256": str(self.dataset_sha256),
+            "labels": _thaw_value(self.labels),
+            "probabilities": _thaw_value(self.probabilities),
+            "metrics": _thaw_value(self.metrics),
+            "artifact_sha256": _thaw_value(self.artifact_sha256),
+        }
+
 
 class MetricSummary(TypedDict):
     n: int
@@ -78,6 +89,16 @@ def _freeze_value(value: Any) -> Any:
         )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_value(item) for item in value)
+    return value
+
+
+def _thaw_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_value(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
     return value
 
 

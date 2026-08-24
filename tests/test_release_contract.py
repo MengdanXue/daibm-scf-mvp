@@ -184,6 +184,17 @@ def test_integrated_application_version_advances_after_acceptance(client):
     assert client.get("/openapi.json").json()["info"]["version"] == "0.6.0"
 
 
+def test_ci_runs_research_suite_in_a_separate_pinned_environment():
+    workflow = _read(".github/workflows/ci.yml")
+    application_job, research_job = workflow.split("  research-tests:", 1)
+
+    assert "requirements-dev.txt" in application_job
+    assert "tests --ignore=tests/research" in application_job
+    assert "cache-dependency-path: requirements-research.txt" in research_job
+    assert "python -m pip install -r requirements-research.txt" in research_job
+    assert "python -m pytest tests/research -q" in research_job
+
+
 def test_release_documentation_lists_five_demo_roles_and_workflow():
     readme = _read("README.md")
     demo = _read("docs/demo-script.md")

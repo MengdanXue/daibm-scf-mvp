@@ -1,3 +1,4 @@
+import json
 from dataclasses import FrozenInstanceError, replace
 
 import numpy as np
@@ -128,6 +129,19 @@ def test_seed_evidence_is_immutable():
         evidence.metrics["tgnn"]["confusion_matrix"][0][0] = 99
     with pytest.raises(TypeError):
         evidence.artifact_sha256["tgnn"] = "c" * 64
+
+
+def test_seed_evidence_payload_is_json_ready_and_detached():
+    evidence = _seed_evidence(1, 0.60)
+
+    payload = evidence.to_payload()
+    encoded = json.dumps(payload, sort_keys=True)
+    payload["metrics"]["tgnn"]["confusion_matrix"][0][0] = 99
+    payload["probabilities"]["tgnn"][0] = 0.99
+
+    assert '"dataset_sha256": "dataset-1"' in encoded
+    assert evidence.metrics["tgnn"]["confusion_matrix"][0][0] == 1
+    assert evidence.probabilities["tgnn"][0] == pytest.approx(0.2)
 
 
 def test_summary_rejects_a_missing_required_metric():
