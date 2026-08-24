@@ -275,6 +275,7 @@
     <div class="nav-label" data-i18n="navTitle">Навигация</div>
     <nav class="nav">
       <button data-view-button="workflow" onclick="switchView('workflow')"><span class="nav-icon">↳</span><span data-wf-i18n="navWorkflow">Рабочий контур</span></button>
+      <button data-view-button="facilities" onclick="switchView('facilities')"><span class="nav-icon">₽</span><span data-wf-i18n="navFacilities">Финансирование</span></button>
       <button class="active" data-view-button="overview" onclick="switchView('overview')"><span class="nav-icon">⌂</span><span data-i18n="navOverview">Обзор</span></button>
       <button data-view-button="research" onclick="switchView('research')"><span class="nav-icon">⌁</span><span data-i18n="navResearch">Исследовательское ядро</span></button>
       <button data-view-button="review" onclick="switchView('review')"><span class="nav-icon">◎</span><span data-i18n="navReview">Оценка риска</span></button>
@@ -287,7 +288,7 @@
   <div class="content">
     <header class="topbar">
       <div class="top-title"><strong data-i18n="systemName">Интеллектуальный аудит финансирования цепей поставок</strong><span data-i18n="systemSub">Демонстрационный контур принятия решений</span></div>
-      <div class="mobile-menu"><button data-view-button="workflow" onclick="switchView('workflow')" data-wf-i18n="navWorkflow">Рабочий контур</button><button data-view-button="overview" onclick="switchView('overview')" data-i18n="navOverview">Обзор</button><button data-view-button="research" onclick="switchView('research')" data-i18n="navResearch">Исследование</button><button data-view-button="review" onclick="switchView('review')" data-i18n="navReview">Оценка риска</button><button data-view-button="ledger" onclick="switchView('ledger')" data-i18n="navLedger">Реестр</button><button data-view-button="model" onclick="switchView('model')" data-i18n="navModel">Методика</button></div>
+      <div class="mobile-menu"><button data-view-button="workflow" onclick="switchView('workflow')" data-wf-i18n="navWorkflow">Рабочий контур</button><button data-view-button="facilities" onclick="switchView('facilities')" data-wf-i18n="navFacilities">Финансирование</button><button data-view-button="overview" onclick="switchView('overview')" data-i18n="navOverview">Обзор</button><button data-view-button="research" onclick="switchView('research')" data-i18n="navResearch">Исследование</button><button data-view-button="review" onclick="switchView('review')" data-i18n="navReview">Оценка риска</button><button data-view-button="ledger" onclick="switchView('ledger')" data-i18n="navLedger">Реестр</button><button data-view-button="model" onclick="switchView('model')" data-i18n="navModel">Методика</button></div>
       <div class="top-actions"><span class="live" data-i18n="online">Система доступна</span><div id="currentUser" class="current-user" hidden></div><button id="logoutButton" class="logout-button" type="button" data-wf-i18n="logout">Выйти</button><button class="icon-button" onclick="toggleFullscreen()" data-i18n-title="fullscreen" title="Полный экран">⛶</button><div class="lang"><button data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button data-lang="zh" onclick="setLanguage('zh')">中文</button></div></div>
     </header>
 
@@ -342,6 +343,40 @@
           <div class="workflow-panel-head"><div><span>TRACE</span><h2 data-wf-i18n="workflowTimeline">История передачи ответственности</h2><p data-wf-i18n="timelineHint">Каждый переход выполняется атомарно и фиксируется вместе с ролью исполнителя.</p></div><span class="tamper-label">TAMPER-EVIDENT</span></div>
           <div id="workflowTimeline" class="workflow-timeline"><p class="timeline-empty" data-wf-i18n="timelineEmpty">Выберите заявку, чтобы увидеть историю.</p></div>
         </section>
+      </section>
+      <section id="view-facilities" class="view facility-view">
+        <div class="facility-heading">
+          <div><span class="eyebrow" data-wf-i18n="facilityEyebrow">КОНТРОЛИРУЕМЫЙ ЖИЗНЕННЫЙ ЦИКЛ</span><h1 data-wf-i18n="facilityTitle">От выдачи до закрытия</h1><p data-wf-i18n="facilitySubtitle">Точная сумма, график и допустимое действие текущей роли в одном досье.</p></div>
+          <button id="refreshFacilities" class="btn btn-soft" type="button" data-wf-i18n="refresh">Обновить данные</button>
+        </div>
+
+        <section id="facilityCreatePanel" class="facility-create-panel" hidden>
+          <div class="workflow-panel-head"><div><span>01 / FACILITY</span><h2 data-wf-i18n="facilityCreate">Создать финансирование</h2><p data-wf-i18n="facilityCreateHint">Укажите одобренную и завершившую аудит заявку; сумма графика должна точно совпадать с основной суммой.</p></div><span class="synthetic-tag">CONTROLLED SIMULATION</span></div>
+          <form id="facilityCreateForm" class="facility-create-form">
+            <label><span data-wf-i18n="facilityRequestId">ID одобренной заявки</span><input name="request_id" autocomplete="off" required></label>
+            <label><span data-wf-i18n="facilityPrincipal">Основная сумма</span><input name="principal" inputmode="decimal" value="100000.00" pattern="[0-9]+([.,][0-9]{1,2})?" required></label>
+            <label><span data-wf-i18n="facilityCurrency">Валюта</span><select name="currency"><option value="RUB">RUB</option><option value="CNY">CNY</option></select></label>
+            <label><span data-wf-i18n="facilityDueOne">Срок транша 1</span><input name="due_date_1" type="date" value="2026-10-01" required></label>
+            <label><span data-wf-i18n="facilityAmountOne">Сумма транша 1</span><input name="amount_1" inputmode="decimal" value="50000.00" pattern="[0-9]+([.,][0-9]{1,2})?" required></label>
+            <label><span data-wf-i18n="facilityDueTwo">Срок транша 2</span><input name="due_date_2" type="date" value="2026-11-01" required></label>
+            <label><span data-wf-i18n="facilityAmountTwo">Сумма транша 2</span><input name="amount_2" inputmode="decimal" value="50000.00" pattern="[0-9]+([.,][0-9]{1,2})?" required></label>
+            <button class="btn btn-primary facility-create-submit" type="submit" data-wf-i18n="facilityCreateAction">Создать график</button>
+          </form>
+          <p id="facilityCreateError" class="facility-inline-error" role="alert"></p>
+        </section>
+
+        <div class="facility-workbench-grid">
+          <section class="workflow-panel facility-list-panel">
+            <div class="workflow-panel-head"><div><span>FACILITIES</span><h2 data-wf-i18n="facilityListTitle">Финансовые досье</h2><p data-wf-i18n="facilityListHint">Доступ определяется организацией и текущей ролью.</p></div><span id="facilityCount" class="task-badge">0</span></div>
+            <div id="facilityList" class="facility-list" aria-live="polite"></div>
+          </section>
+          <section id="facilityDetail" class="workflow-panel facility-detail-panel" aria-live="polite">
+            <div class="workflow-empty"><span>₽</span><b data-wf-i18n="facilitySelect">Выберите финансовое досье</b><p data-wf-i18n="facilitySelectHint">Здесь появятся точный баланс, график, платежи и действие вашей роли.</p></div>
+            <div id="facilityMoneyRail" hidden></div><div id="facilityInstallments" hidden></div><div id="facilityPayments" hidden></div><div id="facilityActions" hidden></div>
+          </section>
+        </div>
+
+        <div class="facility-evidence-boundary"><b data-wf-i18n="facilityBoundaryTitle">Граница демонстрации</b><span data-wf-i18n="facilityBoundary">Это контролируемая имитация жизненного цикла; система не выполняет реальный банковский перевод.</span></div>
       </section>
       <section id="view-overview" class="view active">
         <div class="hero">

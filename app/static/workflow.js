@@ -45,7 +45,29 @@
       assess_risk: "Оценка риска", decide: "Финансовое решение", apply_control: "Контрольное действие", audit: "Аудиторская проверка",
       tradeEvidence: "Отпечаток торговых реквизитов", businessRiskEvidence: "Доказательство бизнес-оценки", duplicateCheckPassed: "Проверка дублирования пройдена",
       researchComparisonBoundary: "Бизнес-оценка использует прозрачную базовую модель; TGNN показана отдельно как исследовательское сравнение.",
-      duplicate_invoice_claim: "Этот счёт-фактура уже используется в другой заявке"
+      duplicate_invoice_claim: "Этот счёт-фактура уже используется в другой заявке",
+      navFacilities: "Финансирование", facilityEyebrow: "КОНТРОЛИРУЕМЫЙ ЖИЗНЕННЫЙ ЦИКЛ", facilityTitle: "От выдачи до закрытия",
+      facilitySubtitle: "Точная сумма, график и допустимое действие текущей роли в одном досье.", facilityCreate: "Создать финансирование",
+      facilityCreateHint: "Укажите одобренную и завершившую аудит заявку; сумма графика должна точно совпадать с основной суммой.",
+      facilityRequestId: "ID одобренной заявки", facilityPrincipal: "Основная сумма", facilityCurrency: "Валюта",
+      facilityDueOne: "Срок транша 1", facilityAmountOne: "Сумма транша 1", facilityDueTwo: "Срок транша 2", facilityAmountTwo: "Сумма транша 2",
+      facilityCreateAction: "Создать график", facilityListTitle: "Финансовые досье", facilityListHint: "Доступ определяется организацией и текущей ролью.",
+      facilitySelect: "Выберите финансовое досье", facilitySelectHint: "Здесь появятся точный баланс, график, платежи и действие вашей роли.",
+      facilityPaid: "Уже погашено", facilityOutstanding: "Остаток", facilityInstallments: "График погашения", facilityPayments: "Платежи",
+      facilityBoundaryTitle: "Граница демонстрации", facilityBoundary: "Это контролируемая имитация жизненного цикла; система не выполняет реальный банковский перевод.",
+      facilityNoItems: "Финансовых досье пока нет. Финансист может создать одно из одобренной заявки.", facilityNoPayments: "Платежи ещё не представлены.",
+      facilityEvidence: "След выдачи", facilityActionStation: "Действие текущей роли", facilityNoAction: "На этой стадии у текущей роли нет допустимых действий.",
+      facilityVersion: "Версия команды", facilityInstallment: "Транш", facilityDueDate: "Срок", facilityAmount: "Сумма", facilityPaidAmount: "Погашено",
+      facilityPaymentReference: "Референс платежа", facilityDecisionComment: "Комментарий к решению", facilitySubmitPayment: "Представить платёж",
+      facilityConfirmPayment: "Подтвердить платёж", facilityRejectPayment: "Отклонить платёж", facilityMarkOverdue: "Отметить просрочку",
+      facilityInitiate: "Инициировать выдачу", facilityConfirmDisbursement: "Подтвердить выдачу", facilityClose: "Закрыть досье",
+      facilityCreated: "График финансирования создан", facilityActionComplete: "Жизненный цикл обновлён", facilityInvalidMoney: "Введите положительные суммы с точностью до копейки.",
+      facilityScheduleMismatch: "Суммы двух траншей должны точно совпадать с основной суммой.", facilityRequiredFields: "Заполните обязательные поля действия.",
+      ready_for_disbursement: "Готово к выдаче", disbursed: "Выдача инициирована", active: "Активно", overdue: "Просрочено", repaid: "Погашено", closed: "Закрыто",
+      installment_scheduled: "По графику", installment_partially_paid: "Частично погашено", installment_paid: "Погашено", installment_overdue: "Просрочено",
+      payment_submitted: "На проверке", payment_confirmed: "Подтверждён", payment_rejected: "Отклонён",
+      facility_not_found: "Финансовое досье не найдено или недоступно вашей роли.", forbidden_role: "Текущая роль не может выполнить это действие.",
+      facility_precondition_failed: "Для создания нужна одобренная заявка с завершённым аудитом и совпадающей суммой.", facility_conflict: "Данные изменились или действие больше недоступно. Обновите досье и повторите с новой командой."
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
@@ -79,7 +101,27 @@
       decide: "融资决策", apply_control: "控制措施", audit: "审计核验",
       tradeEvidence: "交易凭证字段指纹", businessRiskEvidence: "业务评分证据", duplicateCheckPassed: "重复融资校验已通过",
       researchComparisonBoundary: "业务评分使用透明基线模型；TGNN 仅作为独立科研对照展示。",
-      duplicate_invoice_claim: "该发票已被另一笔融资申请使用"
+      duplicate_invoice_claim: "该发票已被另一笔融资申请使用",
+      navFacilities: "融资生命周期", facilityEyebrow: "受控融资生命周期", facilityTitle: "从放款到结清",
+      facilitySubtitle: "在同一份卷宗中查看精确金额、分期计划和当前角色允许执行的操作。", facilityCreate: "创建融资设施",
+      facilityCreateHint: "填写已批准且完成审计的申请；分期金额之和必须与本金完全一致。", facilityRequestId: "已批准申请 ID",
+      facilityPrincipal: "本金", facilityCurrency: "币种", facilityDueOne: "第 1 期到期日", facilityAmountOne: "第 1 期金额",
+      facilityDueTwo: "第 2 期到期日", facilityAmountTwo: "第 2 期金额", facilityCreateAction: "创建还款计划",
+      facilityListTitle: "融资卷宗", facilityListHint: "可见范围由组织和当前角色共同决定。", facilitySelect: "请选择融资卷宗",
+      facilitySelectHint: "这里将显示精确余额、分期、付款和当前角色操作。", facilityPaid: "已确认偿还", facilityOutstanding: "剩余余额",
+      facilityInstallments: "还款计划", facilityPayments: "付款记录", facilityBoundaryTitle: "演示边界",
+      facilityBoundary: "这是受控融资生命周期模拟；系统不会执行真实银行转账。", facilityNoItems: "暂无融资卷宗。融资方可从已批准申请创建。",
+      facilityNoPayments: "尚未提交付款。", facilityEvidence: "放款证据", facilityActionStation: "当前角色操作",
+      facilityNoAction: "当前阶段没有该角色可执行的操作。", facilityVersion: "命令版本", facilityInstallment: "分期", facilityDueDate: "到期日",
+      facilityAmount: "金额", facilityPaidAmount: "已还", facilityPaymentReference: "付款参考号", facilityDecisionComment: "决策备注",
+      facilitySubmitPayment: "提交付款", facilityConfirmPayment: "确认付款", facilityRejectPayment: "拒绝付款", facilityMarkOverdue: "标记逾期",
+      facilityInitiate: "发起放款", facilityConfirmDisbursement: "确认放款", facilityClose: "关闭卷宗", facilityCreated: "融资还款计划已创建",
+      facilityActionComplete: "融资生命周期已更新", facilityInvalidMoney: "请输入精确到分的正数金额。", facilityScheduleMismatch: "两期金额之和必须与本金完全一致。",
+      facilityRequiredFields: "请填写该操作的必填字段。", ready_for_disbursement: "待放款", disbursed: "已发起放款", active: "进行中",
+      overdue: "已逾期", repaid: "已还清", closed: "已关闭", installment_scheduled: "按计划", installment_partially_paid: "部分已还",
+      installment_paid: "已还清", installment_overdue: "已逾期", payment_submitted: "待审核", payment_confirmed: "已确认", payment_rejected: "已拒绝",
+      facility_not_found: "融资卷宗不存在或当前角色无权查看。", forbidden_role: "当前角色不能执行此操作。",
+      facility_precondition_failed: "创建融资要求申请已批准、审计完成且本金一致。", facility_conflict: "数据已变化或操作不再可用。请刷新卷宗后使用新命令重试。"
     }
   };
 
@@ -99,12 +141,40 @@
   const state = {
     lang: localStorage.getItem("daibm-lang") || "ru", user: null,
     accounts: [], coreEnterprises: [], dashboard: null, tasks: [],
-    applications: [], selected: null, editing: null, busy: false
+    applications: [], selected: null, editing: null, busy: false,
+    facilities: [], selectedFacility: null, facilityPending: false
   };
 
   const tr = (key) => COPY[state.lang][key] || key;
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[character]);
   const money = (value) => new Intl.NumberFormat(state.lang === "ru" ? "ru-RU" : "zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 0 }).format(Number(value || 0));
+  const normalizeMoneyInput = (value) => String(value ?? "").trim().replace(",", ".");
+
+  function moneyToCents(value, allowZero = false) {
+    const normalized = normalizeMoneyInput(value);
+    if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) throw new Error(tr("facilityInvalidMoney"));
+    const [whole, fraction = ""] = normalized.split(".");
+    const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+    if (cents < 0n || (!allowZero && cents === 0n)) throw new Error(tr("facilityInvalidMoney"));
+    return cents;
+  }
+
+  function centsToMoney(cents) {
+    const whole = cents / 100n;
+    const fraction = String(cents % 100n).padStart(2, "0");
+    return `${whole}.${fraction}`;
+  }
+
+  function exactFacilityMoney(value, currency) {
+    const normalized = centsToMoney(moneyToCents(value, true));
+    const [whole, fraction] = normalized.split(".");
+    const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, state.lang === "ru" ? " " : ",");
+    return `${grouped}.${fraction} ${escapeHtml(currency)}`;
+  }
+
+  function sumFacilityMoney(values) {
+    return centsToMoney(values.reduce((total, value) => total + moneyToCents(value, true), 0n));
+  }
 
   async function wfApi(path, options = {}) {
     const response = await fetch(path, {
@@ -136,6 +206,13 @@
     document.querySelector("#loginButton").disabled = value;
   }
 
+  function setFacilityPending(value) {
+    state.facilityPending = value;
+    const view = document.querySelector("#view-facilities");
+    view?.classList.toggle("facility-pending", value);
+    view?.querySelectorAll("button, input, select").forEach((control) => { control.disabled = value; });
+  }
+
   function notify(message, isError = false) {
     if (typeof window.toast === "function") {
       window.toast(message);
@@ -149,7 +226,10 @@
       if (value) element.textContent = value;
     });
     renderAccounts();
-    if (state.user) renderWorkbench();
+    if (state.user) {
+      renderWorkbench();
+      renderFacilityWorkbench();
+    }
   }
 
   function renderAccounts() {
@@ -191,6 +271,8 @@
         state.applications = [];
         state.selected = null;
         state.editing = null;
+        state.facilities = [];
+        state.selectedFacility = null;
         document.body.classList.remove("authenticated");
         renderAccounts();
       }
@@ -207,6 +289,8 @@
     state.coreEnterprises = [];
     state.selected = null;
     state.editing = null;
+    state.facilities = [];
+    state.selectedFacility = null;
     document.body.classList.remove("authenticated");
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
@@ -218,6 +302,7 @@
     const role = state.user.role;
     const rules = {
       workflow: true,
+      facilities: true,
       overview: role === "financier" || role === "auditor",
       review: role === "financier" || role === "auditor",
       research: role === "financier" || role === "auditor",
@@ -249,12 +334,13 @@
     const role = ROLE_META[state.user.role];
     renderCurrentUser();
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
+    document.querySelector("#view-facilities").style.setProperty("--role-color", role.color);
     configureRoleNavigation();
     window.switchView("workflow");
     state.coreEnterprises = state.user.role === "supplier"
       ? await wfApi("/api/v1/organizations/core-enterprises")
       : [];
-    await refreshWorkflow();
+    await Promise.all([refreshWorkflow(), refreshFacilities()]);
     await refreshLegacyForRole();
   }
 
@@ -413,6 +499,179 @@
     container.innerHTML = timeline.map((event, index) => `<article class="timeline-event"><span>${String(index + 1).padStart(2,"0")} · ${escapeHtml(new Date(event.created_at).toLocaleString(state.lang === "ru" ? "ru-RU" : "zh-CN"))}</span><b>${escapeHtml(tr(event.action_type))}</b><small>${escapeHtml(event.actor_display_name)}<br>${escapeHtml(tr(ROLE_META[event.actor_role]?.key || event.actor_role))} · ${escapeHtml(event.organization_code)}</small><p>${escapeHtml(event.comment || "—")}</p></article>`).join("");
   }
 
+  async function refreshFacilities(preferredId = null) {
+    if (!state.user) return;
+    try {
+      const facilities = await wfApi("/api/v1/facilities?limit=200");
+      state.facilities = facilities;
+      const selectedId = preferredId || state.selectedFacility?.facility_id;
+      state.selectedFacility = facilities.find((facility) => facility.facility_id === selectedId) || facilities[0] || null;
+      renderFacilityWorkbench();
+    } catch (error) {
+      notify(error.message, true);
+    }
+  }
+
+  function renderFacilityWorkbench() {
+    if (!state.user) return;
+    document.querySelector("#facilityCreatePanel").hidden = state.user.role !== "financier";
+    document.querySelector("#facilityCount").textContent = state.facilities.length;
+    renderFacilityList();
+    renderFacilityDetail();
+  }
+
+  function renderFacilityList() {
+    const container = document.querySelector("#facilityList");
+    if (!state.facilities.length) {
+      container.innerHTML = `<div class="queue-empty"><p>${escapeHtml(tr("facilityNoItems"))}</p></div>`;
+      return;
+    }
+    container.innerHTML = state.facilities.map((facility) => `<button class="facility-list-item ${state.selectedFacility?.facility_id === facility.facility_id ? "selected" : ""}" type="button" data-facility-id="${escapeHtml(facility.facility_id)}">
+      <span><b>${escapeHtml(tr(facility.status))}</b><small>${escapeHtml(facility.request_id)}</small></span>
+      <span class="facility-list-balance"><b>${exactFacilityMoney(facility.outstanding_amount, facility.currency)}</b><small>v${facility.version}</small></span>
+    </button>`).join("");
+    container.querySelectorAll("[data-facility-id]").forEach((button) => button.addEventListener("click", () => {
+      state.selectedFacility = state.facilities.find((facility) => facility.facility_id === button.dataset.facilityId) || null;
+      renderFacilityWorkbench();
+    }));
+  }
+
+  function renderFacilityDetail() {
+    const container = document.querySelector("#facilityDetail");
+    const facility = state.selectedFacility;
+    if (!facility) {
+      container.innerHTML = `<div class="workflow-empty"><span>₽</span><b>${escapeHtml(tr("facilitySelect"))}</b><p>${escapeHtml(tr("facilitySelectHint"))}</p></div><div id="facilityMoneyRail" hidden></div><div id="facilityInstallments" hidden></div><div id="facilityPayments" hidden></div><div id="facilityActions" hidden></div>`;
+      return;
+    }
+    const paidAmount = sumFacilityMoney(facility.installments.map((item) => item.paid_amount));
+    const installments = facility.installments.map((item) => `<li data-installment-status="${escapeHtml(item.status)}">
+      <span class="facility-stage-node">${String(item.sequence).padStart(2, "0")}</span>
+      <b>${escapeHtml(tr("facilityInstallment"))} ${item.sequence}</b>
+      <small>${escapeHtml(item.due_date)} · ${exactFacilityMoney(item.amount, facility.currency)}</small>
+      <em>${escapeHtml(tr(`installment_${item.status}`))} · ${escapeHtml(tr("facilityPaidAmount"))} ${exactFacilityMoney(item.paid_amount, facility.currency)}</em>
+    </li>`).join("");
+    const payments = facility.payments.length ? facility.payments.map((payment) => `<article class="facility-payment-row">
+      <span class="status-chip" data-status="${escapeHtml(payment.status)}">${escapeHtml(tr(`payment_${payment.status}`))}</span>
+      <b>${exactFacilityMoney(payment.amount, facility.currency)}</b>
+      <small>${escapeHtml(payment.payment_reference)} · ${escapeHtml(payment.submitted_at)}</small>
+    </article>`).join("") : `<p class="facility-empty-copy">${escapeHtml(tr("facilityNoPayments"))}</p>`;
+    const actions = facility.allowed_actions.length
+      ? facility.allowed_actions.map((action) => renderFacilityAction(facility, action)).join("")
+      : `<p class="facility-empty-copy">${escapeHtml(tr("facilityNoAction"))}</p>`;
+    container.innerHTML = `<div class="facility-detail-head">
+      <div><span class="status-chip" data-status="${escapeHtml(facility.status)}">${escapeHtml(tr(facility.status))}</span><h2>${exactFacilityMoney(facility.principal, facility.currency)}</h2><p>${escapeHtml(facility.facility_id)}</p></div>
+      <div class="detail-version"><span>${escapeHtml(tr("facilityVersion"))}</span><b>v${facility.version}</b></div>
+    </div>
+    <section id="facilityMoneyRail" class="facility-money-rail" aria-label="Exact facility balance rail">
+      <div class="facility-money-flow">
+        <article><span>01</span><small>${escapeHtml(tr("facilityPrincipal"))}</small><b>${exactFacilityMoney(facility.principal, facility.currency)}</b></article>
+        <article><span>02</span><small>${escapeHtml(tr("facilityPaid"))}</small><b>${exactFacilityMoney(paidAmount, facility.currency)}</b></article>
+        <article><span>03</span><small>${escapeHtml(tr("facilityOutstanding"))}</small><b>${exactFacilityMoney(facility.outstanding_amount, facility.currency)}</b></article>
+      </div>
+    </section>
+    <div class="facility-evidence"><span>${escapeHtml(tr("facilityEvidence"))}</span><b>${escapeHtml(facility.disbursement_reference || "—")}</b><small title="${escapeHtml(facility.disbursement_evidence_sha256 || "")}">${escapeHtml(compactHash(facility.disbursement_evidence_sha256))}</small></div>
+    <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityInstallments"))}</b><span>${facility.installments.length}</span></div><ol id="facilityInstallments" class="facility-stage-rail">${installments}</ol></section>
+    <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityPayments"))}</b><span>${facility.payments.length}</span></div><div id="facilityPayments" class="facility-payment-list">${payments}</div></section>
+    <section class="facility-detail-section facility-action-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityActionStation"))}</b><span>${facility.allowed_actions.length}</span></div><div id="facilityActions" class="facility-action-list">${actions}</div></section>`;
+  }
+
+  function installmentOptions(facility, includePaid = false) {
+    return facility.installments.filter((item) => includePaid || item.status !== "paid").map((item) =>
+      `<option value="${escapeHtml(item.installment_id)}">${escapeHtml(tr("facilityInstallment"))} ${item.sequence} · ${escapeHtml(item.due_date)} · ${exactFacilityMoney(item.amount, facility.currency)}</option>`
+    ).join("");
+  }
+
+  function submittedPaymentOptions(facility) {
+    return facility.payments.filter((payment) => payment.status === "submitted").map((payment) =>
+      `<option value="${escapeHtml(payment.payment_id)}">${escapeHtml(payment.payment_reference)} · ${exactFacilityMoney(payment.amount, facility.currency)}</option>`
+    ).join("");
+  }
+
+  function renderFacilityAction(facility, action) {
+    const button = (label, className = "btn-primary") => `<button class="btn ${className}" type="submit" data-facility-action="${escapeHtml(action)}">${escapeHtml(label)}</button>`;
+    if (action === "initiate_disbursement") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityInitiate"))}</b>${button(tr("facilityInitiate"))}</form>`;
+    if (action === "confirm_disbursement") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityConfirmDisbursement"))}</b>${button(tr("facilityConfirmDisbursement"))}</form>`;
+    if (action === "submit_payment") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilitySubmitPayment"))}</b><label><span>${escapeHtml(tr("facilityInstallment"))}</span><select name="installment_id" required>${installmentOptions(facility)}</select></label><label><span>${escapeHtml(tr("facilityAmount"))}</span><input name="amount" inputmode="decimal" required></label><label><span>${escapeHtml(tr("facilityPaymentReference"))}</span><input name="payment_reference" maxlength="120" required></label>${button(tr("facilitySubmitPayment"))}</form>`;
+    if (action === "confirm_payment" || action === "reject_payment") {
+      const isConfirm = action === "confirm_payment";
+      return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr(isConfirm ? "facilityConfirmPayment" : "facilityRejectPayment"))}</b><label><span>${escapeHtml(tr("facilityPayments"))}</span><select name="payment_id" required>${submittedPaymentOptions(facility)}</select></label><label><span>${escapeHtml(tr("facilityDecisionComment"))}</span><input name="comment" maxlength="500" required></label>${button(tr(isConfirm ? "facilityConfirmPayment" : "facilityRejectPayment"), isConfirm ? "btn-primary" : "btn-danger")}</form>`;
+    }
+    if (action === "mark_overdue") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityMarkOverdue"))}</b><label><span>${escapeHtml(tr("facilityInstallment"))}</span><select name="installment_id" required>${installmentOptions(facility)}</select></label>${button(tr("facilityMarkOverdue"), "btn-danger")}</form>`;
+    if (action === "close") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityClose"))}</b>${button(tr("facilityClose"))}</form>`;
+    return "";
+  }
+
+  async function createFacility(event) {
+    event.preventDefault();
+    if (state.facilityPending) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const errorElement = document.querySelector("#facilityCreateError");
+    errorElement.textContent = "";
+    try {
+      const principal = normalizeMoneyInput(data.get("principal"));
+      const firstAmount = normalizeMoneyInput(data.get("amount_1"));
+      const secondAmount = normalizeMoneyInput(data.get("amount_2"));
+      if (moneyToCents(firstAmount) + moneyToCents(secondAmount) !== moneyToCents(principal)) throw new Error(tr("facilityScheduleMismatch"));
+      const payload = {
+        request_id: String(data.get("request_id")).trim(), principal, currency: String(data.get("currency")), version: 1,
+        idempotency_key: crypto.randomUUID(),
+        installments: [
+          { sequence: 1, due_date: data.get("due_date_1"), amount: firstAmount },
+          { sequence: 2, due_date: data.get("due_date_2"), amount: secondAmount }
+        ]
+      };
+      setFacilityPending(true);
+      const result = await wfApi("/api/v1/facilities", { method: "POST", body: JSON.stringify(payload) });
+      notify(tr("facilityCreated"));
+      await Promise.all([refreshFacilities(result.facility_id), refreshWorkflow()]);
+    } catch (error) {
+      errorElement.textContent = error.message;
+      notify(error.message, true);
+    } finally {
+      setFacilityPending(false);
+    }
+  }
+
+  async function executeFacilityAction(button) {
+    const facility = state.selectedFacility;
+    if (!facility || state.facilityPending) return;
+    const action = button.dataset.facilityAction;
+    const form = button.closest("[data-facility-action-form]");
+    const data = new FormData(form);
+    const command = { version: facility.version, idempotency_key: crypto.randomUUID() };
+    let suffix = "";
+    let payload = command;
+    try {
+      if (action === "initiate_disbursement") suffix = "/initiate-disbursement";
+      else if (action === "confirm_disbursement") suffix = "/confirm-disbursement";
+      else if (action === "submit_payment") {
+        suffix = "/payments";
+        payload = { ...command, installment_id: String(data.get("installment_id")), amount: normalizeMoneyInput(data.get("amount")), payment_reference: String(data.get("payment_reference")).trim() };
+        moneyToCents(payload.amount);
+        if (!payload.payment_reference) throw new Error(tr("facilityRequiredFields"));
+      } else if (action === "confirm_payment" || action === "reject_payment") {
+        const paymentId = String(data.get("payment_id"));
+        const comment = String(data.get("comment")).trim();
+        if (!paymentId || !comment) throw new Error(tr("facilityRequiredFields"));
+        suffix = `/payments/${paymentId}/decision`;
+        payload = { ...command, decision: action === "confirm_payment" ? "confirmed" : "rejected", comment };
+      } else if (action === "mark_overdue") {
+        suffix = "/mark-overdue";
+        payload = { ...command, installment_id: String(data.get("installment_id")) };
+      } else if (action === "close") suffix = "/close";
+      else return;
+      setFacilityPending(true);
+      const result = await wfApi(`/api/v1/facilities/${facility.facility_id}${suffix}`, { method: "POST", body: JSON.stringify(payload) });
+      notify(tr("facilityActionComplete"));
+      await Promise.all([refreshFacilities(result.facility_id), refreshWorkflow()]);
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      setFacilityPending(false);
+    }
+  }
+
   function formPayload(form) {
     const data = new FormData(form);
     return {
@@ -494,7 +753,16 @@
     });
     document.querySelector("#logoutButton").addEventListener("click", logout);
     document.querySelector("#refreshWorkflow").addEventListener("click", () => refreshWorkflow());
+    document.querySelector("#refreshFacilities").addEventListener("click", () => refreshFacilities());
     document.querySelector("#applicationForm").addEventListener("submit", saveApplication);
+    document.querySelector("#facilityCreateForm").addEventListener("submit", createFacility);
+    document.addEventListener("submit", (event) => {
+      const facilityForm = event.target.closest?.("[data-facility-action-form]");
+      if (!facilityForm) return;
+      event.preventDefault();
+      const actionButton = event.submitter || facilityForm.querySelector("[data-facility-action]");
+      if (actionButton) executeFacilityAction(actionButton);
+    });
     document.addEventListener("click", (event) => {
       const button = event.target.closest?.("[data-workflow-action]");
       if (button) executeAction(button);

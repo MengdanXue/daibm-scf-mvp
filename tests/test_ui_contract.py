@@ -225,3 +225,79 @@ def test_research_metrics_card_degrades_when_comparison_is_unavailable():
     assert "model.metrics?.tgnn?.roc_auc" in html
     assert "model.metrics?.xgboost?.roc_auc" in html
     assert "formatResearchMetric" in html
+
+
+def test_facility_tab_exposes_bilingual_lifecycle_workbench():
+    html = _html()
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert 'data-view-button="facilities"' in html
+    assert 'id="view-facilities"' in html
+    for element_id in (
+        "facilityCreatePanel",
+        "facilityCreateForm",
+        "facilityList",
+        "facilityDetail",
+        "facilityMoneyRail",
+        "facilityInstallments",
+        "facilityPayments",
+        "facilityActions",
+    ):
+        assert f'id="{element_id}"' in html
+    for key in (
+        "navFacilities",
+        "facilityTitle",
+        "facilityCreate",
+        "facilityPrincipal",
+        "facilityPaid",
+        "facilityOutstanding",
+        "facilityInstallments",
+        "facilityPayments",
+        "facilityBoundary",
+    ):
+        assert javascript.count(f"{key}:") == 2
+
+
+def test_facility_javascript_preserves_exact_money_and_covers_every_api_action():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for path in (
+        "/api/v1/facilities",
+        "/initiate-disbursement",
+        "/confirm-disbursement",
+        "/payments",
+        "/mark-overdue",
+        "/close",
+    ):
+        assert path in javascript
+    assert "facility.principal" in javascript
+    assert "facility.outstanding_amount" in javascript
+    assert "Number(facility.outstanding_amount)" not in javascript
+    assert "parseFloat(facility.outstanding_amount)" not in javascript
+    assert "facility.allowed_actions" in javascript
+
+
+def test_facility_commands_are_versioned_idempotent_and_pending_safe():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert "crypto.randomUUID()" in javascript
+    assert "version: facility.version" in javascript
+    assert "facilityPending" in javascript
+    assert "data-facility-action" in javascript
+    assert "facility.allowed_actions.map" in javascript
+
+
+def test_facility_errors_and_accessibility_have_bilingual_contracts():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+    stylesheet = (HTML_PATH.with_name("workflow.css")).read_text(encoding="utf-8")
+
+    for code in (
+        "facility_not_found",
+        "forbidden_role",
+        "facility_precondition_failed",
+        "facility_conflict",
+    ):
+        assert javascript.count(f"{code}:") == 2
+    assert ":focus-visible" in stylesheet
+    assert "prefers-reduced-motion: reduce" in stylesheet
+    assert "@media (max-width: 600px)" in stylesheet
