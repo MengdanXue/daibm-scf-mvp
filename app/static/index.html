@@ -257,7 +257,24 @@
         <div><span data-wf-i18n="demoAccess">Демонстрационный доступ</span><h2 data-wf-i18n="chooseRole">Выберите роль</h2></div>
         <div class="lang auth-lang"><button type="button" data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button type="button" data-lang="zh" onclick="setLanguage('zh')">中文</button></div>
       </div>
-      <div id="demoAccounts" class="account-grid" aria-live="polite"></div>
+      <ol id="demoAccounts" class="account-grid" aria-label="Demo role order">
+        <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="supplier.demo" data-demo-role="supplier">
+          <span class="account-step">01</span><span><b data-demo-role-label>Поставщик</b><small data-demo-account-detail>supplier.demo · SUPPLIER-001</small></span><span class="account-arrow">↘</span>
+        </button></li>
+        <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="core.demo" data-demo-role="core_enterprise">
+          <span class="account-step">02</span><span><b data-demo-role-label>Якорная компания</b><small data-demo-account-detail>core.demo · CORE-001</small></span><span class="account-arrow">↘</span>
+        </button></li>
+        <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="financier.demo" data-demo-role="financier">
+          <span class="account-step">03</span><span><b data-demo-role-label>Финансист</b><small data-demo-account-detail>financier.demo · BANK-001</small></span><span class="account-arrow">↘</span>
+        </button></li>
+        <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="risk.demo" data-demo-role="risk_manager">
+          <span class="account-step">04</span><span><b data-demo-role-label>Риск-менеджер</b><small data-demo-account-detail>risk.demo · BANK-001</small></span><span class="account-arrow">↘</span>
+        </button></li>
+        <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="auditor.demo" data-demo-role="auditor">
+          <span class="account-step">05</span><span><b data-demo-role-label>Аудитор</b><small data-demo-account-detail>auditor.demo · AUDIT-001</small></span><span class="account-arrow">↘</span>
+        </button></li>
+      </ol>
+      <p id="demoRoleAnnouncement" class="sr-only" role="status" aria-live="polite"></p>
       <div class="auth-divider"><span data-wf-i18n="orCredentials">или введите учётные данные</span></div>
       <form id="loginForm" class="login-form">
         <label><span data-wf-i18n="username">Имя пользователя</span><input name="username" autocomplete="username" value="supplier.demo" required></label>

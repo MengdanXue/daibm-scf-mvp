@@ -6,7 +6,7 @@
       loginTitle: "Войдите в рабочий контур",
       loginSubtitle: "Пять участников проводят одну заявку от поставщика до проверяемого аудиторского следа.",
       researchBoundary: "Демонстрационный прототип на синтетических данных · PostgreSQL · проверяемый журнал событий",
-      demoAccess: "Демонстрационный доступ", chooseRole: "Выберите роль", orCredentials: "или введите учётные данные",
+      demoAccess: "Демонстрационный доступ", chooseRole: "Выберите роль", demoRoleGuide: "Порядок демонстрационных ролей", demoRoleSelected: "Выбрана роль: {role}. Проверьте данные и нажмите кнопку входа.", orCredentials: "или введите учётные данные",
       username: "Имя пользователя", password: "Пароль", signIn: "Войти в систему", logout: "Выйти",
       commonPassword: "Общий пароль демо-ролей:", navWorkflow: "Рабочий контур",
       workflowEyebrow: "РОЛЕВОЙ БИЗНЕС-ПРОЦЕСС", workflowTitle: "Финансирование цепи поставок", refresh: "Обновить данные",
@@ -71,7 +71,7 @@
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
-      researchBoundary: "基于合成数据的演示原型 · PostgreSQL · 可验证事件日志", demoAccess: "演示访问", chooseRole: "选择角色",
+      researchBoundary: "基于合成数据的演示原型 · PostgreSQL · 可验证事件日志", demoAccess: "演示访问", chooseRole: "选择角色", demoRoleGuide: "演示角色顺序", demoRoleSelected: "已选择角色：{role}。请检查账户信息后点击登录。",
       orCredentials: "或输入账户信息", username: "用户名", password: "密码", signIn: "登录系统", logout: "退出",
       commonPassword: "演示角色通用密码：", navWorkflow: "业务工作台", workflowEyebrow: "基于角色的业务流程",
       workflowTitle: "供应链融资", refresh: "刷新数据", currentStation: "当前工作站", allApplications: "可查看申请",
@@ -225,6 +225,7 @@
       const value = tr(element.dataset.wfI18n);
       if (value) element.textContent = value;
     });
+    document.querySelector("#demoAccounts")?.setAttribute("aria-label", tr("demoRoleGuide"));
     renderAccounts();
     if (state.user) {
       renderWorkbench();
@@ -235,21 +236,34 @@
   function renderAccounts() {
     const container = document.querySelector("#demoAccounts");
     if (!container) return;
-    if (!state.accounts.length) {
-      container.innerHTML = `<p>${escapeHtml(tr("loading"))}</p>`;
-      return;
-    }
-    container.innerHTML = state.accounts.map((account) => {
-      const role = ROLE_META[account.role];
-      return `<button class="account-card" type="button" data-demo-username="${escapeHtml(account.username)}">
-        <span class="account-icon" style="color:${role.color}">${role.seal}</span>
-        <span><b>${escapeHtml(tr(role.key))}</b><small>${escapeHtml(account.display_name)} · ${escapeHtml(account.organization_code)}</small></span>
-        <span class="account-arrow">→</span>
-      </button>`;
-    }).join("");
+    container.setAttribute("aria-label", tr("demoRoleGuide"));
     container.querySelectorAll("[data-demo-username]").forEach((button) => {
-      button.addEventListener("click", () => login(button.dataset.demoUsername, "Demo123!"));
+      const roleName = button.dataset.demoRole;
+      const role = ROLE_META[roleName];
+      const account = state.accounts.find((candidate) => candidate.username === button.dataset.demoUsername);
+      const label = button.querySelector("[data-demo-role-label]");
+      const detail = button.querySelector("[data-demo-account-detail]");
+      if (label && role) label.textContent = tr(role.key);
+      if (detail) detail.textContent = account
+        ? `${account.username} · ${account.organization_code}`
+        : button.dataset.demoUsername;
+      button.style.setProperty("--guide-color", role?.color || "#2768ee");
+      if (button.dataset.guideBound === "true") return;
+      button.dataset.guideBound = "true";
+      button.addEventListener("click", () => selectDemoRole(button));
     });
+  }
+
+  function selectDemoRole(button) {
+    const username = button.dataset.demoUsername;
+    const role = ROLE_META[button.dataset.demoRole];
+    document.querySelector('#loginForm input[name="username"]').value = username;
+    document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
+    const announcement = document.querySelector("#demoRoleAnnouncement");
+    if (announcement) {
+      announcement.textContent = tr("demoRoleSelected").replace("{role}", tr(role?.key || button.dataset.demoRole));
+    }
+    document.querySelector("#loginButton").focus();
   }
 
   async function login(username, password) {

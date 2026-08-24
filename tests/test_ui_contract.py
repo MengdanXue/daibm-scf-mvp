@@ -301,3 +301,34 @@ def test_facility_errors_and_accessibility_have_bilingual_contracts():
     assert ":focus-visible" in stylesheet
     assert "prefers-reduced-motion: reduce" in stylesheet
     assert "@media (max-width: 600px)" in stylesheet
+
+
+def test_login_has_bilingual_numbered_role_guide():
+    html = _html()
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert html.count('data-demo-username="') == 5
+    assert html.count('class="demo-role-guide') == 5
+    assert 'aria-label="Demo role order"' in html
+    assert javascript.count("demoRoleGuide:") == 2
+    assert 'document.querySelector("#loginButton").focus()' in javascript
+    assert 'login(button.dataset.demoUsername, "Demo123!")' not in javascript
+
+
+def test_login_role_guide_keeps_native_button_semantics_inside_a_real_list():
+    html = _html()
+
+    assert '<ol id="demoAccounts" class="account-grid"' in html
+    assert html.count('class="demo-role-item"') == 5
+    assert 'type="button" role="listitem"' not in html
+
+
+def test_browser_script_requires_explicit_video_flag():
+    source = (HTML_PATH.parents[2] / "scripts" / "browser_acceptance.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--record-video" in source
+    assert "record_video_dir" in source
+    assert "record_video=False" in source
+    assert "def run_acceptance(" in source
