@@ -1,8 +1,10 @@
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 from research.artifacts.verification import (
@@ -26,6 +28,109 @@ def test_research_cli_exposes_reproducibility_commands():
     assert "promote" in result.stdout
     assert "build-reference" in result.stdout
     assert "verify" in result.stdout
+    assert "evaluate-multiseed" in result.stdout
+    assert "verify-multiseed" in result.stdout
+
+
+def test_verify_multiseed_cli_does_not_import_training_frameworks(tmp_path):
+    pack = tmp_path / "pack"
+    seed_dir = pack / "seeds" / "7"
+    seed_dir.mkdir(parents=True)
+    labels = np.asarray([0, 1], dtype=np.uint8)
+    tgnn = np.asarray([0.2, 0.8], dtype=np.float32)
+    xgboost = np.asarray([0.3, 0.7], dtype=np.float32)
+    np.save(seed_dir / "labels.npy", labels, allow_pickle=False)
+    np.save(seed_dir / "tgnn-probabilities.npy", tgnn, allow_pickle=False)
+    np.save(seed_dir / "xgboost-probabilities.npy", xgboost, allow_pickle=False)
+    tgnn_artifact = seed_dir / "tgnn-artifact.pt"
+    xgboost_artifact = seed_dir / "xgboost-artifact.json"
+    tgnn_artifact.write_bytes(b"standalone-tgnn-artifact")
+    xgboost_artifact.write_text("{}\n", encoding="utf-8")
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    perfect_metrics = {
+        "roc_auc": 1.0,
+        "pr_auc": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "confusion_matrix": [[1, 0], [0, 1]],
+        "brier_score": 0.04,
+    }
+    evidence = {
+        "artifact_sha256": {
+            "tgnn": digest(tgnn_artifact),
+            "xgboost": digest(xgboost_artifact),
+        },
+        "dataset_sha256": "c" * 64,
+        "labels": [0, 1],
+        "metrics": {
+            "tgnn": perfect_metrics,
+            "xgboost": {**perfect_metrics, "brier_score": 0.09},
+        },
+        "probabilities": {
+            "tgnn": [float(value) for value in tgnn],
+            "xgboost": [float(value) for value in xgboost],
+        },
+        "seed": 7,
+        "split_anchors": {"train": [12], "validation": [17], "test": [19]},
+    }
+    evidence_path = seed_dir / "evidence.json"
+    evidence_path.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    files = {
+        str(path.relative_to(pack)).replace("\\", "/"): digest(path)
+        for path in (
+            evidence_path,
+            seed_dir / "labels.npy",
+            seed_dir / "tgnn-probabilities.npy",
+            seed_dir / "xgboost-probabilities.npy",
+            tgnn_artifact,
+            xgboost_artifact,
+        )
+    }
+    (pack / "manifest.json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "provenance": "2026_EXPLORATORY_SENSITIVITY",
+                "reporting_threshold": 0.5,
+                "seed_entries": [{"seed": 7, "files": files}],
+                "seeds": [7],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    script = """
+import builtins
+import sys
+
+real_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    if name == 'torch' or name.startswith('torch.') or name == 'xgboost' or name.startswith('xgboost.'):
+        raise AssertionError(f'heavy training import attempted: {name}')
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = guarded_import
+
+from research.cli import main
+raise SystemExit(main(['verify-multiseed', '--path', sys.argv[1]]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(pack)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "verified"
 
 
 def test_build_reference_creates_a_self_verifying_comparison_bundle(tmp_path):

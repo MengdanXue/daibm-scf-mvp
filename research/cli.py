@@ -237,6 +237,37 @@ def command_build_reference(
     return model_manifest
 
 
+def command_evaluate_multiseed(
+    seeds: list[int],
+    max_epochs: int,
+    patience: int,
+    output: Path,
+    destination: Path,
+) -> dict[str, Any]:
+    from research.experiments.runner import SensitivityConfig, run_sensitivity
+
+    return run_sensitivity(
+        SensitivityConfig(
+            seeds=tuple(seeds),
+            max_epochs=max_epochs,
+            patience=patience,
+        ),
+        output,
+        destination,
+    )
+
+
+def command_verify_multiseed(path: Path) -> dict[str, Any]:
+    from research.artifacts.sensitivity_verification import verify_sensitivity_pack
+
+    verified = verify_sensitivity_pack(path)
+    return {
+        "manifest_sha256": verified["manifest_sha256"],
+        "provenance": verified["provenance"],
+        "status": "verified",
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m research.cli",
@@ -267,6 +298,39 @@ def build_parser() -> argparse.ArgumentParser:
     reference.add_argument("--max-epochs", type=int, default=100)
     reference.add_argument("--patience", type=int, default=10)
 
+    multiseed = commands.add_parser(
+        "evaluate-multiseed",
+        help="train and publish exploratory multi-seed evidence",
+    )
+    multiseed.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=[20260815, 20260816, 20260817, 20260818, 20260819],
+    )
+    multiseed.add_argument("--max-epochs", type=int, default=100)
+    multiseed.add_argument("--patience", type=int, default=10)
+    multiseed.add_argument(
+        "--output",
+        type=Path,
+        default=Path("output/research/sensitivity-runs"),
+    )
+    multiseed.add_argument(
+        "--destination",
+        type=Path,
+        default=Path("output/research/sensitivity-pack"),
+    )
+
+    verify_multiseed = commands.add_parser(
+        "verify-multiseed",
+        help="verify exploratory evidence without training frameworks",
+    )
+    verify_multiseed.add_argument(
+        "--path",
+        type=Path,
+        default=Path("output/research/sensitivity-pack"),
+    )
+
     verify = commands.add_parser("verify", help="verify promoted artifacts")
     verify.add_argument("--reference", type=Path, default=Path("artifacts/reference"))
     return parser
@@ -291,6 +355,16 @@ def main(argv: list[str] | None = None) -> int:
             arguments.max_epochs,
             arguments.patience,
         )
+    elif arguments.command == "evaluate-multiseed":
+        result = command_evaluate_multiseed(
+            arguments.seeds,
+            arguments.max_epochs,
+            arguments.patience,
+            arguments.output,
+            arguments.destination,
+        )
+    elif arguments.command == "verify-multiseed":
+        result = command_verify_multiseed(arguments.path)
     else:
         verified = verify_reference_artifact(arguments.reference)
         result = {
