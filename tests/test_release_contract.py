@@ -170,6 +170,41 @@ def test_optional_fabric_mode_is_documented_without_overclaiming():
     assert "生产级区块链" in readme
 
 
+def test_actual_outcome_feedback_boundary_is_documented_without_promotion_claims():
+    readme = _read("README.md")
+    demo = _read("docs/demo-script.md")
+    defense = _read("docs/defense-one-page.md")
+    brief = _read("docs/research-brief-en.md")
+
+    for document in (readme, demo, defense, brief):
+        assert "Platt" in document
+        assert "not_promoted" in document or "never promoted" in document
+    for document in (defense, brief):
+        assert "does not retrain the TGNN" in document
+        assert "does not trigger on drift" in document
+        assert "does not prove real-enterprise effects" in document
+    assert "There is no actual-outcome feedback loop" not in brief
+
+
+def test_actual_outcome_browser_acceptance_covers_retry_lineage_and_candidate_boundary():
+    acceptance = _read("scripts/outcome_browser_acceptance.py")
+
+    for expected in (
+        "_exercise_primary(page)",
+        "actual-outcome",
+        "route.fulfill(status=503",
+        "first_payload == retry_payload",
+        "#outcomeLineage",
+        "#calibrationCandidate",
+        "exploratory_candidate",
+        "eligible_candidate",
+        "expected_status",
+        "never promoted",
+        'page.set_viewport_size({"width": 390, "height": 844})',
+    ):
+        assert expected in acceptance
+
+
 def test_fabric_acceptance_drains_persistent_backlog_with_a_time_bound():
     acceptance = _read("scripts/fabric_browser_acceptance.py")
 

@@ -44,7 +44,7 @@ def _select_application(page, application_id: str) -> None:
     ).wait_for()
 
 
-def _exercise_primary(page) -> None:
+def _exercise_primary(page) -> str:
     page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
     assert page.locator("html").get_attribute("lang") == "ru"
@@ -172,6 +172,7 @@ def _exercise_primary(page) -> None:
     page.wait_for_timeout(150)
     SCREENSHOT.parent.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SCREENSHOT), full_page=True)
+    return application_id
 
 
 def _exercise_alternate_core_directory(browser) -> None:

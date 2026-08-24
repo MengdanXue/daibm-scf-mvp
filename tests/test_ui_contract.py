@@ -314,6 +314,85 @@ def test_facility_tab_exposes_bilingual_lifecycle_workbench():
         assert javascript.count(f"{key}:") == 2
 
 
+def test_closed_auditor_facility_exposes_bilingual_actual_outcome_candidate_ui():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for element_id in (
+        "actualOutcomePanel",
+        "actualOutcomeForm",
+        "outcomeLineage",
+        "calibrationCandidate",
+        "outcomeSubmitError",
+    ):
+        assert f'id="{element_id}"' in javascript
+    for key in (
+        "outcomeTitle",
+        "outcomeDefaulted",
+        "outcomeDaysPastDue",
+        "outcomeLossAmount",
+        "outcomeObservedAt",
+        "outcomeEvidenceReference",
+        "outcomeProvenance",
+        "outcomeSubmit",
+        "outcomeExploratory",
+        "outcomeEligible",
+        "outcomeNeverPromoted",
+        "outcomeLineageTitle",
+        "outcomeMetrics",
+        "outcomeArtifactIntegrity",
+    ):
+        assert javascript.count(f"{key}:") == 2
+    assert 'state.user.role === "auditor" && facility.status === "closed"' in javascript
+
+
+def test_actual_outcome_ui_hashes_reference_and_preserves_request_identity():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for path in (
+        "/api/v1/outcomes?limit=50",
+        "/api/v1/calibration-runs?limit=50",
+        "/actual-outcome",
+    ):
+        assert path in javascript
+    assert 'crypto.subtle.digest("SHA-256"' in javascript
+    assert "new TextEncoder().encode" in javascript
+    assert "evidence_sha256" in javascript
+    assert "evidence_reference:" not in javascript
+    assert "outcomeIdempotencyKeys[facility.facility_id] ||= crypto.randomUUID()" in javascript
+    assert ".toISOString()" in javascript
+
+
+def test_financing_rerender_preserves_pending_disabled_and_busy_state():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert "function renderFacilityWorkbench()" in javascript
+    assert "setFacilityPending(state.facilityPending);" in javascript
+    assert 'view?.setAttribute("aria-busy", String(value));' in javascript
+
+
+def test_delegated_actual_outcome_submit_uses_the_dynamic_form_not_document():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert 'const form = event.target.closest?.("#actualOutcomeForm");' in javascript
+    assert "if (!form) return;" in javascript
+    assert "const data = new FormData(form);" in javascript
+
+
+def test_outcome_lineage_displays_required_engine_and_nullable_research_model():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert "outcome.risk_engine_version" in javascript
+    assert 'outcome.model_version_id || "—"' in javascript
+
+
+def test_outcome_observation_default_is_second_precision_and_after_closure():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert "localObservedAt(facility.closed_at)" in javascript
+    assert "Math.ceil(instant / 1000) * 1000" in javascript
+    assert 'name="observed_at" type="datetime-local" step="1"' in javascript
+
+
 def test_facility_javascript_preserves_exact_money_and_covers_every_api_action():
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 

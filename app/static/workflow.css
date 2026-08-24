@@ -281,6 +281,38 @@ body.authenticated .auth-gate { display: none; }
 .facility-pending { opacity: .62; }
 .facility-pending .facility-detail-panel,.facility-pending .facility-create-panel { cursor: progress; }
 
+.actual-outcome-panel { margin-top: 18px; padding: 18px; border: 1px solid #c7d9e8; border-radius: 13px; background: linear-gradient(145deg,#f4f9fd 0%,#fff 58%); box-shadow: inset 4px 0 0 #0072b2; }
+.outcome-heading { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+.outcome-heading span { color: #0072b2; font-size: 8px; font-weight: 900; letter-spacing: .13em; }
+.outcome-heading h3 { margin: 4px 0 6px; color: #10264a; font-size: 17px; }
+.outcome-heading p { margin: 0; max-width: 620px; color: #60718b; font-size: 9px; line-height: 1.5; }
+.outcome-heading > b { padding: 7px 9px; border: 1px solid #bad2e5; border-radius: 999px; color: #315b7b; background: #fff; font: 800 8px Consolas,monospace; white-space: nowrap; }
+.actual-outcome-form { margin-top: 16px; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.actual-outcome-form label { display: grid; gap: 5px; color: #526176; font-size: 8px; }
+.actual-outcome-form input,.actual-outcome-form select { min-width: 0; height: 38px; padding: 0 10px; border: 1px solid #ccd9e6; border-radius: 8px; background: #fff; color: #16243a; }
+.actual-outcome-form .outcome-checkbox { align-content: center; grid-template-columns: auto 1fr; }
+.actual-outcome-form .outcome-checkbox input { width: 18px; height: 18px; }
+.outcome-evidence-reference { grid-column: span 2; }
+.actual-outcome-form .btn { min-height: 38px; align-self: end; }
+.outcome-retry-note,.outcome-boundary { margin: 9px 0 0; color: #60718b; font-size: 8px; line-height: 1.5; }
+.outcome-boundary { padding: 9px 11px; border-left: 3px solid #d55e00; background: #fff8f2; color: #764421; }
+.actual-outcome-panel[aria-busy="true"] { opacity: .68; cursor: progress; }
+.candidate-status.exploratory { border-color: #e8b37e; color: #8c4b11; background: #fff8ef; }
+.candidate-status.eligible { border-color: #9dcdb8; color: #176344; background: #f1faf6; }
+.outcome-lineage { margin-top: 15px; }
+.outcome-lineage > b { color: #10264a; font-size: 10px; }
+.outcome-lineage dl { margin: 9px 0 0; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.outcome-lineage dl div { min-width: 0; padding: 9px; border: 1px solid #d8e3ed; background: #fff; }
+.outcome-lineage dt { color: #60718b; font-size: 7px; text-transform: uppercase; }
+.outcome-lineage dd { margin: 4px 0 0; overflow: hidden; color: #10264a; font: 800 8px Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
+.calibration-candidate { margin-top: 12px; border: 1px solid #b9cfe0; background: #10264a; color: #fff; }
+.candidate-never-promoted { padding: 8px 11px; color: #fff; background: #d55e00; font-size: 9px; font-weight: 900; letter-spacing: .05em; }
+.candidate-kpis { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); }
+.candidate-kpis article { min-width: 0; padding: 11px; border-right: 1px solid rgba(255,255,255,.14); }
+.candidate-kpis span { display: block; color: #b9cbe0; font-size: 7px; }
+.candidate-kpis b { display: block; margin-top: 5px; overflow-wrap: anywhere; font: 800 8px Consolas,monospace; }
+.calibration-candidate > p { margin: 0; padding: 0 11px 10px; color: #b9cbe0; font-size: 7px; }
+
 .fabric-anchor-panel { margin: 18px 0; padding: 22px; border: 1px solid #c7d7e8; border-radius: 14px; background: linear-gradient(135deg,#f7fbff 0%,#fff 62%); box-shadow: 0 12px 34px rgba(16,38,74,.08); color: var(--wf-ink); }
 .fabric-anchor-bridge { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin-bottom: 16px; color: #51657f; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
 .fabric-anchor-bridge i { height: 2px; background: linear-gradient(90deg,#10264a,#0072b2); position: relative; }
@@ -336,6 +368,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .facility-create-submit { grid-column: 1/-1; }
   .fabric-anchor-head { grid-template-columns: 1fr; }
   .anchor-record { grid-template-columns: 1fr 1fr; }
+  .actual-outcome-form { grid-template-columns: 1fr 1fr; }
+  .candidate-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 
 @media (max-width: 600px) {
@@ -366,6 +400,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .fabric-anchor-toolbar { align-items: stretch; flex-direction: column; }
   .anchor-actions { display: grid; grid-template-columns: 1fr; }
   .anchor-record { grid-template-columns: 1fr; }
+  .outcome-heading { display: grid; }
+  .actual-outcome-form,.outcome-lineage dl,.candidate-kpis { grid-template-columns: 1fr; }
+  .outcome-evidence-reference { grid-column: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

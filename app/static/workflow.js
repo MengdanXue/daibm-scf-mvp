@@ -70,7 +70,10 @@
       facility_precondition_failed: "Для создания нужна одобренная заявка с завершённым аудитом и совпадающей суммой.", facility_conflict: "Данные изменились или действие больше недоступно. Обновите досье и повторите с новой командой.",
       fabricAnchorEyebrow: "ОПЦИОНАЛЬНЫЙ ВНЕШНИЙ ЯКОРЬ", fabricAnchorTitle: "Якорение в Fabric", fabricAnchorSubtitle: "Хеши аудиторских событий передаются через транзакционный outbox; бизнес-записи остаются в PostgreSQL.",
       fabricAnchorOptional: "Опциональный расширенный режим: бизнес-процесс продолжается, а хеши остаются в очереди, если Fabric недоступен.", fabricAnchorConnected: "Эта отправка получила реальные подтверждения Fabric. Обновление списка само по себе не проверяет доступность Gateway.",
-      anchorPending: "Ожидают", anchorRetry: "Повтор", anchorAnchored: "Закреплены", anchorPermanentFailed: "Постоянная ошибка", anchorRefresh: "Обновить", anchorDispatch: "Отправить одну партию", anchorRetryFailed: "Повторить", anchorRecent: "Последние записи", anchorEmpty: "Записей для якорения пока нет.", anchorAttempt: "попыток", anchorError: "ошибка", anchorNoError: "без ошибки", anchorCountsLabel: "Счётчики статусов якорения Fabric"
+      anchorPending: "Ожидают", anchorRetry: "Повтор", anchorAnchored: "Закреплены", anchorPermanentFailed: "Постоянная ошибка", anchorRefresh: "Обновить", anchorDispatch: "Отправить одну партию", anchorRetryFailed: "Повторить", anchorRecent: "Последние записи", anchorEmpty: "Записей для якорения пока нет.", anchorAttempt: "попыток", anchorError: "ошибка", anchorNoError: "без ошибки", anchorCountsLabel: "Счётчики статусов якорения Fabric",
+      outcomeEyebrow: "УПРАВЛЯЕМАЯ ОБРАТНАЯ СВЯЗЬ", outcomeTitle: "Фактический результат и кандидат калибровки", outcomeSubtitle: "Только для закрытого досье: результат неизменяем, а Platt-калибровка остаётся исследовательским кандидатом.",
+      outcomeDefaulted: "Зафиксирован дефолт", outcomeDaysPastDue: "Просрочка, дней", outcomeLossAmount: "Сумма потерь", outcomeObservedAt: "Наблюдалось", outcomeEvidenceReference: "Ссылка на доказательство (хешируется только в браузере)", outcomeProvenance: "Происхождение", outcomeControlledDemo: "Контролируемая симуляция", outcomeExternalVerified: "Внешне проверено", outcomeSubmit: "Зафиксировать результат", outcomeSubmitting: "Хеширование и запись…",
+      outcomeExploratory: "EXPLORATORY · исследовательский", outcomeEligible: "ELIGIBLE · пригоден к проверке", outcomeNeverPromoted: "КАНДИДАТ НЕ ВНЕДРЁН · NEVER PROMOTED", outcomeLineageTitle: "Линия происхождения результата", outcomeMetrics: "Brier / log loss до → после", outcomeArtifactIntegrity: "Целостность артефакта", outcomeSample: "выборка", outcomePositive: "положительных", outcomeNegative: "отрицательных", outcomeRun: "Запуск калибровки", outcomeRecorded: "Результат зафиксирован идемпотентно", outcomeRetryIdentity: "При сетевом повторе сохраняются те же данные и idempotency key.", outcomeBoundary: "Только кандидат Platt: TGNN не переобучается, drift не запускает обучение, автоматического promotion нет.", outcomeRequired: "Заполните ссылку на доказательство и корректные значения.", outcomeNoMetrics: "метрики недоступны"
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
@@ -127,7 +130,10 @@
       facility_precondition_failed: "创建融资要求申请已批准、审计完成且本金一致。", facility_conflict: "数据已变化或操作不再可用。请刷新卷宗后使用新命令重试。",
       fabricAnchorEyebrow: "可选外部锚定", fabricAnchorTitle: "Fabric 锚定", fabricAnchorSubtitle: "审计事件哈希经事务型 outbox 发送；业务记录仍保存在 PostgreSQL。",
       fabricAnchorOptional: "可选高级模式：Fabric 不可用时业务流程仍会继续，哈希保留在队列中。", fabricAnchorConnected: "本次派发已收到真实 Fabric 确认；仅刷新列表并不探测 Gateway 当前状态。",
-      anchorPending: "待处理", anchorRetry: "待重试", anchorAnchored: "已锚定", anchorPermanentFailed: "永久失败", anchorRefresh: "刷新", anchorDispatch: "派发一批", anchorRetryFailed: "重新入队", anchorRecent: "最近记录", anchorEmpty: "暂时没有待锚定记录。", anchorAttempt: "尝试次数", anchorError: "错误", anchorNoError: "无错误", anchorCountsLabel: "Fabric 锚定状态计数"
+      anchorPending: "待处理", anchorRetry: "待重试", anchorAnchored: "已锚定", anchorPermanentFailed: "永久失败", anchorRefresh: "刷新", anchorDispatch: "派发一批", anchorRetryFailed: "重新入队", anchorRecent: "最近记录", anchorEmpty: "暂时没有待锚定记录。", anchorAttempt: "尝试次数", anchorError: "错误", anchorNoError: "无错误", anchorCountsLabel: "Fabric 锚定状态计数",
+      outcomeEyebrow: "受控结果回流", outcomeTitle: "实际结果与校准候选", outcomeSubtitle: "仅用于已结清卷宗：结果不可变，Platt 校准始终是科研候选。",
+      outcomeDefaulted: "是否违约", outcomeDaysPastDue: "逾期天数", outcomeLossAmount: "损失金额", outcomeObservedAt: "观测时间", outcomeEvidenceReference: "证据引用（仅在浏览器内哈希）", outcomeProvenance: "来源", outcomeControlledDemo: "受控模拟", outcomeExternalVerified: "外部已核验", outcomeSubmit: "记录结果", outcomeSubmitting: "正在哈希并记录……",
+      outcomeExploratory: "EXPLORATORY · 探索性", outcomeEligible: "ELIGIBLE · 可进入独立验证", outcomeNeverPromoted: "候选未上线 · NEVER PROMOTED", outcomeLineageTitle: "结果血缘", outcomeMetrics: "Brier / log loss 校准前 → 校准后", outcomeArtifactIntegrity: "候选工件完整性", outcomeSample: "样本", outcomePositive: "正样本", outcomeNegative: "负样本", outcomeRun: "校准运行", outcomeRecorded: "结果已按幂等语义记录", outcomeRetryIdentity: "网络重试会保留相同数据和 idempotency key。", outcomeBoundary: "仅训练 Platt 校准候选：不重训 TGNN，不由漂移触发，不自动上线。", outcomeRequired: "请填写证据引用和有效数值。", outcomeNoMetrics: "暂无指标"
     }
   };
 
@@ -149,7 +155,9 @@
     accounts: [], coreEnterprises: [], dashboard: null, tasks: [],
     applications: [], selected: null, editing: null, busy: false,
     facilities: [], selectedFacility: null, facilityPending: false,
-    anchors: [], anchorsBusy: false, anchorLastSummary: null
+    anchors: [], anchorsBusy: false, anchorLastSummary: null,
+    outcomes: [], calibrationRuns: [], outcomePending: false,
+    outcomeIdempotencyKeys: Object.create(null)
   };
 
   const tr = (key) => COPY[state.lang][key] || key;
@@ -217,6 +225,7 @@
     state.facilityPending = value;
     const view = document.querySelector("#view-facilities");
     view?.classList.toggle("facility-pending", value);
+    view?.setAttribute("aria-busy", String(value));
     view?.querySelectorAll("button, input, select").forEach((control) => { control.disabled = value; });
   }
 
@@ -318,6 +327,9 @@
     state.selectedFacility = null;
     state.anchors = [];
     state.anchorLastSummary = null;
+    state.outcomes = [];
+    state.calibrationRuns = [];
+    state.outcomeIdempotencyKeys = Object.create(null);
     document.body.classList.remove("authenticated");
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
@@ -367,7 +379,7 @@
     state.coreEnterprises = state.user.role === "supplier"
       ? await wfApi("/api/v1/organizations/core-enterprises")
       : [];
-    await Promise.all([refreshWorkflow(), refreshFacilities(), state.user.role === "auditor" ? refreshAnchors() : Promise.resolve()]);
+    await Promise.all([refreshWorkflow(), refreshFacilities(), state.user.role === "auditor" ? refreshAnchors() : Promise.resolve(), state.user.role === "auditor" ? refreshOutcomes() : Promise.resolve()]);
     await refreshLegacyForRole();
   }
 
@@ -615,12 +627,120 @@
     }
   }
 
+  async function refreshOutcomes() {
+    if (state.user?.role !== "auditor") {
+      state.outcomes = [];
+      state.calibrationRuns = [];
+      return;
+    }
+    try {
+      [state.outcomes, state.calibrationRuns] = await Promise.all([
+        wfApi("/api/v1/outcomes?limit=50"),
+        wfApi("/api/v1/calibration-runs?limit=50")
+      ]);
+      renderFacilityWorkbench();
+    } catch (error) { notify(error.message, true); }
+  }
+
+  function localObservedAt(closedAt) {
+    const closure = Date.parse(closedAt || "");
+    const instant = Math.max(Date.now(), Number.isFinite(closure) ? closure + 1000 : 0);
+    const rounded = new Date(Math.ceil(instant / 1000) * 1000);
+    const local = new Date(rounded.getTime() - rounded.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 19);
+  }
+
+  function outcomeMetric(run, name) {
+    const before = run?.metrics_before?.[name];
+    const after = run?.metrics_after?.[name];
+    if (!Number.isFinite(before) || !Number.isFinite(after)) return tr("outcomeNoMetrics");
+    return `${Number(before).toFixed(4)} → ${Number(after).toFixed(4)}`;
+  }
+
+  function renderActualOutcomePanel(facility) {
+    if (!(state.user.role === "auditor" && facility.status === "closed")) return "";
+    const outcome = state.outcomes.find((item) => item.facility_id === facility.facility_id);
+    const run = outcome ? state.calibrationRuns.find((item) => item.trigger_outcome_id === outcome.outcome_id) : null;
+    if (!outcome) {
+      state.outcomeIdempotencyKeys[facility.facility_id] ||= crypto.randomUUID();
+      return `<section id="actualOutcomePanel" class="actual-outcome-panel" aria-labelledby="actualOutcomeTitle">
+        <div class="outcome-heading"><div><span>${escapeHtml(tr("outcomeEyebrow"))}</span><h3 id="actualOutcomeTitle">${escapeHtml(tr("outcomeTitle"))}</h3><p>${escapeHtml(tr("outcomeSubtitle"))}</p></div><b>PLATT · CANDIDATE ONLY</b></div>
+        <form id="actualOutcomeForm" class="actual-outcome-form" data-facility-id="${escapeHtml(facility.facility_id)}">
+          <label class="outcome-checkbox"><input name="defaulted" type="checkbox"><span>${escapeHtml(tr("outcomeDefaulted"))}</span></label>
+          <label><span>${escapeHtml(tr("outcomeDaysPastDue"))}</span><input name="days_past_due" type="number" min="0" value="0" required></label>
+          <label><span>${escapeHtml(tr("outcomeLossAmount"))}</span><input name="loss_amount" inputmode="decimal" value="0.00" pattern="[0-9]+([.,][0-9]{1,2})?" required></label>
+          <label><span>${escapeHtml(tr("outcomeObservedAt"))}</span><input name="observed_at" type="datetime-local" step="1" value="${localObservedAt(facility.closed_at)}" required></label>
+          <label class="outcome-evidence-reference"><span>${escapeHtml(tr("outcomeEvidenceReference"))}</span><input name="evidence_reference" autocomplete="off" maxlength="500" required></label>
+          <label><span>${escapeHtml(tr("outcomeProvenance"))}</span><select name="provenance"><option value="CONTROLLED_DEMO">${escapeHtml(tr("outcomeControlledDemo"))}</option><option value="EXTERNAL_VERIFIED">${escapeHtml(tr("outcomeExternalVerified"))}</option></select></label>
+          <button type="submit" class="btn btn-primary">${escapeHtml(tr("outcomeSubmit"))}</button>
+        </form>
+        <p class="outcome-retry-note">${escapeHtml(tr("outcomeRetryIdentity"))}</p><p id="outcomeSubmitError" class="facility-inline-error" role="alert"></p>
+        <p class="outcome-boundary">${escapeHtml(tr("outcomeBoundary"))}</p><div id="outcomeLineage" hidden></div><div id="calibrationCandidate" hidden></div>
+      </section>`;
+    }
+    const candidateKey = run?.status === "eligible_candidate" ? "outcomeEligible" : "outcomeExploratory";
+    return `<section id="actualOutcomePanel" class="actual-outcome-panel outcome-recorded" aria-labelledby="actualOutcomeTitle">
+      <div class="outcome-heading"><div><span>${escapeHtml(tr("outcomeEyebrow"))}</span><h3 id="actualOutcomeTitle">${escapeHtml(tr("outcomeTitle"))}</h3><p>${escapeHtml(tr("outcomeRecorded"))}</p></div><b class="candidate-status ${run?.status === "eligible_candidate" ? "eligible" : "exploratory"}">${escapeHtml(tr(candidateKey))}</b></div>
+      <div id="outcomeLineage" class="outcome-lineage"><b>${escapeHtml(tr("outcomeLineageTitle"))}</b><dl><div><dt>outcome</dt><dd>${escapeHtml(outcome.outcome_id)}</dd></div><div><dt>assessment</dt><dd>${escapeHtml(outcome.risk_assessment_id)}</dd></div><div><dt>risk engine</dt><dd>${escapeHtml(outcome.risk_engine_version)}</dd></div><div><dt>model</dt><dd>${escapeHtml(outcome.model_version_id || "—")}</dd></div><div><dt>risk input</dt><dd title="${escapeHtml(outcome.risk_input_sha256)}">${escapeHtml(compactHash(outcome.risk_input_sha256))}</dd></div><div><dt>evidence</dt><dd title="${escapeHtml(outcome.evidence_sha256)}">${escapeHtml(compactHash(outcome.evidence_sha256))}</dd></div><div><dt>${escapeHtml(tr("outcomeProvenance"))}</dt><dd>${escapeHtml(outcome.provenance)}</dd></div></dl></div>
+      <div id="calibrationCandidate" class="calibration-candidate"><div class="candidate-never-promoted">${escapeHtml(tr("outcomeNeverPromoted"))}</div><div class="candidate-kpis"><article><span>${escapeHtml(tr("outcomeRun"))}</span><b>${escapeHtml(run?.status || "failed")}</b></article><article><span>${escapeHtml(tr("outcomeSample"))}</span><b>n=${Number(run?.sample_count || 0)} · +${Number(run?.positive_count || 0)} / −${Number(run?.negative_count || 0)}</b></article><article><span>Brier</span><b>${escapeHtml(outcomeMetric(run, "brier_score"))}</b></article><article><span>log loss</span><b>${escapeHtml(outcomeMetric(run, "log_loss"))}</b></article><article><span>${escapeHtml(tr("outcomeArtifactIntegrity"))}</span><b>${escapeHtml(run?.artifact_integrity || "not_applicable")}</b></article></div><p>${escapeHtml(tr("outcomeMetrics"))}</p></div>
+      <p id="outcomeSubmitError" class="facility-inline-error" role="alert"></p><p class="outcome-boundary">${escapeHtml(tr("outcomeBoundary"))}</p><form id="actualOutcomeForm" hidden></form>
+    </section>`;
+  }
+
+  async function hashEvidenceReference(reference) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(reference));
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function setOutcomePending(value) {
+    state.outcomePending = value;
+    const panel = document.querySelector("#actualOutcomePanel");
+    panel?.setAttribute("aria-busy", String(value));
+    panel?.querySelectorAll("button,input,select").forEach((control) => { control.disabled = value; });
+  }
+
+  async function submitActualOutcome(event) {
+    event.preventDefault();
+    const form = event.target.closest?.("#actualOutcomeForm");
+    if (!form) return;
+    const facility = state.selectedFacility;
+    if (!facility || state.outcomePending || state.user?.role !== "auditor" || facility.status !== "closed") return;
+    const data = new FormData(form);
+    const reference = String(data.get("evidence_reference") || "").trim();
+    const lossAmount = normalizeMoneyInput(data.get("loss_amount"));
+    const observed = new Date(String(data.get("observed_at")));
+    const errorElement = document.querySelector("#outcomeSubmitError");
+    try {
+      if (!reference || !Number.isFinite(observed.getTime())) throw new Error(tr("outcomeRequired"));
+      moneyToCents(lossAmount, true);
+      setOutcomePending(true);
+      const payload = {
+        idempotency_key: state.outcomeIdempotencyKeys[facility.facility_id] ||= crypto.randomUUID(),
+        defaulted: data.get("defaulted") === "on",
+        days_past_due: Number(data.get("days_past_due")),
+        loss_amount: lossAmount,
+        observed_at: observed.toISOString(),
+        evidence_sha256: await hashEvidenceReference(reference),
+        provenance: String(data.get("provenance"))
+      };
+      const result = await wfApi(`/api/v1/facilities/${facility.facility_id}/actual-outcome`, { method: "POST", body: JSON.stringify(payload) });
+      state.outcomes = [result.outcome, ...state.outcomes.filter((item) => item.outcome_id !== result.outcome.outcome_id)];
+      state.calibrationRuns = [result.calibration_run, ...state.calibrationRuns.filter((item) => item.calibration_run_id !== result.calibration_run.calibration_run_id)];
+      notify(tr("outcomeRecorded"));
+      renderFacilityDetail();
+    } catch (error) {
+      if (errorElement) errorElement.textContent = error.message;
+      notify(error.message, true);
+    } finally { setOutcomePending(false); }
+  }
+
   function renderFacilityWorkbench() {
     if (!state.user) return;
     document.querySelector("#facilityCreatePanel").hidden = state.user.role !== "financier";
     document.querySelector("#facilityCount").textContent = state.facilities.length;
     renderFacilityList();
     renderFacilityDetail();
+    setFacilityPending(state.facilityPending);
   }
 
   function renderFacilityList() {
@@ -675,7 +795,8 @@
     <div class="facility-evidence"><span>${escapeHtml(tr("facilityEvidence"))}</span><b>${escapeHtml(facility.disbursement_reference || "—")}</b><small title="${escapeHtml(facility.disbursement_evidence_sha256 || "")}">${escapeHtml(compactHash(facility.disbursement_evidence_sha256))}</small></div>
     <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityInstallments"))}</b><span>${facility.installments.length}</span></div><ol id="facilityInstallments" class="facility-stage-rail">${installments}</ol></section>
     <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityPayments"))}</b><span>${facility.payments.length}</span></div><div id="facilityPayments" class="facility-payment-list">${payments}</div></section>
-    <section class="facility-detail-section facility-action-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityActionStation"))}</b><span>${facility.allowed_actions.length}</span></div><div id="facilityActions" class="facility-action-list">${actions}</div></section>`;
+    <section class="facility-detail-section facility-action-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityActionStation"))}</b><span>${facility.allowed_actions.length}</span></div><div id="facilityActions" class="facility-action-list">${actions}</div></section>
+    ${renderActualOutcomePanel(facility)}`;
   }
 
   function installmentOptions(facility, includePaid = false) {
@@ -856,12 +977,16 @@
     });
     document.querySelector("#logoutButton").addEventListener("click", logout);
     document.querySelector("#refreshWorkflow").addEventListener("click", () => refreshWorkflow());
-    document.querySelector("#refreshFacilities").addEventListener("click", () => refreshFacilities());
+    document.querySelector("#refreshFacilities").addEventListener("click", () => Promise.all([refreshFacilities(), refreshOutcomes()]));
     document.querySelector("#refreshAnchors").addEventListener("click", refreshAnchors);
     document.querySelector("#dispatchAnchors").addEventListener("click", dispatchAnchors);
     document.querySelector("#applicationForm").addEventListener("submit", saveApplication);
     document.querySelector("#facilityCreateForm").addEventListener("submit", createFacility);
     document.addEventListener("submit", (event) => {
+      if (event.target.matches?.("#actualOutcomeForm")) {
+        submitActualOutcome(event);
+        return;
+      }
       const facilityForm = event.target.closest?.("[data-facility-action-form]");
       if (!facilityForm) return;
       event.preventDefault();
