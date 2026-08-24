@@ -22,9 +22,9 @@ How can a supply-chain finance decision connect temporal graph learning, an expl
 
 ## Synthetic evidence
 
-- `2026_EXPLORATORY_SENSITIVITY`; five deterministic seeds, with n=5 descriptive t intervals only.
-- TGNN ROC-AUC 0.5469 ± 0.0855 and PR-AUC 0.1211. The mean is near chance and seed variability is high.
-- XGBoost ROC-AUC 0.5889 ± 0.0202 and PR-AUC 0.1467. It is slightly steadier, not strong.
+- `2026_EXPLORATORY_SENSITIVITY`; five deterministic seeds. Values are mean ± sample SD across n=5 seeds and are descriptive only.
+- TGNN ROC-AUC 0.5469 ± 0.0855 (mean ± sample SD); PR-AUC mean is 0.1211. The mean is near chance and seed variability is high.
+- XGBoost ROC-AUC 0.5889 ± 0.0202 (mean ± sample SD); PR-AUC mean is 0.1467. It is slightly steadier, not strong.
 - At threshold 0.50, aggregate XGBoost positive-class recall 0.022 (FN 716, TP 16). Calibration deviation remains visible.
 - Thresholds were fixed before reporting. No threshold is selected as optimal and no significance claim is made.
 

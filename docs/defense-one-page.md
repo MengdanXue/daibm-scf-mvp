@@ -33,10 +33,10 @@ Each account receives an independent server session. API authorization and versi
 ## Research evidence / Исследовательские данные
 
 - Provenance: `2026_EXPLORATORY_SENSITIVITY`; synthetic five-seed rerun only.
-- TGNN ROC-AUC `0.5469 ± 0.0855`, PR-AUC `0.1211`; high seed variability and near chance.
-- XGBoost ROC-AUC `0.5889 ± 0.0202`, PR-AUC `0.1467`; slightly steadier but still weak.
+- TGNN ROC-AUC mean ± sample SD: `0.5469 ± 0.0855`; PR-AUC mean `0.1211`; high seed variability and near chance.
+- XGBoost ROC-AUC mean ± sample SD: `0.5889 ± 0.0202`; PR-AUC mean `0.1467`; slightly steadier but still weak.
 - At threshold `0.50`, XGBoost positive recall is `0.022` (FN `716`, TP `16`). Fixed-bin calibration gaps: TGNN `0.387`, XGBoost `0.265`.
-- Intervals are n=5 descriptive t intervals. They are not significance tests; the fixed threshold grid does not select an optimum.
+- Values are mean ± sample SD across n=5 seeds. They are descriptive, not significance tests; the fixed threshold grid does not select an optimum.
 
 ## Exact non-claims / Точные ограничения / 精确边界
 

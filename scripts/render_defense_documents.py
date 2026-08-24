@@ -5,11 +5,8 @@ import hashlib
 import html
 import os
 import re
-import shutil
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 from pypdf import PdfReader
 from reportlab.lib import colors
@@ -18,7 +15,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.platypus import (
@@ -36,6 +32,9 @@ DOCUMENTS = (
     ("defense-one-page.md", "defense-one-page.pdf"),
     ("research-brief-en.md", "research-brief-en.pdf"),
 )
+DEFAULT_SOURCE_DATE_EPOCH = 1_787_529_600  # 2026-08-24T00:00:00Z
+DEJAVU_FONT = "DejaVuSans.ttf"
+CJK_FONT = "NotoSansSC-DefenseSubset.ttf"
 NAVY = colors.HexColor("#10264A")
 BLUE = colors.HexColor("#0072B2")
 ORANGE = colors.HexColor("#D55E00")
@@ -44,32 +43,18 @@ MUTED = colors.HexColor("#526176")
 PALE = colors.HexColor("#EEF4FA")
 
 
-def _font_candidates() -> Iterable[Path]:
-    configured = os.environ.get("DAIBM_DEJAVU_FONT")
-    if configured:
-        yield Path(configured)
-    base_prefix = Path(sys.base_prefix)
-    yield base_prefix.parent / "native/poppler/Library/share/fonts/DejaVuSans.ttf"
-    yield Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-    yield Path("/usr/share/fonts/dejavu/DejaVuSans.ttf")
-    pdftoppm = shutil.which("pdftoppm")
-    if pdftoppm:
-        executable = Path(pdftoppm).resolve()
-        for parent in executable.parents:
-            yield parent / "share/fonts/truetype/dejavu/DejaVuSans.ttf"
-            yield parent / "share/fonts/DejaVuSans.ttf"
-            yield parent / "share/fonts/DejaVuSans.ttf"
+def _font_asset(root: Path, filename: str) -> Path:
+    path = root / "assets" / "fonts" / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"repository font asset is missing: {path}")
+    return path
 
 
-def _register_fonts() -> None:
+def _register_fonts(root: Path) -> None:
+    dejavu_path = _font_asset(root, DEJAVU_FONT)
+    cjk_path = _font_asset(root, CJK_FONT)
     if "DAIBM-DejaVu" not in pdfmetrics.getRegisteredFontNames():
-        font_path = next((path for path in _font_candidates() if path.is_file()), None)
-        if font_path is None:
-            raise RuntimeError(
-                "DejaVuSans.ttf is required; install fonts-dejavu-core or set "
-                "DAIBM_DEJAVU_FONT"
-            )
-        pdfmetrics.registerFont(TTFont("DAIBM-DejaVu", str(font_path)))
+        pdfmetrics.registerFont(TTFont("DAIBM-DejaVu", str(dejavu_path)))
         pdfmetrics.registerFontFamily(
             "DAIBM-DejaVu",
             normal="DAIBM-DejaVu",
@@ -77,8 +62,8 @@ def _register_fonts() -> None:
             italic="DAIBM-DejaVu",
             boldItalic="DAIBM-DejaVu",
         )
-    if "STSong-Light" not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    if "DAIBM-NotoSansSC" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("DAIBM-NotoSansSC", str(cjk_path)))
 
 
 def _clean_inline(text: str) -> str:
@@ -86,7 +71,7 @@ def _clean_inline(text: str) -> str:
     escaped = html.escape(plain, quote=False)
     return re.sub(
         r"[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]+",
-        lambda match: f'<font name="STSong-Light">{match.group(0)}</font>',
+        lambda match: f'<font name="DAIBM-NotoSansSC">{match.group(0)}</font>',
         escaped,
     )
 
@@ -214,11 +199,26 @@ def _page_chrome(source_name: str, title: str):
     return draw
 
 
-def _render_one(source: Path, destination: Path) -> None:
+def _generated_date(source_date_epoch: int | None) -> str:
+    raw_value: int | str = source_date_epoch
+    if raw_value is None:
+        raw_value = os.environ.get(
+            "SOURCE_DATE_EPOCH",
+            str(DEFAULT_SOURCE_DATE_EPOCH),
+        )
+    try:
+        epoch = int(raw_value)
+        if epoch < 0:
+            raise ValueError
+        return datetime.fromtimestamp(epoch, timezone.utc).date().isoformat()
+    except (OverflowError, OSError, TypeError, ValueError) as error:
+        raise ValueError("SOURCE_DATE_EPOCH must be a non-negative integer") from error
+
+
+def _render_one(source: Path, destination: Path, generated_date: str) -> None:
     markdown = source.read_text(encoding="utf-8")
     title, story = _story(markdown)
     source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
-    generated_date = datetime.now(timezone.utc).date().isoformat()
     subject = (
         f"source_sha256={source_sha256}; generated_date={generated_date}; "
         "canonical_source=markdown"
@@ -271,17 +271,22 @@ def _render_one(source: Path, destination: Path) -> None:
         raise RuntimeError(f"{destination} must render to exactly one page")
 
 
-def render_documents(root: Path) -> tuple[Path, Path]:
+def render_documents(
+    root: Path,
+    *,
+    source_date_epoch: int | None = None,
+) -> tuple[Path, Path]:
     active_root = Path(root)
     docs = active_root / "docs"
-    _register_fonts()
+    _register_fonts(active_root)
+    generated_date = _generated_date(source_date_epoch)
     outputs: list[Path] = []
     for source_name, pdf_name in DOCUMENTS:
         source = docs / source_name
         if not source.is_file():
             raise FileNotFoundError(f"canonical source is missing: {source}")
         destination = docs / pdf_name
-        _render_one(source, destination)
+        _render_one(source, destination, generated_date)
         outputs.append(destination)
     return tuple(outputs)  # type: ignore[return-value]
 
@@ -289,8 +294,12 @@ def render_documents(root: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render one-page defense PDFs")
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--source-date-epoch", type=int)
     args = parser.parse_args(argv)
-    for output in render_documents(args.root):
+    for output in render_documents(
+        args.root,
+        source_date_epoch=args.source_date_epoch,
+    ):
         print(output)
     return 0
 
