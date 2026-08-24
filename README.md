@@ -183,6 +183,15 @@ python -m research.cli verify --reference artifacts/reference
 
 Полная эталонная сборка доступна как `python -m research.cli build-reference`; она обучает обе модели, экспортирует ONNX, проверяет паритет и продвигает артефакт. Обычный запуск Docker эту операцию не выполняет. / 完整参考构建可使用 `python -m research.cli build-reference`：它会训练两类模型、导出 ONNX、校验一致性并发布模型。普通 Docker 启动不会训练模型。
 
+Исследовательский пакет чувствительности по пяти синтетическим seed запускается отдельно; по умолчанию он обучает каждую модель до 100 эпох с early stopping. Команда сохраняет проверяемые labels/probabilities/hashes, пять PNG, две исходные CSV-таблицы и доступное приложение `research-appendix.md`. / 五个合成 seed 的敏感性证据包需单独运行；默认每个模型最多训练 100 轮并采用 early stopping。命令保留可验证的标签、概率和哈希，同时输出 5 张 PNG、2 份底层 CSV 与含无障碍文字说明的 `research-appendix.md`：
+
+```powershell
+python -m research.cli evaluate-multiseed --output output/research/sensitivity-runs --destination output/research/sensitivity-pack
+python -m research.cli verify-multiseed --path output/research/sensitivity-pack
+```
+
+Все интервалы в этом пакете являются описательными 95% t-интервалами вариабельности пяти seed (`n=5`), а не проверками значимости. Пороговая сетка задана заранее; система не выбирает «лучший» порог. Результаты относятся только к синтетической реализации 2026 года и не воспроизводят исходные результаты диссертации. / 包内区间均为五个 seed（`n=5`）的描述性 95% t 区间，不是显著性检验。阈值网格预先固定，系统不选择“最佳阈值”。这些结果仅属于 2026 年合成重实现，不是原论文结果的复现。
+
 Зафиксированный набор имеет SHA-256 `f784faa8bdef23625888d64de75c2f29a80c0a51e266e0822652569507648353`; продвинутый ONNX — `158d273db310c3f1abf4be7cb06aee78568e475ebb7564ebbeaa16d3efeeb0e5`. Каноническая матрица утверждений и доказательств: [docs/thesis-traceability.md](docs/thesis-traceability.md). / 冻结数据集与 ONNX 哈希见上述值；论文声明与工程证据的唯一边界文档为该追溯矩阵。
 
 ## Границы MVP / 科研边界

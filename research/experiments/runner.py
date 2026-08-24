@@ -40,6 +40,25 @@ class SensitivityConfig:
     threshold: float = 0.50
 
 
+def render_evidence_outputs(
+    pack: dict[str, Any], output: str | Path
+) -> tuple[Path, ...]:
+    """Render the static figures, accessible appendix, and source tables."""
+
+    from research.experiments.figures import render_figures
+    from research.experiments.report import write_appendix
+
+    destination = Path(output)
+    figures = render_figures(pack, destination)
+    appendix = write_appendix(pack, destination)
+    return (
+        *figures,
+        destination / "seed-metrics.csv",
+        destination / "threshold-sensitivity.csv",
+        appendix,
+    )
+
+
 def _validate_config(config: SensitivityConfig) -> None:
     if not config.seeds:
         raise ValueError("at least one seed is required")
@@ -280,6 +299,7 @@ def run_sensitivity(
             "summary": summarize_runs(evidence) if len(evidence) >= 2 else {},
         }
         write_canonical_json(staging / "manifest.json", manifest)
-        verify_sensitivity_pack(staging)
+        verified = verify_sensitivity_pack(staging)
+        render_evidence_outputs(verified, staging)
         _publish_sensitivity_bundle(staging, pack_destination)
     return verify_sensitivity_pack(pack_destination)["manifest"]
