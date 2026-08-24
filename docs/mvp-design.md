@@ -61,7 +61,9 @@ Integrated application v0.6 adds a database-backed five-role workflow around the
 
 New workflow applications also receive a SHA-256 fingerprint of their declared trade fields and a unique invoice-claim hash. The latter rejects reuse of the same normalized invoice by the same supplier/core-enterprise pair. This is duplicate-claim control over declared fields, not uploaded-document, tax-platform, blockchain, or ZKP verification. Business baseline assessments persist an assessment UUID, engine version, input hash, timestamp, and provenance; they remain explicitly separate from Research Core TGNN inference.
 
-The Research Core dossier displays hash-verified TGNN and XGBoost rerun metrics under `2026_REIMPLEMENTATION`. The interface calls the workflow an approval, risk-control, and audit loop. It does not claim credit disbursement, repayment, or loan closure.
+The Research Core dossier displays hash-verified TGNN and XGBoost rerun metrics under `2026_REIMPLEMENTATION`. The original application workflow remains an approval, risk-control, and audit loop. A separate versioned facility aggregate provides a controlled financing lifecycle simulation after an application is both approved and audited: exact-cent principal, two or more installments, simulated disbursement evidence, submitted and confirmed repayments, overdue control, full repayment, and audited closure. Every facility command is role-authorized, version checked, idempotent, and committed with its ledger evidence.
+
+The facility aggregate does not execute a real bank transfer. It has no payment-rail, core-banking, interest, fees, FX, accounting, or reconciliation integration. A disbursement reference and a confirmed repayment are controlled synthetic evidence, not proof that external money moved.
 
 The page is responsive, keyboard-focusable, reduced-motion aware, and uses only local assets. No external network API is needed during a defense demonstration.
 
@@ -77,8 +79,8 @@ A missing or incompatible model, unreachable database, or invalid ledger returns
 
 ## Evidence boundaries
 
-Implemented in v0.4: PostgreSQL application state, Alembic schema, deterministic synthetic generator, temporal graph builder, XGBoost comparison, minimal GCN–BiLSTM TGNN, ONNX Runtime inference, model/data/graph registries, policy engine, atomic decision trace, risk injection, hash-chain verification, and evidence-preserving recovery.
+Implemented in the integrated application: PostgreSQL application state, Alembic schema, deterministic synthetic generator, temporal graph builder, XGBoost comparison, minimal GCN–BiLSTM TGNN, ONNX Runtime inference, model/data/graph registries, policy engine, atomic decision trace, risk injection, hash-chain verification, evidence-preserving recovery, and the simulated financing-facility lifecycle described above.
 
-Not implemented or not claimed: real enterprise data, numerical reproduction of the original thesis results, the full thesis TGNN, production credit decisioning, Hyperledger Fabric, PoA+, chaincode, ZKP, production identity infrastructure, online learning, or external bank integration.
+Not implemented or not claimed: real enterprise data, numerical reproduction of the original thesis results, the full thesis TGNN, production credit decisioning, Hyperledger Fabric, PoA+, chaincode, ZKP, production identity infrastructure, online learning, external bank integration, actual settlement, interest, fees, or accounting.
 
 The canonical claim-to-evidence mapping is `docs/thesis-traceability.md`; no second matrix should be maintained.
