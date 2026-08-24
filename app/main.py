@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api import facility_router
 from app.api.auth import router as auth_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
@@ -17,6 +18,7 @@ from app.database import Database
 from app.schemas import FinancingRequestCreate, IntegrityRecoveryRequest
 from app.service import FinancingService
 from app.services.identity import IdentityService
+from app.services.facility import FacilityService
 from app.services.workflow import WorkflowService
 from app.services.research_inference import ResearchInferenceService
 from app.services.research_decision import ResearchDecisionService
@@ -56,6 +58,7 @@ def create_app(
     integrity_service = IntegrityService(active_database.session_factory)
     identity_service = IdentityService(active_database.session_factory)
     workflow_service = WorkflowService(active_database.session_factory)
+    facility_service = FacilityService(active_database.session_factory)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -67,6 +70,7 @@ def create_app(
         application.state.integrity_service = integrity_service
         application.state.identity_service = identity_service
         application.state.workflow_service = workflow_service
+        application.state.facility_service = facility_service
         identity_service.seed_demo_accounts()
         research_service.initialize()
         yield
@@ -90,6 +94,7 @@ def create_app(
     application.include_router(research_router)
     application.include_router(auth_router)
     application.include_router(workflow_router)
+    application.include_router(facility_router)
 
     @application.get("/", include_in_schema=False)
     def index():
