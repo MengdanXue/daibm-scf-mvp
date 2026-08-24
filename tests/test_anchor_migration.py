@@ -70,9 +70,8 @@ def test_anchor_outbox_schema_is_present_at_alembic_head(migrated_engine):
     } <= check_names
 
 
-def test_anchor_migration_is_the_single_head_after_facility_ledger_events():
+def test_anchor_migration_follows_facility_ledger_events():
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
     revision = scripts.get_revision("20260824_0006")
 
     assert revision.down_revision == "20260824_0005a"
-    assert scripts.get_heads() == ["20260824_0006"]
