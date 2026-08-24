@@ -146,7 +146,9 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 status="audited",
                 version=1,
                 risk_assessment_id=assessment_id,
+                risk_engine_version="tgnn-test",
                 risk_input_sha256="5" * 64,
+                risk_assessed_at=NOW,
             )
         )
         session.add(

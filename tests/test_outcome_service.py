@@ -225,6 +225,36 @@ def test_identical_retry_is_idempotent_but_conflicting_reuse_is_rejected(
         )
 
 
+def test_idempotency_normalizes_equivalent_money_and_timestamp_representations(
+    session_factory,
+    tmp_path,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    key = uuid.uuid4()
+
+    first = service.submit(
+        facility_id,
+        _payload(
+            idempotency_key=key,
+            loss_amount="1",
+            observed_at="2026-08-24T12:00:00Z",
+        ),
+        auditor,
+    )
+    replay = service.submit(
+        facility_id,
+        _payload(
+            idempotency_key=key,
+            loss_amount="1.00",
+            observed_at="2026-08-24T14:30:00+02:30",
+        ),
+        auditor,
+    )
+
+    assert replay == first
+
+
 def test_submission_requires_auditor_closed_zero_balance_lineage_and_loss_cap(
     session_factory,
     tmp_path,
@@ -244,6 +274,23 @@ def test_submission_requires_auditor_closed_zero_balance_lineage_and_loss_cap(
         facility = session.get(FinancingFacilityModel, facility_id)
         facility.status = "repaid"
     with pytest.raises(OutcomeConflict, match="closed facility"):
+        service.submit(facility_id, _payload(), auditor)
+
+
+@pytest.mark.parametrize("missing_field", ("risk_input_sha256", "risk_engine_version"))
+def test_submission_rejects_incomplete_request_side_prediction_lineage(
+    session_factory,
+    tmp_path,
+    missing_field,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    with session_factory.begin() as session:
+        facility = session.get(FinancingFacilityModel, facility_id)
+        application = session.get(FinancingRequestModel, facility.request_id)
+        setattr(application, missing_field, None)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+
+    with pytest.raises(OutcomeConflict, match="lineage"):
         service.submit(facility_id, _payload(), auditor)
 
 
@@ -316,3 +363,83 @@ def test_training_failure_is_persisted_without_retrying_or_losing_outcome(
     assert result["calibration_run"]["sample_count"] == 1
     assert result["calibration_run"]["metrics_before"] is not None
     assert result["calibration_run"]["metrics_after"] is None
+
+
+def test_dataset_summary_type_error_is_persisted_as_failed_run(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+
+    def fail_summary(*_args, **_kwargs):
+        raise TypeError("unexpected numpy adapter failure")
+
+    monkeypatch.setattr(
+        "app.services.outcomes.summarize_calibration_observations",
+        fail_summary,
+    )
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+
+    result = service.submit(facility_id, _payload(), auditor)
+
+    assert result["calibration_run"]["status"] == "failed"
+    assert result["calibration_run"]["failure_code"] == "candidate_training_failed"
+    assert result["calibration_run"]["sample_count"] == 1
+    assert result["calibration_run"]["metrics_before"] is None
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ActualOutcomeModel)) == 1
+        assert session.scalar(select(func.count()).select_from(CalibrationRunModel)) == 1
+
+
+def test_late_transaction_failure_removes_staged_and_published_artifacts(
+    session_factory,
+    tmp_path,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+
+    class FailingLedger:
+        def append_many(self, *_args, **_kwargs):
+            raise RuntimeError("ledger unavailable")
+
+    service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        ledger_repository=FailingLedger(),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(RuntimeError, match="ledger unavailable"):
+        service.submit(facility_id, _payload(), auditor)
+
+    assert list(tmp_path.glob("*")) == []
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ActualOutcomeModel)) == 0
+        assert session.scalar(select(func.count()).select_from(CalibrationRunModel)) == 0
+
+
+def test_post_commit_artifact_publication_failure_is_marked_and_audited(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+
+    def fail_publish(*_args, **_kwargs):
+        raise OSError("rename unavailable")
+
+    monkeypatch.setattr(
+        "app.services.outcomes.publish_candidate_artifact",
+        fail_publish,
+    )
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+
+    result = service.submit(facility_id, _payload(), auditor)
+
+    assert result["calibration_run"]["status"] == "failed"
+    assert result["calibration_run"]["failure_code"] == "artifact_write_failed"
+    assert result["calibration_run"]["artifact_integrity"] == "not_applicable"
+    assert list(tmp_path.glob("*")) == []
+    with session_factory() as session:
+        event_types = list(session.scalars(select(LedgerEventModel.event_type)))
+    assert event_types.count("CALIBRATION_CANDIDATE_FAILED") == 1

@@ -10,6 +10,8 @@ from app.services.outcome_calibration import (
     CalibrationObservation,
     CalibrationTrainingConfig,
     build_calibration_candidate,
+    recover_candidate_artifact,
+    stage_candidate_artifact,
     verify_candidate_artifact,
     write_candidate_artifact,
 )
@@ -124,3 +126,17 @@ def test_candidate_artifact_verifier_reports_missing_and_mismatch(tmp_path):
 
     missing.write_bytes(b"tampered")
     assert verify_candidate_artifact(missing, "a" * 64) == "mismatch"
+
+
+def test_staged_artifact_is_not_visible_until_commit_recovery(tmp_path):
+    candidate = build_calibration_candidate(
+        (_observation(1, 0.2, False), _observation(2, 0.8, True))
+    )
+
+    staged = stage_candidate_artifact(tmp_path, candidate)
+
+    assert staged.staged_path is not None and staged.staged_path.is_file()
+    assert not staged.path.exists()
+    assert recover_candidate_artifact(staged.path, staged.sha256) == "verified"
+    assert staged.path.read_bytes() == candidate.artifact_bytes
+    assert not staged.staged_path.exists()

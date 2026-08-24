@@ -66,12 +66,19 @@ class CalibrationArtifact:
 
 
 @dataclass(frozen=True)
+class StagedCalibrationArtifact:
+    path: Path
+    staged_path: Path | None
+    sha256: str
+
+
+@dataclass(frozen=True)
 class CalibrationDatasetSummary:
     dataset_sha256: str
     sample_count: int
     positive_count: int
     negative_count: int
-    metrics_before: dict[str, float]
+    metrics_before: dict[str, float] | None
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -261,19 +268,30 @@ def build_calibration_candidate(
     )
 
 
-def write_candidate_artifact(
+def stage_candidate_artifact(
     root: Path,
     candidate: CalibrationCandidate,
-) -> CalibrationArtifact:
-    """Publish canonical candidate bytes with an atomic same-directory replace."""
+) -> StagedCalibrationArtifact:
+    """Durably stage candidate bytes without exposing a committed artifact."""
 
     artifact_root = Path(root)
     artifact_root.mkdir(parents=True, exist_ok=True)
     artifact_sha256 = hashlib.sha256(candidate.artifact_bytes).hexdigest()
     destination = artifact_root / f"{artifact_sha256}.json"
     if destination.is_file() and destination.read_bytes() == candidate.artifact_bytes:
-        return CalibrationArtifact(path=destination, sha256=artifact_sha256)
+        return StagedCalibrationArtifact(
+            path=destination,
+            staged_path=None,
+            sha256=artifact_sha256,
+        )
 
+    staged_path = artifact_root / f".pending-{artifact_sha256}.json"
+    if staged_path.is_file() and staged_path.read_bytes() == candidate.artifact_bytes:
+        return StagedCalibrationArtifact(
+            path=destination,
+            staged_path=staged_path,
+            sha256=artifact_sha256,
+        )
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -287,12 +305,56 @@ def write_candidate_artifact(
             handle.write(candidate.artifact_bytes)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, destination)
+        os.replace(temporary_path, staged_path)
         temporary_path = None
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
-    return CalibrationArtifact(path=destination, sha256=artifact_sha256)
+    return StagedCalibrationArtifact(
+        path=destination,
+        staged_path=staged_path,
+        sha256=artifact_sha256,
+    )
+
+
+def publish_candidate_artifact(
+    staged: StagedCalibrationArtifact,
+) -> CalibrationArtifact:
+    if staged.staged_path is not None:
+        if verify_candidate_artifact(staged.staged_path, staged.sha256) != "verified":
+            raise RuntimeError("staged calibration artifact hash mismatch")
+        if verify_candidate_artifact(staged.path, staged.sha256) == "verified":
+            staged.staged_path.unlink(missing_ok=True)
+        else:
+            os.replace(staged.staged_path, staged.path)
+    if verify_candidate_artifact(staged.path, staged.sha256) != "verified":
+        raise RuntimeError("published calibration artifact hash mismatch")
+    return CalibrationArtifact(path=staged.path, sha256=staged.sha256)
+
+
+def discard_staged_artifact(staged: StagedCalibrationArtifact | None) -> None:
+    if staged is not None and staged.staged_path is not None:
+        staged.staged_path.unlink(missing_ok=True)
+
+
+def recover_candidate_artifact(path: Path, expected_sha256: str) -> str:
+    integrity = verify_candidate_artifact(path, expected_sha256)
+    if integrity != "missing":
+        return integrity
+    staged_path = Path(path).parent / f".pending-{expected_sha256}.json"
+    if verify_candidate_artifact(staged_path, expected_sha256) != "verified":
+        return "missing"
+    os.replace(staged_path, path)
+    return verify_candidate_artifact(path, expected_sha256)
+
+
+def write_candidate_artifact(
+    root: Path,
+    candidate: CalibrationCandidate,
+) -> CalibrationArtifact:
+    """Stage then atomically publish a candidate outside a DB transaction."""
+
+    return publish_candidate_artifact(stage_candidate_artifact(root, candidate))
 
 
 def verify_candidate_artifact(path: Path, expected_sha256: str) -> str:
@@ -309,8 +371,13 @@ __all__ = [
     "CalibrationDatasetSummary",
     "CalibrationObservation",
     "CalibrationTrainingConfig",
+    "StagedCalibrationArtifact",
     "build_calibration_candidate",
     "summarize_calibration_observations",
+    "stage_candidate_artifact",
+    "publish_candidate_artifact",
+    "discard_staged_artifact",
+    "recover_candidate_artifact",
     "verify_candidate_artifact",
     "write_candidate_artifact",
 ]

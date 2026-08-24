@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 
 from sqlalchemy import inspect, text
+import pytest
+
+
+_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "20260824_0007_outcome_calibration.py"
+)
+_SPEC = importlib.util.spec_from_file_location("outcome_migration_0007", _MIGRATION_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+outcome_migration = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(outcome_migration)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,3 +111,20 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
             )
         )
     assert triggers == {"trg_actual_outcomes_immutable"}
+
+
+def test_downgrade_refuses_to_drop_immutable_rows_even_without_ledger_events(
+    monkeypatch,
+):
+    class FakeBind:
+        calls = 0
+
+        def scalar(self, _statement):
+            self.calls += 1
+            return 0 if self.calls == 1 else 1
+
+    bind = FakeBind()
+    monkeypatch.setattr(outcome_migration.op, "get_bind", lambda: bind)
+
+    with pytest.raises(RuntimeError, match="immutable outcome"):
+        outcome_migration.downgrade()

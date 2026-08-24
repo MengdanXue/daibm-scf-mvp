@@ -227,7 +227,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     event_sql = ", ".join(f"'{value}'" for value in _OUTCOME_LEDGER_EVENT_TYPES)
-    if op.get_bind().scalar(
+    bind = op.get_bind()
+    if bind.scalar(
         sa.text(
             "SELECT count(*) FROM ledger_events "
             f"WHERE event_type IN ({event_sql})"
@@ -235,6 +236,15 @@ def downgrade() -> None:
     ):
         raise RuntimeError(
             "Cannot downgrade outcome calibration while append-only outcome events exist"
+        )
+    if bind.scalar(
+        sa.text(
+            "SELECT (SELECT count(*) FROM actual_outcomes) + "
+            "(SELECT count(*) FROM calibration_runs)"
+        )
+    ):
+        raise RuntimeError(
+            "Cannot downgrade immutable outcome calibration while immutable outcome data exists"
         )
     op.drop_constraint(
         "ck_ledger_events_event_type", "ledger_events", type_="check"
