@@ -1,6 +1,8 @@
 -r requirements-dev.txt
 onnx==1.22.0
 onnxscript==0.7.1
+matplotlib==3.11.1
 scikit-learn==1.9.0
+scipy==1.18.1
 torch==2.13.0
 xgboost==3.4.0
