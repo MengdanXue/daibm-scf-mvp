@@ -343,8 +343,12 @@ def recover_candidate_artifact(path: Path, expected_sha256: str) -> str:
         return integrity
     staged_path = Path(path).parent / f".pending-{expected_sha256}.json"
     if verify_candidate_artifact(staged_path, expected_sha256) != "verified":
-        return "missing"
-    os.replace(staged_path, path)
+        return verify_candidate_artifact(path, expected_sha256)
+    try:
+        os.replace(staged_path, path)
+    except FileNotFoundError:
+        # Another auditor read may have atomically completed the same recovery.
+        return verify_candidate_artifact(path, expected_sha256)
     return verify_candidate_artifact(path, expected_sha256)
 
 

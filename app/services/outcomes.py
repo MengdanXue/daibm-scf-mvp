@@ -16,7 +16,7 @@ from app.identity import AuthenticatedUser
 from app.ledger import canonical_json, canonical_timestamp
 from app.models import FinancingRequestModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
-from app.models_research import RiskAssessmentModel
+from app.models_research import ModelVersionModel, RiskAssessmentModel
 from app.repositories.ledger import LedgerRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import ActualOutcomeCreate
@@ -143,6 +143,18 @@ class OutcomeService:
                 )
                 if assessment is None:
                     raise OutcomeConflict("Risk-assessment lineage is missing")
+                model_version = session.get(
+                    ModelVersionModel, assessment.model_version_id
+                )
+                if model_version is None:
+                    raise OutcomeConflict("Model-version lineage is missing")
+                expected_engine_version = (
+                    f"{model_version.model_name}@{model_version.semantic_version}"
+                )
+                if application.risk_engine_version != expected_engine_version:
+                    raise OutcomeConflict(
+                        "Request engine lineage disagrees with assessed model version"
+                    )
                 if not math.isclose(
                     float(application.risk_score),
                     float(assessment.risk_score),
@@ -261,9 +273,9 @@ class OutcomeService:
             try:
                 publish_candidate_artifact(staged)
             except Exception:
-                self._discard_failed_publication(staged)
                 assert outcome_id is not None and run_id is not None
                 self._mark_publication_failed(outcome_id, run_id)
+                self._discard_failed_publication(staged)
 
         assert outcome_id is not None and run_id is not None
         with self.session_factory() as session:
@@ -364,11 +376,13 @@ class OutcomeService:
         self,
         outcome_id: uuid.UUID,
         run_id: uuid.UUID,
-    ) -> None:
+    ) -> datetime:
         with self.session_factory.begin() as session:
             run = self.repository.get_run(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
+            if run.status == "failed":
+                return run.completed_at
             run.status = "failed"
             run.artifact_locator = None
             run.artifact_sha256 = None
@@ -396,12 +410,17 @@ class OutcomeService:
                     )
                 ],
             )
+            return run.completed_at
 
     @staticmethod
     def _discard_failed_publication(staged: StagedCalibrationArtifact) -> None:
-        discard_staged_artifact(staged)
-        if staged.staged_path is not None:
-            staged.path.unlink(missing_ok=True)
+        try:
+            discard_staged_artifact(staged)
+            if staged.staged_path is not None:
+                staged.path.unlink(missing_ok=True)
+        except OSError:
+            # The durable failed run and ledger event remain authoritative.
+            pass
 
     def _configuration(self) -> dict[str, float | int]:
         return {
@@ -491,14 +510,38 @@ class OutcomeService:
             "recorded_at": canonical_timestamp(outcome.recorded_at),
         }
 
-    @staticmethod
-    def _serialize_run(run: CalibrationRunModel) -> dict[str, Any]:
+    def _serialize_run(self, run: CalibrationRunModel) -> dict[str, Any]:
         if run.artifact_locator is None or run.artifact_sha256 is None:
             integrity = "not_applicable"
         else:
-            integrity = recover_candidate_artifact(
-                Path(run.artifact_locator), run.artifact_sha256
-            )
+            artifact_path = Path(run.artifact_locator)
+            try:
+                integrity = recover_candidate_artifact(
+                    artifact_path, run.artifact_sha256
+                )
+            except OSError:
+                integrity = "unavailable"
+            if integrity != "verified":
+                staged = StagedCalibrationArtifact(
+                    path=artifact_path,
+                    staged_path=(
+                        artifact_path.parent
+                        / f".pending-{run.artifact_sha256}.json"
+                    ),
+                    sha256=run.artifact_sha256,
+                )
+                completed_at = self._mark_publication_failed(
+                    run.trigger_outcome_id,
+                    run.calibration_run_id,
+                )
+                self._discard_failed_publication(staged)
+                run.status = "failed"
+                run.artifact_locator = None
+                run.artifact_sha256 = None
+                run.metrics_after = None
+                run.failure_code = "artifact_write_failed"
+                run.completed_at = completed_at
+                integrity = "not_applicable"
         return {
             "calibration_run_id": str(run.calibration_run_id),
             "trigger_outcome_id": str(run.trigger_outcome_id),

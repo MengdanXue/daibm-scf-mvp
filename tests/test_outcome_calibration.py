@@ -140,3 +140,25 @@ def test_staged_artifact_is_not_visible_until_commit_recovery(tmp_path):
     assert recover_candidate_artifact(staged.path, staged.sha256) == "verified"
     assert staged.path.read_bytes() == candidate.artifact_bytes
     assert not staged.staged_path.exists()
+
+
+def test_recovery_treats_a_concurrent_successful_rename_as_verified(
+    tmp_path,
+    monkeypatch,
+):
+    candidate = build_calibration_candidate(
+        (_observation(1, 0.2, False), _observation(2, 0.8, True))
+    )
+    staged = stage_candidate_artifact(tmp_path, candidate)
+    real_replace = __import__("os").replace
+
+    def concurrent_replace(source, destination):
+        real_replace(source, destination)
+        raise FileNotFoundError("another reader completed the rename")
+
+    monkeypatch.setattr(
+        "app.services.outcome_calibration.os.replace",
+        concurrent_replace,
+    )
+
+    assert recover_candidate_artifact(staged.path, staged.sha256) == "verified"

@@ -52,6 +52,7 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
     model_run_id = uuid.uuid4()
     model_version_id = uuid.uuid4()
+    model_semantic_version = str(uuid.uuid4())
     assessment_id = uuid.uuid4()
     request_id = uuid.uuid4()
     facility_id = uuid.uuid4()
@@ -105,7 +106,7 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
             ModelVersionModel(
                 model_version_id=model_version_id,
                 model_name="tgnn-api",
-                semantic_version=str(uuid.uuid4()),
+                semantic_version=model_semantic_version,
                 model_family="tgnn",
                 source_run_id=model_run_id,
                 dataset_version_id=dataset_id,
@@ -146,7 +147,7 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 status="audited",
                 version=1,
                 risk_assessment_id=assessment_id,
-                risk_engine_version="tgnn-test",
+                risk_engine_version=f"tgnn-api@{model_semantic_version}",
                 risk_input_sha256="5" * 64,
                 risk_assessed_at=NOW,
             )

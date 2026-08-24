@@ -38,6 +38,7 @@ def _seed_closed_facility(session_factory) -> tuple[uuid.UUID, object]:
     snapshot_id = uuid.uuid4()
     model_run_id = uuid.uuid4()
     model_version_id = uuid.uuid4()
+    model_semantic_version = str(uuid.uuid4())
     assessment_id = uuid.uuid4()
     request_id = uuid.uuid4()
     facility_id = uuid.uuid4()
@@ -91,7 +92,7 @@ def _seed_closed_facility(session_factory) -> tuple[uuid.UUID, object]:
             ModelVersionModel(
                 model_version_id=model_version_id,
                 model_name="tgnn-test",
-                semantic_version=str(uuid.uuid4()),
+                semantic_version=model_semantic_version,
                 model_family="tgnn",
                 source_run_id=model_run_id,
                 dataset_version_id=dataset_id,
@@ -132,7 +133,7 @@ def _seed_closed_facility(session_factory) -> tuple[uuid.UUID, object]:
                 status="audited",
                 version=1,
                 risk_assessment_id=assessment_id,
-                risk_engine_version="tgnn-test",
+                risk_engine_version=f"tgnn-test@{model_semantic_version}",
                 risk_input_sha256="5" * 64,
                 risk_assessed_at=NOW,
             )
@@ -294,6 +295,21 @@ def test_submission_rejects_incomplete_request_side_prediction_lineage(
         service.submit(facility_id, _payload(), auditor)
 
 
+def test_submission_rejects_request_engine_version_that_disagrees_with_model(
+    session_factory,
+    tmp_path,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    with session_factory.begin() as session:
+        facility = session.get(FinancingFacilityModel, facility_id)
+        application = session.get(FinancingRequestModel, facility.request_id)
+        application.risk_engine_version = "unrelated-engine-v999"
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+
+    with pytest.raises(OutcomeConflict, match="engine lineage"):
+        service.submit(facility_id, _payload(), auditor)
+
+
 @pytest.mark.parametrize("failure", (OSError("disk"), RuntimeError("collision")))
 def test_artifact_failure_is_persisted_and_audited_without_losing_outcome(
     session_factory,
@@ -440,6 +456,57 @@ def test_post_commit_artifact_publication_failure_is_marked_and_audited(
     assert result["calibration_run"]["failure_code"] == "artifact_write_failed"
     assert result["calibration_run"]["artifact_integrity"] == "not_applicable"
     assert list(tmp_path.glob("*")) == []
+    with session_factory() as session:
+        event_types = list(session.scalars(select(LedgerEventModel.event_type)))
+    assert event_types.count("CALIBRATION_CANDIDATE_FAILED") == 1
+
+
+def test_failed_publication_keeps_recoverable_stage_when_failure_audit_cannot_commit(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+
+    monkeypatch.setattr(
+        "app.services.outcomes.publish_candidate_artifact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("rename unavailable")),
+    )
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    monkeypatch.setattr(
+        service,
+        "_mark_publication_failed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        service.submit(facility_id, _payload(), auditor)
+
+    with session_factory() as session:
+        run = session.scalar(select(CalibrationRunModel))
+    assert run is not None and run.status == "exploratory_candidate"
+    assert list(tmp_path.glob(".pending-*.json"))
+
+
+def test_unrecoverable_lazy_publication_is_durably_failed_and_audited(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    created = service.submit(facility_id, _payload(), auditor)
+    run_id = created["calibration_run"]["calibration_run_id"]
+    monkeypatch.setattr(
+        "app.services.outcomes.recover_candidate_artifact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("read denied")),
+    )
+
+    recovered = service.get_run(run_id, auditor)
+
+    assert recovered["status"] == "failed"
+    assert recovered["failure_code"] == "artifact_write_failed"
+    assert recovered["artifact_integrity"] == "not_applicable"
     with session_factory() as session:
         event_types = list(session.scalars(select(LedgerEventModel.event_type)))
     assert event_types.count("CALIBRATION_CANDIDATE_FAILED") == 1
