@@ -9,9 +9,10 @@ matplotlib.use("Agg", force=True)
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from matplotlib.text import Text
 from scipy import stats
-from sklearn.calibration import CalibrationDisplay, calibration_curve
+from sklearn.calibration import CalibrationDisplay
 from sklearn.metrics import (
     PrecisionRecallDisplay,
     RocCurveDisplay,
@@ -69,6 +70,93 @@ def _interval(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             low[index] = float(column.mean() - margin)
             high[index] = float(column.mean() + margin)
     return mean, np.clip(low, 0, 1), np.clip(high, 0, 1)
+
+
+def _finite_column_mean(values: np.ndarray) -> np.ndarray:
+    sample = np.asarray(values, dtype=np.float64)
+    counts = np.sum(np.isfinite(sample), axis=0)
+    totals = np.nansum(sample, axis=0)
+    return np.divide(
+        totals,
+        counts,
+        out=np.full(totals.shape, np.nan, dtype=np.float64),
+        where=counts > 0,
+    )
+
+
+def calibration_points(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    edges: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return mean prediction and observed rate for every fixed bin.
+
+    Empty bins remain paired NaNs so a line renderer leaves a visible gap.
+    """
+
+    truth = np.asarray(labels, dtype=np.uint8).reshape(-1)
+    scores = np.asarray(probabilities, dtype=np.float64).reshape(-1)
+    boundaries = np.asarray(edges, dtype=np.float64).reshape(-1)
+    if (
+        truth.size == 0
+        or scores.size != truth.size
+        or not np.isin(truth, (0, 1)).all()
+        or not np.isfinite(scores).all()
+        or not ((0 <= scores) & (scores <= 1)).all()
+        or boundaries.size < 2
+        or not np.isfinite(boundaries).all()
+        or boundaries[0] != 0
+        or boundaries[-1] != 1
+        or not np.all(np.diff(boundaries) > 0)
+    ):
+        raise ValueError("calibration inputs and fixed bin edges are invalid")
+    bin_count = boundaries.size - 1
+    assignments = np.searchsorted(boundaries, scores, side="right") - 1
+    assignments = np.minimum(assignments, bin_count - 1)
+    predicted = np.full(bin_count, np.nan, dtype=np.float64)
+    observed = np.full(bin_count, np.nan, dtype=np.float64)
+    for index in range(bin_count):
+        selected = assignments == index
+        if np.any(selected):
+            predicted[index] = float(np.mean(scores[selected]))
+            observed[index] = float(np.mean(truth[selected]))
+    return predicted, observed
+
+
+def plot_calibration_trace(
+    ax: plt.Axes,
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    edges: np.ndarray,
+    *,
+    name: str,
+    color: str,
+    linestyle: str,
+) -> tuple[np.ndarray, np.ndarray, Line2D]:
+    predicted, observed = calibration_points(labels, probabilities, edges)
+    display = CalibrationDisplay(
+        prob_true=observed,
+        prob_pred=predicted,
+        y_prob=np.asarray(probabilities, dtype=np.float64),
+    ).plot(
+        ax=ax,
+        name=name,
+        ref_line=False,
+        color=color,
+        linestyle=linestyle,
+        linewidth=0.7,
+        alpha=0.22,
+    )
+    return predicted, observed, display.line_
+
+
+def summarize_calibration(
+    predicted: np.ndarray,
+    observed: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    mean_predicted = _finite_column_mean(predicted)
+    mean_observed, low, high = _interval(observed)
+    return mean_predicted, mean_observed, low, high
 
 
 def _new_figure(
@@ -226,44 +314,33 @@ def _calibration_figure(seeds: tuple[Mapping[str, Any], ...], path: Path) -> Pat
         f"Seed variability · n={len(seeds)} descriptive t interval; empty bins remain gaps",
     )
     edges = np.linspace(0, 1, 6)
-    centers = (edges[:-1] + edges[1:]) / 2
     for model in MODELS:
+        predicted_by_seed = []
         observed = []
         for evidence in seeds:
             labels, probabilities = _validated_arrays(evidence, model)
-            prob_true, prob_pred = calibration_curve(
+            style = STYLES[model]
+            predicted, rates, line = plot_calibration_trace(
+                ax,
                 labels,
                 probabilities,
-                n_bins=5,
-                strategy="uniform",
-            )
-            bins = np.minimum(np.digitize(probabilities, edges[1:-1], right=False), 4)
-            rates = np.asarray(
-                [np.mean(labels[bins == index]) if np.any(bins == index) else np.nan for index in range(5)]
-            )
-            observed.append(rates)
-            style = STYLES[model]
-            display = CalibrationDisplay(
-                prob_true=prob_true,
-                prob_pred=prob_pred,
-                y_prob=probabilities,
-            ).plot(
-                ax=ax,
+                edges,
                 name=f"{model} seed {evidence['seed']}",
-                ref_line=False,
                 color=style["color"],
                 linestyle=style["linestyle"],
-                linewidth=0.7,
-                alpha=0.22,
             )
-            display.line_.set_label("_individual seed")
+            predicted_by_seed.append(predicted)
+            observed.append(rates)
+            line.set_label("_individual seed")
             if ax.legend_ is not None:
                 ax.legend_.remove()
-        mean, low, high = _interval(np.asarray(observed))
+        mean_x, mean, low, high = summarize_calibration(
+            np.asarray(predicted_by_seed), np.asarray(observed)
+        )
         style = STYLES[model]
         label = "TGNN" if model == "tgnn" else "XGBoost"
         ax.plot(
-            centers,
+            mean_x,
             mean,
             color=style["color"],
             linestyle=style["linestyle"],
@@ -272,9 +349,29 @@ def _calibration_figure(seeds: tuple[Mapping[str, Any], ...], path: Path) -> Pat
             markersize=5,
             label=label,
         )
-        ax.fill_between(centers, low, high, color=style["color"], alpha=0.10, linewidth=0, label=f"{label} Seed variability")
-    ax.plot([0, 1], [0, 1], color="#555555", linestyle=":", linewidth=1.2, label="Perfect calibration")
-    ax.set(xlabel="Predicted probability (seed-bin means)", ylabel="Observed event rate", xlim=(0, 1), ylim=(0, 1))
+        ax.fill_between(
+            mean_x,
+            low,
+            high,
+            color=style["color"],
+            alpha=0.10,
+            linewidth=0,
+            label=f"{label} Seed variability",
+        )
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        color="#555555",
+        linestyle=":",
+        linewidth=1.2,
+        label="Perfect calibration",
+    )
+    ax.set(
+        xlabel="Mean predicted probability within fixed bin",
+        ylabel="Observed event rate",
+        xlim=(0, 1),
+        ylim=(0, 1),
+    )
     ax.legend(loc="upper left", fontsize=7, ncols=2)
     return _save(fig, path)
 

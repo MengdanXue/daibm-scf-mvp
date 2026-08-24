@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,18 @@ from research.experiments.runner import (
     _publish_sensitivity_bundle,
     run_sensitivity,
 )
+
+
+EVIDENCE_OUTPUT_NAMES = {
+    "calibration.png",
+    "confusion-matrices.png",
+    "precision-recall.png",
+    "research-appendix.md",
+    "roc.png",
+    "seed-metrics.csv",
+    "threshold-sensitivity.csv",
+    "threshold-sensitivity.png",
+}
 
 
 def _metrics(labels: np.ndarray, probabilities: np.ndarray) -> dict[str, object]:
@@ -129,6 +142,13 @@ def test_runner_propagates_seed_to_data_and_both_models(tmp_path, monkeypatch):
     }
     assert manifest["provenance"] == "2026_EXPLORATORY_SENSITIVITY"
     assert manifest["reporting_threshold"] == 0.5
+    assert manifest["format_version"] == 2
+    assert set(manifest["evidence_outputs"]) == EVIDENCE_OUTPUT_NAMES
+    assert all(
+        hashlib.sha256((tmp_path / "pack" / relative).read_bytes()).hexdigest()
+        == declared
+        for relative, declared in manifest["evidence_outputs"].items()
+    )
 
 
 def test_runner_persists_labels_probabilities_metrics_anchors_and_hashes(
@@ -175,6 +195,142 @@ def _refresh_declared_hash(pack: Path, path: Path) -> None:
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _refresh_evidence_output_hash(pack: Path, path: Path) -> None:
+    manifest_path = pack / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    relative = path.relative_to(pack).as_posix()
+    manifest["evidence_outputs"][relative] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def test_v2_verifier_rejects_missing_declaration_deleted_and_tampered_outputs(
+    tmp_path, monkeypatch
+):
+    _run_fake_pack(tmp_path, monkeypatch)
+    pack = tmp_path / "pack"
+    manifest_path = pack / "manifest.json"
+    original_manifest = manifest_path.read_bytes()
+
+    manifest = json.loads(original_manifest)
+    del manifest["evidence_outputs"]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(SensitivityVerificationError, match="evidence_outputs"):
+        verify_sensitivity_pack(pack)
+    manifest_path.write_bytes(original_manifest)
+
+    image = pack / "roc.png"
+    original_image = image.read_bytes()
+    image.unlink()
+    with pytest.raises(SensitivityVerificationError, match="missing"):
+        verify_sensitivity_pack(pack)
+    image.write_bytes(original_image)
+
+    table = pack / "seed-metrics.csv"
+    original_table = table.read_bytes()
+    table.write_bytes(original_table + b"tampered")
+    with pytest.raises(SensitivityVerificationError, match="hash mismatch"):
+        verify_sensitivity_pack(pack)
+    table.write_bytes(original_table)
+
+
+def test_v2_verifier_checks_output_semantics_after_hashes_are_refreshed(
+    tmp_path, monkeypatch
+):
+    _run_fake_pack(tmp_path, monkeypatch)
+    pack = tmp_path / "pack"
+    manifest_path = pack / "manifest.json"
+    original_manifest = manifest_path.read_bytes()
+
+    image = pack / "roc.png"
+    original_image = image.read_bytes()
+    image.write_bytes(b"not a png")
+    _refresh_evidence_output_hash(pack, image)
+    with pytest.raises(SensitivityVerificationError, match="PNG"):
+        verify_sensitivity_pack(pack)
+    image.write_bytes(original_image)
+    manifest_path.write_bytes(original_manifest)
+
+    wrong_size = bytearray(original_image)
+    wrong_size[16:20] = struct.pack(">I", 1151)
+    image.write_bytes(wrong_size)
+    _refresh_evidence_output_hash(pack, image)
+    with pytest.raises(SensitivityVerificationError, match="dimensions"):
+        verify_sensitivity_pack(pack)
+    image.write_bytes(original_image)
+    manifest_path.write_bytes(original_manifest)
+
+    table = pack / "seed-metrics.csv"
+    original_table_bytes = table.read_bytes()
+    original_table = original_table_bytes.decode("utf-8")
+    rows = original_table.splitlines()
+    cells = rows[1].split(",")
+    cells[2] = "NaN"
+    rows[1] = ",".join(cells)
+    table.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    _refresh_evidence_output_hash(pack, table)
+    with pytest.raises(SensitivityVerificationError, match="finite"):
+        verify_sensitivity_pack(pack)
+    table.write_bytes(original_table_bytes)
+    manifest_path.write_bytes(original_manifest)
+
+    table.write_text(
+        original_table.replace("roc_auc", "wrong_metric", 1), encoding="utf-8"
+    )
+    _refresh_evidence_output_hash(pack, table)
+    with pytest.raises(SensitivityVerificationError, match="header"):
+        verify_sensitivity_pack(pack)
+    table.write_bytes(original_table_bytes)
+    manifest_path.write_bytes(original_manifest)
+
+    table.write_text("\n".join([rows[0], *rows[2:]]) + "\n", encoding="utf-8")
+    _refresh_evidence_output_hash(pack, table)
+    with pytest.raises(SensitivityVerificationError, match="coverage"):
+        verify_sensitivity_pack(pack)
+    table.write_bytes(original_table_bytes)
+    manifest_path.write_bytes(original_manifest)
+
+    table.write_text(rows[0] + "\n", encoding="utf-8")
+    _refresh_evidence_output_hash(pack, table)
+    with pytest.raises(SensitivityVerificationError, match="must not be empty"):
+        verify_sensitivity_pack(pack)
+    table.write_bytes(original_table_bytes)
+    manifest_path.write_bytes(original_manifest)
+
+    appendix = pack / "research-appendix.md"
+    original_appendix = appendix.read_text(encoding="utf-8")
+    appendix.write_text(
+        original_appendix.replace(
+            "does not reproduce the original thesis", "reproduces the thesis"
+        ),
+        encoding="utf-8",
+    )
+    _refresh_evidence_output_hash(pack, appendix)
+    with pytest.raises(SensitivityVerificationError, match="exploratory boundary"):
+        verify_sensitivity_pack(pack)
+
+
+def test_v1_legacy_pack_verifies_only_original_seed_evidence(tmp_path, monkeypatch):
+    _run_fake_pack(tmp_path, monkeypatch)
+    pack = tmp_path / "pack"
+    manifest_path = pack / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["format_version"] = 1
+    del manifest["evidence_outputs"]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    for relative in EVIDENCE_OUTPUT_NAMES:
+        (pack / relative).unlink()
+
+    assert verify_sensitivity_pack(pack)["status"] == "verified"
 
 
 def test_verifier_recomputes_metrics_instead_of_trusting_evidence(

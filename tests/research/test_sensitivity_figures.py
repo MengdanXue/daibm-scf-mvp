@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import csv
 import logging
 from pathlib import Path
@@ -151,6 +152,73 @@ def test_appendix_states_exploratory_statistical_and_accessibility_boundaries(
     assert all(name in text for name in FIGURE_NAMES)
     assert "statistically significant" not in text.lower()
     assert "best threshold" not in text.lower()
+
+
+def test_calibration_keeps_empty_fixed_bins_as_path_gaps_and_uses_observed_x(
+) -> None:
+    labels = np.asarray([0, 1, 1, 0], dtype=np.uint8)
+    probabilities = np.asarray([0.10, 0.15, 0.50, 0.55])
+    edges = np.linspace(0, 1, 6)
+    figure, axis = figures.plt.subplots()
+
+    predicted, observed, line = figures.plot_calibration_trace(
+        axis,
+        labels,
+        probabilities,
+        edges,
+        name="fixture",
+        color="#0072B2",
+        linestyle="-",
+    )
+
+    assert predicted[[0, 2]] == pytest.approx([0.125, 0.525])
+    assert observed[[0, 2]] == pytest.approx([0.5, 0.5])
+    assert np.isnan(predicted[[1, 3, 4]]).all()
+    assert np.isnan(observed[[1, 3, 4]]).all()
+    assert np.isnan(line.get_xydata()[1]).all()
+
+    second_predicted = np.asarray([0.15, np.nan, 0.575, np.nan, np.nan])
+    second_observed = np.asarray([0.0, np.nan, 1.0, np.nan, np.nan])
+    mean_x, mean_y, _, _ = figures.summarize_calibration(
+        np.asarray([predicted, second_predicted]),
+        np.asarray([observed, second_observed]),
+    )
+    assert mean_x[[0, 2]] == pytest.approx([0.1375, 0.55])
+    assert mean_y[[0, 2]] == pytest.approx([0.25, 0.75])
+    assert np.isnan(mean_x[[1, 3, 4]]).all()
+    figures.plt.close(figure)
+
+
+def test_alt_descriptions_narrate_weak_results_and_key_exceptions(tmp_path: Path) -> None:
+    pack = copy.deepcopy(_fake_verified_pack())
+    tgnn_roc = [0.44, 0.48, 0.54, 0.60, 0.67]
+    xgboost_roc = [0.56, 0.58, 0.59, 0.60, 0.61]
+    for index, evidence in enumerate(pack["seeds"]):
+        tgnn = evidence["metrics"]["tgnn"]
+        xgboost = evidence["metrics"]["xgboost"]
+        tgnn.update(
+            roc_auc=tgnn_roc[index],
+            pr_auc=0.10 + index * 0.01,
+            confusion_matrix=[[20, 1], [7, 3]],
+        )
+        xgboost.update(
+            roc_auc=xgboost_roc[index],
+            pr_auc=0.13 + index * 0.01,
+            recall=0.10,
+            precision=0.50,
+            f1=1 / 6,
+            confusion_matrix=[[20, 1], [9, 1]],
+        )
+
+    text = write_appendix(pack, tmp_path).read_text(encoding="utf-8")
+
+    assert "near chance with high seed variability" in text
+    assert "XGBoost is slightly steadier" in text
+    assert "Both mean PR-AUC values are low" in text
+    assert "positive-class recall is 0.100" in text
+    assert "FN=45, TP=5" in text
+    assert "mean absolute fixed-bin calibration gap" in text
+    assert "No threshold is selected or described as optimal" in text
 
 
 @pytest.mark.filterwarnings("error")

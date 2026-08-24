@@ -291,15 +291,24 @@ def run_sensitivity(
                 "max_epochs": config.max_epochs,
                 "patience": config.patience,
             },
-            "format_version": 1,
+            "format_version": 2,
             "provenance": _PROVENANCE,
             "reporting_threshold": config.threshold,
             "seed_entries": entries,
             "seeds": list(config.seeds),
             "summary": summarize_runs(evidence) if len(evidence) >= 2 else {},
         }
+        render_pack = {
+            "manifest": manifest,
+            "provenance": _PROVENANCE,
+            "seeds": [record.to_payload() for record in evidence],
+            "status": "verified",
+        }
+        evidence_outputs = render_evidence_outputs(render_pack, staging)
+        manifest["evidence_outputs"] = _file_manifest(
+            staging, tuple(evidence_outputs)
+        )
         write_canonical_json(staging / "manifest.json", manifest)
-        verified = verify_sensitivity_pack(staging)
-        render_evidence_outputs(verified, staging)
+        verify_sensitivity_pack(staging)
         _publish_sensitivity_bundle(staging, pack_destination)
     return verify_sensitivity_pack(pack_destination)["manifest"]

@@ -131,6 +131,110 @@ def _records(pack: Mapping[str, Any]) -> list[SeedEvidence]:
     ]
 
 
+def _calibration_gap(pack: Mapping[str, Any], model: str) -> float:
+    edges = np.linspace(0, 1, 6)
+    gaps: list[float] = []
+    for evidence in verified_seeds(pack):
+        labels = np.asarray(evidence["labels"], dtype=np.uint8)
+        probabilities = np.asarray(
+            evidence["probabilities"][model], dtype=np.float64
+        )
+        assignments = np.searchsorted(edges, probabilities, side="right") - 1
+        assignments = np.minimum(assignments, edges.size - 2)
+        for index in range(edges.size - 1):
+            selected = assignments == index
+            if np.any(selected):
+                gaps.append(
+                    abs(
+                        float(np.mean(probabilities[selected]))
+                        - float(np.mean(labels[selected]))
+                    )
+                )
+    return float(np.mean(gaps))
+
+
+def _aggregate_confusion(
+    pack: Mapping[str, Any], model: str
+) -> tuple[int, int, int, int]:
+    matrix = np.sum(
+        [
+            np.asarray(evidence["metrics"][model]["confusion_matrix"], dtype=int)
+            for evidence in verified_seeds(pack)
+        ],
+        axis=0,
+    )
+    return (
+        int(matrix[0, 0]),
+        int(matrix[0, 1]),
+        int(matrix[1, 0]),
+        int(matrix[1, 1]),
+    )
+
+
+def _figure_descriptions(
+    pack: Mapping[str, Any],
+    summary: Mapping[str, Mapping[str, Mapping[str, float]]],
+) -> dict[str, str]:
+    tgnn_roc = summary["tgnn"]["roc_auc"]
+    xgboost_roc = summary["xgboost"]["roc_auc"]
+    tgnn_roc_boundary = (
+        "is near chance with high seed variability"
+        if abs(tgnn_roc["mean"] - 0.5) <= 0.10
+        and tgnn_roc["sample_sd"] >= 0.05
+        else "must be interpreted with its reported seed variability"
+    )
+    xgboost_stability = (
+        "XGBoost is slightly steadier"
+        if xgboost_roc["sample_sd"] < tgnn_roc["sample_sd"]
+        else "XGBoost is not steadier across these seeds"
+    )
+    tgnn_pr = summary["tgnn"]["pr_auc"]["mean"]
+    xgboost_pr = summary["xgboost"]["pr_auc"]["mean"]
+    pr_boundary = (
+        "Both mean PR-AUC values are low"
+        if max(tgnn_pr, xgboost_pr) < 0.30
+        else "The mean PR-AUC values are reported without a release threshold"
+    )
+    _, _, xgboost_fn, xgboost_tp = _aggregate_confusion(pack, "xgboost")
+    positive_total = xgboost_fn + xgboost_tp
+    xgboost_recall = xgboost_tp / positive_total if positive_total else 0.0
+    recall_boundary = "very low; " if xgboost_recall < 0.20 else ""
+    tgnn_gap = _calibration_gap(pack, "tgnn")
+    xgboost_gap = _calibration_gap(pack, "xgboost")
+    return {
+        "roc.png": (
+            "ROC curves with individual seed traces and descriptive bands. "
+            f"TGNN mean ROC-AUC is {tgnn_roc['mean']:.3f} (sample SD "
+            f"{tgnn_roc['sample_sd']:.3f}) and {tgnn_roc_boundary}; XGBoost "
+            f"mean ROC-AUC is {xgboost_roc['mean']:.3f} (sample SD "
+            f"{xgboost_roc['sample_sd']:.3f}). {xgboost_stability}."
+        ),
+        "precision-recall.png": (
+            "Precision–recall curves retain individual seed traces and the "
+            f"prevalence reference. {pr_boundary}: TGNN {tgnn_pr:.3f}, "
+            f"XGBoost {xgboost_pr:.3f}."
+        ),
+        "calibration.png": (
+            "Observed event rate is plotted against the actual mean prediction "
+            "within each fixed bin; empty bins remain gaps. The mean absolute "
+            f"fixed-bin calibration gap is {tgnn_gap:.3f} for TGNN and "
+            f"{xgboost_gap:.3f} for XGBoost, so calibration deviation remains "
+            "visible rather than being smoothed away."
+        ),
+        "threshold-sensitivity.png": (
+            "Mean F1 is shown over the complete predeclared threshold grid with "
+            "seed-variability bands. No threshold is selected or described as "
+            "optimal."
+        ),
+        "confusion-matrices.png": (
+            "Aggregate threshold-0.50 confusion counts are directly labelled. "
+            f"XGBoost positive-class recall is {xgboost_recall:.3f} "
+            f"({recall_boundary}aggregate FN={xgboost_fn}, TP={xgboost_tp}), "
+            "which is a key exception to any broad performance claim."
+        ),
+    }
+
+
 def write_appendix(pack: Mapping[str, Any], output: str | Path) -> Path:
     destination = Path(output)
     destination.mkdir(parents=True, exist_ok=True)
@@ -177,13 +281,7 @@ def write_appendix(pack: Mapping[str, Any], output: str | Path) -> Path:
                 f"{values['sample_sd']:.4f} | [{values['ci95_low']:.4f}, "
                 f"{values['ci95_high']:.4f}] |"
             )
-    descriptions = {
-        "roc.png": "ROC curves for TGNN and XGBoost, with individual seed traces, mean curves, a chance diagonal, and descriptive seed-variability bands.",
-        "precision-recall.png": "Precision–recall curves for both models, with individual seed traces, mean curves, prevalence reference, and descriptive seed-variability bands.",
-        "calibration.png": "Observed event rate against mean predicted probability for both models, including the perfect-calibration diagonal and visible seed traces.",
-        "threshold-sensitivity.png": "Mean F1 over the predeclared reporting thresholds for both models; no threshold is selected or called optimal.",
-        "confusion-matrices.png": "Aggregate threshold-0.50 confusion counts across seeds, shown as directly labelled two-by-two tables for each model.",
-    }
+    descriptions = _figure_descriptions(pack, summary)
     lines.extend(["", "## Figures and accessible descriptions", ""])
     for name, description in descriptions.items():
         lines.extend([f"### `{name}`", "", f"**Alt description:** {description}", ""])

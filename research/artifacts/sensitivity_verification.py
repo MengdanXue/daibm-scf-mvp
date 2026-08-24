@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
+import struct
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -10,6 +12,40 @@ import numpy as np
 
 from research.experiments.sensitivity import SeedEvidence, summarize_runs
 from research.training.metrics import evaluate_binary_predictions
+
+
+_EVIDENCE_OUTPUTS = {
+    "calibration.png",
+    "confusion-matrices.png",
+    "precision-recall.png",
+    "research-appendix.md",
+    "roc.png",
+    "seed-metrics.csv",
+    "threshold-sensitivity.csv",
+    "threshold-sensitivity.png",
+}
+_METRIC_COLUMNS = (
+    "seed",
+    "model",
+    "roc_auc",
+    "pr_auc",
+    "f1",
+    "precision",
+    "recall",
+    "brier_score",
+    "tn",
+    "fp",
+    "fn",
+    "tp",
+    "dataset_sha256",
+    "artifact_sha256",
+)
+_THRESHOLD_COLUMNS = (
+    "seed",
+    "model",
+    "threshold",
+    *_METRIC_COLUMNS[2:],
+)
 
 
 class SensitivityVerificationError(RuntimeError):
@@ -117,6 +153,146 @@ def _equivalent(actual: object, expected: object) -> bool:
             and math.isclose(float(actual), expected, rel_tol=1e-12, abs_tol=1e-12)
         )
     return actual == expected
+
+
+def _verify_png(path: Path) -> None:
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(24)
+    except OSError as error:
+        raise SensitivityVerificationError(f"PNG is unreadable: {path.name}") from error
+    if (
+        len(header) < 24
+        or header[:8] != b"\x89PNG\r\n\x1a\n"
+        or header[12:16] != b"IHDR"
+    ):
+        raise SensitivityVerificationError(f"PNG signature is invalid: {path.name}")
+    width, height = struct.unpack(">II", header[16:24])
+    if (width, height) != (1152, 736):
+        raise SensitivityVerificationError(
+            f"PNG dimensions are invalid: {path.name} is {width}x{height}"
+        )
+
+
+def _verify_csv(
+    path: Path,
+    columns: tuple[str, ...],
+    seeds: list[int],
+    *,
+    one_row_per_pair: bool,
+) -> None:
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if tuple(reader.fieldnames or ()) != columns:
+                raise SensitivityVerificationError(
+                    f"CSV header is invalid: {path.name}"
+                )
+            rows = list(reader)
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise SensitivityVerificationError(f"CSV is unreadable: {path.name}") from error
+    if not rows:
+        raise SensitivityVerificationError(f"CSV must not be empty: {path.name}")
+    coverage: dict[tuple[int, str], int] = {}
+    text_columns = {"model", "dataset_sha256", "artifact_sha256"}
+    for row in rows:
+        if None in row or any(value is None or value == "" for value in row.values()):
+            raise SensitivityVerificationError(f"CSV row is incomplete: {path.name}")
+        try:
+            seed = int(row["seed"])
+        except (TypeError, ValueError) as error:
+            raise SensitivityVerificationError(
+                f"CSV seed is invalid: {path.name}"
+            ) from error
+        model = row["model"]
+        if seed not in seeds or model not in {"tgnn", "xgboost"}:
+            raise SensitivityVerificationError(
+                f"CSV seed-model coverage is invalid: {path.name}"
+            )
+        coverage[(seed, model)] = coverage.get((seed, model), 0) + 1
+        if not _is_sha256(row["dataset_sha256"]) or not _is_sha256(
+            row["artifact_sha256"]
+        ):
+            raise SensitivityVerificationError(f"CSV hash is invalid: {path.name}")
+        try:
+            numeric = [
+                float(value)
+                for name, value in row.items()
+                if name not in text_columns
+            ]
+        except (TypeError, ValueError) as error:
+            raise SensitivityVerificationError(
+                f"CSV numeric value is invalid: {path.name}"
+            ) from error
+        if not all(math.isfinite(value) for value in numeric):
+            raise SensitivityVerificationError(
+                f"CSV numeric values must be finite: {path.name}"
+            )
+    expected = {(seed, model) for seed in seeds for model in ("tgnn", "xgboost")}
+    if set(coverage) != expected or (
+        one_row_per_pair and any(count != 1 for count in coverage.values())
+    ):
+        raise SensitivityVerificationError(
+            f"CSV seed-model coverage is incomplete: {path.name}"
+        )
+
+
+def _verify_appendix(path: Path) -> None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise SensitivityVerificationError("research appendix is unreadable") from error
+    required = {
+        "2026_EXPLORATORY_SENSITIVITY",
+        "does not reproduce the original thesis",
+        "not hypothesis tests or generalization claims",
+        "Alt description",
+    }
+    if not all(marker in text for marker in required):
+        raise SensitivityVerificationError(
+            "research appendix exploratory boundary is incomplete"
+        )
+
+
+def _verify_evidence_outputs(root: Path, manifest: dict[str, Any]) -> None:
+    declared = manifest.get("evidence_outputs")
+    if not isinstance(declared, dict) or set(declared) != _EVIDENCE_OUTPUTS:
+        raise SensitivityVerificationError(
+            "v2 evidence_outputs declaration is incomplete"
+        )
+    for relative, expected_hash in declared.items():
+        if not _is_sha256(expected_hash):
+            raise SensitivityVerificationError(
+                f"invalid evidence output hash for {relative}"
+            )
+        path = _pack_path(root, relative)
+        if not path.is_file():
+            raise SensitivityVerificationError(
+                f"declared evidence output is missing: {relative}"
+            )
+        if _sha256(path) != expected_hash:
+            raise SensitivityVerificationError(
+                f"hash mismatch for evidence output: {relative}"
+            )
+    png_names = sorted(
+        name for name in _EVIDENCE_OUTPUTS if name.endswith(".png")
+    )
+    for relative in png_names:
+        _verify_png(root / relative)
+    seeds = manifest["seeds"]
+    _verify_csv(
+        root / "seed-metrics.csv",
+        _METRIC_COLUMNS,
+        seeds,
+        one_row_per_pair=True,
+    )
+    _verify_csv(
+        root / "threshold-sensitivity.csv",
+        _THRESHOLD_COLUMNS,
+        seeds,
+        one_row_per_pair=False,
+    )
+    _verify_appendix(root / "research-appendix.md")
 
 
 def _verify_seed(
@@ -234,7 +410,8 @@ def verify_sensitivity_pack(path: str | Path) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise SensitivityVerificationError("sensitivity manifest is missing")
     manifest = _load_json(manifest_path, "sensitivity manifest")
-    if manifest.get("format_version") != 1:
+    format_version = manifest.get("format_version")
+    if format_version not in {1, 2}:
         raise SensitivityVerificationError("sensitivity format version is unsupported")
     if manifest.get("provenance") != "2026_EXPLORATORY_SENSITIVITY":
         raise SensitivityVerificationError("sensitivity provenance is invalid")
@@ -277,6 +454,8 @@ def verify_sensitivity_pack(path: str | Path) -> dict[str, Any]:
         raise SensitivityVerificationError(
             "manifest summary does not match verified seed evidence"
         )
+    if format_version == 2:
+        _verify_evidence_outputs(root, manifest)
     return {
         "manifest": manifest,
         "manifest_sha256": _sha256(manifest_path),
