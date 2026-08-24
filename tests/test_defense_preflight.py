@@ -37,6 +37,9 @@ ACTUAL_DEFENSE_DEPENDENCIES_READY = (
         )
     )
 )
+WINDOWS_CMD_ONLY = pytest.mark.skipif(
+    os.name != "nt", reason="reset launcher execution requires Windows cmd.exe"
+)
 
 
 def _write_defense_documents(root: Path) -> None:
@@ -302,6 +305,7 @@ def _run_reset(
     return completed, log
 
 
+@WINDOWS_CMD_ONLY
 def test_reset_launcher_passes_fixed_local_context_to_start_after_successful_down(
     tmp_path,
 ):
@@ -341,6 +345,7 @@ def test_reset_launcher_passes_fixed_local_context_to_start_after_successful_dow
     "confirmation",
     ['"', "'", "&", "RESET DEMO ", "reset demo", 'RESET DEMO" & echo INJECTED'],
 )
+@WINDOWS_CMD_ONLY
 def test_reset_launcher_rejects_malicious_or_inexact_confirmation_without_docker(
     tmp_path, confirmation
 ):
@@ -352,6 +357,7 @@ def test_reset_launcher_rejects_malicious_or_inexact_confirmation_without_docker
     assert "not recognized as an internal or external command" not in output
 
 
+@WINDOWS_CMD_ONLY
 def test_reset_launcher_pins_context_compose_file_and_project_despite_environment(
     tmp_path,
 ):
@@ -367,6 +373,7 @@ def test_reset_launcher_pins_context_compose_file_and_project_despite_environmen
     assert lines[1].endswith("--project-name daibm-scf-mvp down -v")
 
 
+@WINDOWS_CMD_ONLY
 def test_reset_launcher_fails_before_compose_down_when_local_context_is_unavailable(
     tmp_path,
 ):
@@ -380,6 +387,7 @@ def test_reset_launcher_fails_before_compose_down_when_local_context_is_unavaila
     ]
 
 
+@WINDOWS_CMD_ONLY
 def test_reset_launcher_rejects_any_other_confirmation_without_cmd_errors(tmp_path):
     completed, docker_log = _run_reset(tmp_path, "NO")
 
