@@ -70,7 +70,7 @@
       facility_precondition_failed: "Для создания нужна одобренная заявка с завершённым аудитом и совпадающей суммой.", facility_conflict: "Данные изменились или действие больше недоступно. Обновите досье и повторите с новой командой.",
       fabricAnchorEyebrow: "ОПЦИОНАЛЬНЫЙ ВНЕШНИЙ ЯКОРЬ", fabricAnchorTitle: "Якорение в Fabric", fabricAnchorSubtitle: "Хеши аудиторских событий передаются через транзакционный outbox; бизнес-записи остаются в PostgreSQL.",
       fabricAnchorOptional: "Опциональный расширенный режим: бизнес-процесс продолжается, а хеши остаются в очереди, если Fabric недоступен.", fabricAnchorConnected: "Эта отправка получила реальные подтверждения Fabric. Обновление списка само по себе не проверяет доступность Gateway.",
-      anchorPending: "Ожидают", anchorRetry: "Повтор", anchorAnchored: "Закреплены", anchorPermanentFailed: "Постоянная ошибка", anchorRefresh: "Обновить", anchorDispatch: "Отправить одну партию", anchorRetryFailed: "Повторить", anchorRecent: "Последние записи", anchorEmpty: "Записей для якорения пока нет.", anchorAttempt: "попыток", anchorError: "ошибка", anchorNoError: "без ошибки"
+      anchorPending: "Ожидают", anchorRetry: "Повтор", anchorAnchored: "Закреплены", anchorPermanentFailed: "Постоянная ошибка", anchorRefresh: "Обновить", anchorDispatch: "Отправить одну партию", anchorRetryFailed: "Повторить", anchorRecent: "Последние записи", anchorEmpty: "Записей для якорения пока нет.", anchorAttempt: "попыток", anchorError: "ошибка", anchorNoError: "без ошибки", anchorCountsLabel: "Счётчики статусов якорения Fabric"
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
@@ -127,7 +127,7 @@
       facility_precondition_failed: "创建融资要求申请已批准、审计完成且本金一致。", facility_conflict: "数据已变化或操作不再可用。请刷新卷宗后使用新命令重试。",
       fabricAnchorEyebrow: "可选外部锚定", fabricAnchorTitle: "Fabric 锚定", fabricAnchorSubtitle: "审计事件哈希经事务型 outbox 发送；业务记录仍保存在 PostgreSQL。",
       fabricAnchorOptional: "可选高级模式：Fabric 不可用时业务流程仍会继续，哈希保留在队列中。", fabricAnchorConnected: "本次派发已收到真实 Fabric 确认；仅刷新列表并不探测 Gateway 当前状态。",
-      anchorPending: "待处理", anchorRetry: "待重试", anchorAnchored: "已锚定", anchorPermanentFailed: "永久失败", anchorRefresh: "刷新", anchorDispatch: "派发一批", anchorRetryFailed: "重新入队", anchorRecent: "最近记录", anchorEmpty: "暂时没有待锚定记录。", anchorAttempt: "尝试次数", anchorError: "错误", anchorNoError: "无错误"
+      anchorPending: "待处理", anchorRetry: "待重试", anchorAnchored: "已锚定", anchorPermanentFailed: "永久失败", anchorRefresh: "刷新", anchorDispatch: "派发一批", anchorRetryFailed: "重新入队", anchorRecent: "最近记录", anchorEmpty: "暂时没有待锚定记录。", anchorAttempt: "尝试次数", anchorError: "错误", anchorNoError: "无错误", anchorCountsLabel: "Fabric 锚定状态计数"
     }
   };
 
@@ -231,6 +231,9 @@
     document.querySelectorAll("[data-wf-i18n]").forEach((element) => {
       const value = tr(element.dataset.wfI18n);
       if (value) element.textContent = value;
+    });
+    document.querySelectorAll("[data-wf-i18n-aria-label]").forEach((element) => {
+      element.setAttribute("aria-label", tr(element.dataset.wfI18nAriaLabel));
     });
     document.querySelector("#demoAccounts")?.setAttribute("aria-label", tr("demoRoleGuide"));
     renderAccounts();

@@ -206,6 +206,7 @@ def test_auditor_ledger_exposes_accessible_bilingual_fabric_anchor_controls():
     ):
         assert f'id="{element_id}"' in html
     assert 'aria-labelledby="fabricAnchorTitle"' in html
+    assert 'data-wf-i18n-aria-label="anchorCountsLabel"' in html
     assert html.count('aria-live="polite"') >= 3
     for key in (
         "fabricAnchorTitle",
@@ -217,8 +218,10 @@ def test_auditor_ledger_exposes_accessible_bilingual_fabric_anchor_controls():
         "anchorRefresh",
         "anchorDispatch",
         "anchorRetryFailed",
+        "anchorCountsLabel",
     ):
         assert javascript.count(f"{key}:") == 2
+    assert "data-wf-i18n-aria-label" in javascript
 
 
 def test_fabric_anchor_controls_use_real_auditor_apis_without_fake_success():

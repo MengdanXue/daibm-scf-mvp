@@ -27,8 +27,20 @@ docker --context desktop-linux compose -f "%~dp0advanced\fabric\network\docker-c
 if errorlevel 1 exit /b 1
 
 powershell -NoProfile -Command "$m = ConvertFrom-Json (Get-Content -Raw -Encoding utf8 'launcher-messages.json'); Write-Host ('[DAIBM-SCF] ' + $m.fabric_gateway_check)"
+set /a FABRIC_HEALTH_ATTEMPT=0
+:wait_fabric_gateway
 docker --context desktop-linux compose -f "%~dp0advanced\fabric\network\docker-compose.fabric.yml" --project-name daibm-fabric-demo exec -T gateway node -e "fetch('http://127.0.0.1:8090/health').then(r=>{if(!r.ok)process.exit(1);return r.json()}).then(x=>{if(x.fabric!=='ready')process.exit(1)}).catch(()=>process.exit(1))"
-if errorlevel 1 exit /b 1
+if not errorlevel 1 goto fabric_gateway_ready
+set /a FABRIC_HEALTH_ATTEMPT+=1
+if %FABRIC_HEALTH_ATTEMPT% GEQ 30 goto fabric_gateway_timeout
+powershell -NoProfile -Command "Start-Sleep -Seconds 1" >nul 2>nul
+goto wait_fabric_gateway
+
+:fabric_gateway_timeout
+docker --context desktop-linux compose -f "%~dp0advanced\fabric\network\docker-compose.fabric.yml" --project-name daibm-fabric-demo logs --tail 100 gateway
+exit /b 1
+
+:fabric_gateway_ready
 start "" "%DEMO_URL%"
 powershell -NoProfile -Command "$m = ConvertFrom-Json (Get-Content -Raw -Encoding utf8 'launcher-messages.json'); Write-Host ('[DAIBM-SCF] ' + $m.fabric_ready + ' %DEMO_URL%')"
 exit /b 0

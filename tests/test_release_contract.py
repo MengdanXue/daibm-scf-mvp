@@ -138,6 +138,9 @@ def test_advanced_launcher_has_fixed_targets_and_fabric_only_cleanup():
     assert "RESET FABRIC" in launcher
     assert "down -v" not in launcher
     assert "postgres-data" not in launcher
+    assert "FABRIC_HEALTH_ATTEMPT" in launcher
+    assert "GEQ 30" in launcher
+    assert ":wait_fabric_gateway" in launcher
     messages = json.loads(_read("launcher-messages.json"))
     for key in (
         "fabric_start_base",
@@ -165,6 +168,14 @@ def test_optional_fabric_mode_is_documented_without_overclaiming():
     assert "Gateway 不暴露宿主机端口" in readme
     assert "production blockchain" in readme
     assert "生产级区块链" in readme
+
+
+def test_fabric_acceptance_drains_persistent_backlog_with_a_time_bound():
+    acceptance = _read("scripts/fabric_browser_acceptance.py")
+
+    assert "time.monotonic()" in acceptance
+    assert "dispatch_deadline" in acceptance
+    assert "range(6)" not in acceptance
 
 
 def test_launcher_opens_browser_only_after_semantic_health_check():

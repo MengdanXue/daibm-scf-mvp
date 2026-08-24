@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -85,7 +86,8 @@ def run_fabric_acceptance() -> str:
             )
             target = next(anchor for anchor in anchors if anchor["status"] == "pending")
             anchor_id = target["anchor_id"]
-            for _ in range(6):
+            dispatch_deadline = time.monotonic() + 180
+            while time.monotonic() < dispatch_deadline:
                 page.locator("#dispatchAnchors").click()
                 page.wait_for_function(
                     "document.querySelector('#fabricAnchorPanel').getAttribute('aria-busy') === 'false'"
@@ -97,7 +99,10 @@ def run_fabric_acceptance() -> str:
                 if current["status"] == "anchored":
                     target = current
                     break
-            assert target["status"] == "anchored", target
+            assert target["status"] == "anchored", {
+                "target": target,
+                "reason": "new anchor was not reached while draining the persistent outbox",
+            }
             row = page.locator(f'[data-anchor-id="{anchor_id}"]')
             row.wait_for(state="visible")
             assert row.get_attribute("data-anchor-status") == "anchored"
