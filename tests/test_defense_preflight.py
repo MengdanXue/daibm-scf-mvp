@@ -292,7 +292,7 @@ def _run_reset(
         env=environment,
         input=f"{confirmation}\r\n".encode(),
         capture_output=True,
-        timeout=10,
+        timeout=30,
     )
     log = (
         docker_log.read_text(encoding="utf-8", errors="replace")
