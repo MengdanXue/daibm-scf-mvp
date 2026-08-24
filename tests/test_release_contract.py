@@ -120,11 +120,19 @@ def test_reset_launcher_is_separate_confirmed_and_scoped():
     start = _read("start-demo.cmd")
 
     assert "RESET DEMO" in reset
-    assert 'if not "%RESET_CONFIRM%"=="RESET DEMO"' in reset
-    assert reset.count("docker compose down -v") == 1
+    assert "Read-Host" in reset and "-ceq 'RESET DEMO'" in reset
+    assert "set /p" not in reset
+    assert 'set "COMPOSE_FILE="' in reset
+    assert 'set "COMPOSE_PROJECT_NAME="' in reset
+    assert 'set "DOCKER_HOST="' in reset
+    down = (
+        'docker --context desktop-linux compose -f "%~dp0docker-compose.yml" '
+        "--project-name daibm-scf-mvp down -v"
+    )
+    assert reset.count(down) == 1
     assert 'call "%~dp0start-demo.cmd"' in reset
     assert "scripts\\defense_preflight.py" in reset
-    assert reset.index("docker compose down -v") < reset.index(
+    assert reset.index(down) < reset.index(
         'call "%~dp0start-demo.cmd"'
     ) < reset.index("scripts\\defense_preflight.py")
     assert "Remove-Item" not in reset
@@ -136,7 +144,12 @@ def test_reset_launcher_messages_and_documentation_are_bilingual():
     messages = json.loads(_read("launcher-messages.json"))
     readme = _read("README.md")
 
-    for key in ("reset_warning", "reset_cancelled", "preflight_failed"):
+    for key in (
+        "reset_warning",
+        "reset_cancelled",
+        "docker_context_unavailable",
+        "preflight_failed",
+    ):
         assert any("а" <= character.lower() <= "я" for character in messages[key])
         assert any("\u4e00" <= character <= "\u9fff" for character in messages[key])
     assert "reset-defense-demo.cmd" in readme

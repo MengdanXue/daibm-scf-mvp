@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from http.cookiejar import CookieJar
@@ -176,8 +177,31 @@ def _json_response(
     return decoded
 
 
-def _require_health(payload: dict[str, Any]) -> None:
+def _expected_artifact_sha256(project_root: Path) -> str:
+    manifest_path = project_root / "artifacts/reference/model-manifest.json"
     try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise PreflightError(f"cannot read {manifest_path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise PreflightError(f"{manifest_path} is not valid JSON") from error
+    if not isinstance(payload, dict):
+        raise PreflightError(f"{manifest_path} must contain a JSON object")
+    artifact_sha256 = payload.get("artifact_sha256")
+    if not isinstance(artifact_sha256, str) or re.fullmatch(
+        r"[0-9a-f]{64}", artifact_sha256
+    ) is None:
+        raise PreflightError(
+            f"{manifest_path} artifact_sha256 must be 64 lowercase hex characters"
+        )
+    return artifact_sha256
+
+
+def _require_health(
+    payload: dict[str, Any], expected_artifact_sha256: str
+) -> None:
+    try:
+        runtime_artifact_sha256 = payload["research_core"]["artifact_sha256"]
         healthy = (
             payload["status"] == "ok"
             and payload["database"]["backend"] == "postgresql"
@@ -189,6 +213,17 @@ def _require_health(payload: dict[str, Any]) -> None:
         raise PreflightError(f"health payload is incomplete at {error}") from error
     if not healthy:
         raise PreflightError("health payload is not semantically ready")
+    if not isinstance(runtime_artifact_sha256, str) or re.fullmatch(
+        r"[0-9a-f]{64}", runtime_artifact_sha256
+    ) is None:
+        raise PreflightError(
+            "research_core.artifact_sha256 must be 64 lowercase hex characters"
+        )
+    if runtime_artifact_sha256 != expected_artifact_sha256:
+        raise PreflightError(
+            "research_core.artifact_sha256 does not match "
+            "artifacts/reference/model-manifest.json"
+        )
 
 
 def _require_role(payload: dict[str, Any], expected_role: str, check: str) -> None:
@@ -233,11 +268,13 @@ def run_preflight(
     checks: list[str] = []
     errors: list[str] = []
     verified_roles: list[str] = []
+    root = Path(project_root)
     public_client = client_factory()
 
     try:
+        expected_artifact_sha256 = _expected_artifact_sha256(root)
         health = _json_response(public_client, "GET", _url(base_url, "/api/health"))
-        _require_health(health)
+        _require_health(health, expected_artifact_sha256)
         checks.append("health")
     except PreflightError as error:
         errors.append(f"health: {error}")
@@ -295,7 +332,6 @@ def run_preflight(
     except PreflightError as error:
         errors.append(f"ui: {error}")
 
-    root = Path(project_root)
     for relative_path in DOCUMENT_PATHS:
         path = root / relative_path
         try:

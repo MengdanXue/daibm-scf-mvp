@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+import pytest
 
 from scripts.defense_preflight import HttpResponse, run_preflight
 
@@ -17,6 +20,22 @@ ROLE_ACCOUNTS = {
     "auditor.demo": "auditor",
 }
 ROOT = Path(__file__).parents[1]
+ARTIFACT_SHA256 = (
+    "158d273db310c3f1abf4be7cb06aee78568e475ebb7564ebbeaa16d3efeeb0e5"
+)
+ACTUAL_DEFENSE_DEPENDENCIES_READY = (
+    "demo-role-guide"
+    in (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    and all(
+        (ROOT / path).is_file()
+        for path in (
+            "docs/defense-one-page.md",
+            "docs/defense-one-page.pdf",
+            "docs/research-brief-en.md",
+            "docs/research-brief-en.pdf",
+        )
+    )
+)
 
 
 def _write_defense_documents(root: Path) -> None:
@@ -29,6 +48,11 @@ def _write_defense_documents(root: Path) -> None:
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"verified defense document")
+    manifest = root / "artifacts/reference/model-manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps({"artifact_sha256": ARTIFACT_SHA256}), encoding="utf-8"
+    )
 
 
 def _ui_html(*, guide_count: int = 5) -> str:
@@ -76,12 +100,15 @@ class _FakeClient:
         path = urlsplit(url).path
         self.server.calls.append(_Call(self.client_id, method, path, payload))
         if method == "GET" and path == "/api/health":
+            research_core = {"status": "ready"}
+            if self.server.artifact_sha256 is not None:
+                research_core["artifact_sha256"] = self.server.artifact_sha256
             return self.server.json_response(
                 {
                     "status": "ok",
                     "database": {"backend": "postgresql", "reachable": True},
                     "ledger": {"valid": True},
-                    "research_core": {"status": "ready"},
+                    "research_core": research_core,
                 }
             )
         if method == "GET" and path == "/":
@@ -107,8 +134,14 @@ class _FakeClient:
 
 
 class FakeHttp:
-    def __init__(self, *, html: str | None = None):
+    def __init__(
+        self,
+        *,
+        html: str | None = None,
+        artifact_sha256: str | None = ARTIFACT_SHA256,
+    ):
         self.html = html or _ui_html()
+        self.artifact_sha256 = artifact_sha256
         self.calls: list[_Call] = []
         self.logout_count = 0
         self.bad_session_username: str | None = None
@@ -192,19 +225,144 @@ def test_preflight_requires_semantic_ui_and_all_four_document_artifacts(tmp_path
     assert "docs/research-brief-en.pdf" in errors
 
 
-def test_reset_launcher_rejects_any_other_confirmation_without_cmd_errors():
+@pytest.mark.parametrize(
+    "served_hash",
+    [None, "A" * 64, "0" * 64],
+    ids=["missing", "not-lowercase-hex", "wrong-artifact"],
+)
+def test_preflight_rejects_missing_invalid_or_wrong_runtime_artifact_hash(
+    tmp_path, served_hash
+):
+    _write_defense_documents(tmp_path)
+    fake_http = FakeHttp(artifact_sha256=served_hash)
+
+    result = run_preflight(
+        "http://127.0.0.1:8010", fake_http.client, project_root=tmp_path
+    )
+
+    assert result.ok is False
+    assert fake_http.logout_count == 5
+    assert any("artifact_sha256" in error for error in result.errors)
+
+
+def _run_reset(
+    tmp_path: Path,
+    confirmation: str,
+    *,
+    context_available: bool = True,
+) -> tuple[subprocess.CompletedProcess[bytes], str]:
+    docker_log = tmp_path / "docker.log"
+    fake_docker = tmp_path / "docker.cmd"
+    context_exit = 0 if context_available else 27
+    fake_docker.write_text(
+        "\r\n".join(
+            (
+                "@echo off",
+                (
+                    f'echo CF=[%COMPOSE_FILE%] PROJECT=[%COMPOSE_PROJECT_NAME%] '
+                    f'HOST=[%DOCKER_HOST%] ARGS=%*>>"%DOCKER_LOG%"'
+                ),
+                f'if "%3"=="info" exit /b {context_exit}',
+                "exit /b 23",
+            )
+        )
+        + "\r\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{tmp_path}{os.pathsep}{environment['PATH']}",
+            "DOCKER_LOG": str(docker_log),
+            "COMPOSE_FILE": "C:\\outside\\hostile-compose.yml",
+            "COMPOSE_PROJECT_NAME": "hostile-project",
+            "DOCKER_HOST": "tcp://hostile.example:2375",
+        }
+    )
     completed = subprocess.run(
         ["cmd.exe", "/d", "/c", str(ROOT / "reset-defense-demo.cmd")],
         cwd=ROOT,
-        input=b"NO\r\n",
+        env=environment,
+        input=f"{confirmation}\r\n".encode(),
         capture_output=True,
         timeout=10,
     )
+    log = (
+        docker_log.read_text(encoding="utf-8", errors="replace")
+        if docker_log.exists()
+        else ""
+    )
+    return completed, log
+
+
+@pytest.mark.parametrize(
+    "confirmation",
+    ['"', "'", "&", "RESET DEMO ", "reset demo", 'RESET DEMO" & echo INJECTED'],
+)
+def test_reset_launcher_rejects_malicious_or_inexact_confirmation_without_docker(
+    tmp_path, confirmation
+):
+    completed, docker_log = _run_reset(tmp_path, confirmation)
 
     output = (completed.stdout + completed.stderr).decode(errors="replace")
     assert completed.returncode == 1
+    assert docker_log == ""
+    assert "not recognized as an internal or external command" not in output
+
+
+def test_reset_launcher_pins_context_compose_file_and_project_despite_environment(
+    tmp_path,
+):
+    completed, docker_log = _run_reset(tmp_path, "RESET DEMO")
+
+    assert completed.returncode == 1
+    lines = docker_log.splitlines()
+    assert lines[0] == "CF=[] PROJECT=[] HOST=[] ARGS=--context desktop-linux info"
+    assert lines[1].startswith(
+        "CF=[] PROJECT=[] HOST=[] ARGS=--context desktop-linux compose -f "
+    )
+    assert "docker-compose.yml" in lines[1]
+    assert lines[1].endswith("--project-name daibm-scf-mvp down -v")
+
+
+def test_reset_launcher_fails_before_compose_down_when_local_context_is_unavailable(
+    tmp_path,
+):
+    completed, docker_log = _run_reset(
+        tmp_path, "RESET DEMO", context_available=False
+    )
+
+    assert completed.returncode == 1
+    assert docker_log.splitlines() == [
+        "CF=[] PROJECT=[] HOST=[] ARGS=--context desktop-linux info"
+    ]
+
+
+def test_reset_launcher_rejects_any_other_confirmation_without_cmd_errors(tmp_path):
+    completed, docker_log = _run_reset(tmp_path, "NO")
+
+    output = (completed.stdout + completed.stderr).decode(errors="replace")
+    assert completed.returncode == 1
+    assert docker_log == ""
     assert "RESET DEMO" in output
     assert "ВНИМАНИЕ" in output
     assert "警告" in output
     assert "not recognized as an internal or external command" not in output
     assert "Get-Content" not in output
+
+
+@pytest.mark.xfail(
+    not ACTUAL_DEFENSE_DEPENDENCIES_READY,
+    strict=True,
+    reason="Task 5 role guide and Task 6 defense documents are not committed yet",
+)
+def test_actual_repository_assets_satisfy_the_strict_preflight_contract():
+    fake_http = FakeHttp(
+        html=(ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    )
+
+    result = run_preflight(
+        "http://127.0.0.1:8010", fake_http.client, project_root=ROOT
+    )
+
+    assert result.ok is True, result.errors
