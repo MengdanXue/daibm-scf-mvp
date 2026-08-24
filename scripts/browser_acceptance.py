@@ -152,8 +152,21 @@ def _exercise_primary(page) -> None:
         "#workflowTimeline"
     ).inner_text()
 
+    page.locator('[data-view-button="ledger"]').first.click()
+    page.locator("#fabricAnchorPanel").wait_for(state="visible")
+    page.locator("#refreshAnchors").click()
+    page.locator("#fabricAnchorPanel[aria-busy=\"false\"]").wait_for()
+    anchor_total = page.evaluate(
+        "[...document.querySelectorAll('#fabricAnchorPanel .anchor-kpis strong')]"
+        ".reduce((total, item) => total + Number(item.textContent), 0)"
+    )
+    assert anchor_total > 0
+    assert "Опциональный расширенный режим" in page.locator(
+        "#fabricAnchorMode"
+    ).inner_text()
+
     page.evaluate("window.setLanguage('zh')")
-    assert "审计已完成" in page.locator("#workflowDetail").inner_text()
+    assert "可选高级模式" in page.locator("#fabricAnchorMode").inner_text()
     page.evaluate("window.scrollTo(0, 0)")
     page.wait_for_function("window.scrollY === 0")
     page.wait_for_timeout(150)

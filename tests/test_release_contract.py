@@ -104,6 +104,69 @@ def test_compose_requires_research_core_in_application_service_only():
     assert "DATABASE_URL" not in compose
 
 
+def test_fabric_overlay_joins_only_gateway_to_the_internal_application_network():
+    base = _read("docker-compose.yml")
+    fabric = _read("advanced/fabric/network/docker-compose.fabric.yml")
+
+    assert "name: daibm-scf-mvp-network" in base
+    assert "name: daibm-scf-mvp-network" in fabric
+    gateway = fabric.split("  gateway:", 1)[1].split("\nnetworks:", 1)[0]
+    assert "ports:" not in gateway
+    assert "app:" in gateway
+    assert "- fabric-gateway" in gateway
+    for service in ("bootstrap", "orderer.example.com", "peer0.org1.example.com", "cli"):
+        section = fabric.split(f"  {service}:", 1)[1].split("\n  ", 1)[0]
+        assert "- app" not in section
+
+
+def test_advanced_launcher_has_fixed_targets_and_fabric_only_cleanup():
+    launcher = _read("start-fabric-demo.cmd")
+
+    assert launcher.isascii()
+    assert 'set "DOCKER_CONTEXT=desktop-linux"' in launcher
+    assert 'set "DOCKER_HOST="' in launcher
+    assert 'set "COMPOSE_FILE="' in launcher
+    assert 'set "COMPOSE_PROJECT_NAME="' in launcher
+    assert (
+        'compose -f "%~dp0docker-compose.yml" --project-name daibm-scf-mvp up --build -d'
+        in launcher
+    )
+    assert (
+        'compose -f "%~dp0advanced\\fabric\\network\\docker-compose.fabric.yml" '
+        '--project-name daibm-fabric-demo up --build -d' in launcher
+    )
+    assert "RESET FABRIC" in launcher
+    assert "down -v" not in launcher
+    assert "postgres-data" not in launcher
+    messages = json.loads(_read("launcher-messages.json"))
+    for key in (
+        "fabric_start_base",
+        "fabric_start_network",
+        "fabric_deploy",
+        "fabric_gateway_check",
+        "fabric_ready",
+        "fabric_reset_warning",
+        "fabric_reset_cancelled",
+    ):
+        assert any("а" <= character.lower() <= "я" for character in messages[key])
+        assert any("\u4e00" <= character <= "\u9fff" for character in messages[key])
+
+
+def test_optional_fabric_mode_is_documented_without_overclaiming():
+    readme = _read("README.md")
+    demo = _read("docs/demo-script.md")
+
+    for document in (readme, demo):
+        assert "start-fabric-demo.cmd" in document
+        assert "RESET FABRIC" in document
+        assert "permanent_failed" in document
+        assert "Gateway" in document
+    assert "Gateway не публикует порт" in readme
+    assert "Gateway 不暴露宿主机端口" in readme
+    assert "production blockchain" in readme
+    assert "生产级区块链" in readme
+
+
 def test_launcher_opens_browser_only_after_semantic_health_check():
     launcher = _read("start-demo.cmd")
 

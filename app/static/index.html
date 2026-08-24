@@ -481,6 +481,24 @@
       <section id="view-ledger" class="view">
         <div class="page-heading"><div><h1 data-i18n="ledgerTitle">Проверяемый аудиторский реестр</h1><p data-i18n="ledgerSub">Связанная хеш-цепочка фиксирует жизненный цикл каждой заявки</p></div><div class="ledger-actions"><button class="btn btn-danger" onclick="tamperLedger()" data-i18n="simulateTamper">Имитировать подмену</button><button class="btn btn-soft" onclick="repairLedger()" data-i18n="restoreLedger">Восстановить демо</button><button class="btn btn-primary" onclick="verifyLedger()" data-i18n="verifyNow">Проверить сейчас</button></div></div>
         <div class="ledger-hero"><div><h2 data-i18n="integrityTitle">Контроль целостности событий</h2><p data-i18n="integrityText">Хеш каждого события зависит от его данных и предыдущей записи. Изменение истории нарушает цепочку и выявляется при повторной проверке.</p></div><div class="seal"><div><b id="sealState">✓</b><span id="sealText" data-i18n="chainValid">Цепочка действительна</span></div></div></div>
+        <section id="fabricAnchorPanel" class="fabric-anchor-panel" aria-labelledby="fabricAnchorTitle" hidden>
+          <div class="fabric-anchor-bridge" aria-hidden="true"><span>POSTGRESQL</span><i></i><span>FABRIC</span></div>
+          <div class="fabric-anchor-head">
+            <div><span class="fabric-anchor-eyebrow" data-wf-i18n="fabricAnchorEyebrow">ОПЦИОНАЛЬНЫЙ ВНЕШНИЙ ЯКОРЬ</span><h2 id="fabricAnchorTitle" data-wf-i18n="fabricAnchorTitle">Якорение в Fabric</h2><p data-wf-i18n="fabricAnchorSubtitle">Хеши аудиторских событий передаются через транзакционный outbox; бизнес-записи остаются в PostgreSQL.</p></div>
+            <p id="fabricAnchorMode" class="fabric-anchor-mode" role="status" aria-live="polite"></p>
+          </div>
+          <div class="anchor-kpis" aria-label="Fabric anchor status counts">
+            <article><span data-wf-i18n="anchorPending">Ожидают</span><strong id="anchorPendingCount">0</strong></article>
+            <article><span data-wf-i18n="anchorRetry">Повтор</span><strong id="anchorRetryCount">0</strong></article>
+            <article><span data-wf-i18n="anchorAnchored">Закреплены</span><strong id="anchorAnchoredCount">0</strong></article>
+            <article><span data-wf-i18n="anchorPermanentFailed">Постоянная ошибка</span><strong id="anchorFailedCount">0</strong></article>
+          </div>
+          <div class="fabric-anchor-toolbar">
+            <div><b data-wf-i18n="anchorRecent">Последние записи</b><span id="anchorDispatchSummary" role="status" aria-live="polite"></span></div>
+            <div class="anchor-actions"><button id="refreshAnchors" type="button" class="btn btn-soft" data-wf-i18n="anchorRefresh">Обновить</button><button id="dispatchAnchors" type="button" class="btn btn-primary" data-wf-i18n="anchorDispatch">Отправить одну партию</button></div>
+          </div>
+          <div id="anchorList" class="anchor-list" aria-live="polite"></div>
+        </section>
         <div class="panel table-panel">
           <div class="panel-head"><div><h2 data-i18n="eventJournal">Журнал событий</h2><p><span id="ledgerCountLabel">0</span> <span data-i18n="eventsRecorded">событий зафиксировано</span></p></div></div>
           <div class="table-scroll"><table><thead><tr><th>ID</th><th data-i18n="thEvent">Событие</th><th data-i18n="thEntity">Объект</th><th data-i18n="thTime">Время</th><th data-i18n="thPreviousHash">Предыдущий хеш</th><th data-i18n="thHash">Хеш события</th></tr></thead><tbody id="ledgerRows"></tbody></table></div>
@@ -535,7 +553,7 @@
           <div class="model-card"><span class="number">05 / LOOP</span><h3 data-i18n="modelLoop">Замкнутый контур</h3><p data-i18n="modelLoopText">Результат аналитики не остаётся отчётом: он непосредственно инициирует управленческое действие и его регистрацию.</p></div>
           <div class="model-card"><span class="number">06 / DEMO</span><h3 data-i18n="modelProof">Что подтверждает MVP</h3><p data-i18n="modelProofText">Прототип подтверждает техническую реализуемость сценария и логическую связанность компонентов, а не промышленную эффективность всей архитектуры.</p></div>
         </div>
-        <div class="boundary"><b data-i18n="boundaryTitle">Граница научного утверждения:</b> <span data-i18n="boundaryText">это компьютерная имитационная проверка сценария. Реестр реализован как хеш-цепочка в PostgreSQL, а риск-модель — как прозрачный базовый алгоритм. Hyperledger Fabric, TGNN, ZKP и банковские интеграции в MVP не заявляются.</span></div>
+        <div class="boundary"><b data-i18n="boundaryTitle">Граница научного утверждения:</b> <span data-i18n="boundaryText">Это компьютерная имитационная проверка. Канонический реестр остаётся хеш-цепочкой PostgreSQL; MVP также реализует локальную опциональную привязку хешей к Hyperledger Fabric. Это не подтверждает получение консенсуса промышленного уровня, производительность или отказоустойчивость.</span></div>
       </section>
     </main>
   </div>
@@ -556,6 +574,12 @@
   });
   Object.assign(I18N.zh, {
     navResearch:'科研核心',researchTitle:'模型决策证据档案',researchSubtitle:'在可复现合成数据上执行真实 TGNN 推理，并形成策略决策和可验证审计轨迹。',researchRailTitle:'证据链轨道',researchRailText:'每一阶段均由标识、哈希和执行时间相互关联。',researchLoading:'正在载入状态',researchReady:'模型已就绪',researchUnavailable:'模型不可用',researchEnterprise:'企业',researchInfer:'执行模型推理',researchInject:'注入风险场景',researchReset:'重置场景',researchDataset:'数据',researchGraph:'时序图',researchModel:'模型',researchPolicy:'策略',researchLedger:'审计轨迹',researchRerunMetrics:'重实现实验指标',researchMetricBoundary:'2026_REIMPLEMENTATION · 合成数据 · 非论文原始指标',researchConnections:'关联企业',researchEmpty:'选择企业并执行模型推理',researchEmptyHint:'结果将与策略决策及三条审计事件一起持久化。',researchBefore:'场景注入前',researchAfter:'场景注入后',researchCurrent:'当前推理',researchChangedInputs:'发生变化的可观测特征',researchNoChanges:'普通推理不应用场景变更。',researchTrace:'决策追溯',researchInferenceReady:'模型推理已完成并留痕',researchScenarioReady:'风险场景已注入并重新推理',researchResetDone:'已选择基准场景第 0 版',researchHash:'哈希',researchWindow:'窗口',researchEvents:'事件',researchDecision:'策略决策',researchAction:'允许的控制动作',researchScore:'风险分数',researchProvenance:'数据来源',researchStatusHint:'500 家企业 · 24 个月',noIncident:'请先执行模拟篡改。',normal_monitoring:'正常监测',additional_verification:'追加核验',financing_review:'融资审查',NORMAL:'正常监测',ADDITIONAL_CHECK:'追加核验',FINANCING_REVIEW:'融资审查',MODEL_INFERENCE_COMPLETED:'模型推理完成',RISK_POLICY_TRIGGERED:'风险策略触发',CONTROL_ACTION_REQUESTED:'控制动作请求',SIMULATED_RISK_INJECTED:'合成风险注入',INTEGRITY_VIOLATION_DETECTED:'完整性异常留痕',LEDGER_RECOVERY_COMPLETED:'恢复操作完成',boundaryText:'这是基于合成数据的计算机验证。系统已实现最小 TGNN 训练、ONNX 推理，以及作为防篡改审计记录的 PostgreSQL 哈希链；不声称实现 Fabric、PoA+、ZKP 或生产级银行集成。',modelRiskText:'已训练的最小 TGNN 由 GCN、BiLSTM 和 MLP 组成；透明基线仅用于对照。',modelProofText:'原型验证可复现的数据→图→模型→策略→审计路径，不证明工业部署效果，也不声称复现原论文指标。'
+  });
+  Object.assign(I18N.ru, {
+    boundaryText:'Это компьютерная имитационная проверка. Канонический реестр остаётся хеш-цепочкой PostgreSQL; MVP также реализует локальную опциональную привязку хешей к Hyperledger Fabric. Это не подтверждает получение консенсуса промышленного уровня, производительность или отказоустойчивость.'
+  });
+  Object.assign(I18N.zh, {
+    boundaryText:'这是计算机模拟场景验证。规范账本仍是 PostgreSQL 哈希链；MVP 还实现了可选的本地 Hyperledger Fabric 哈希锚定。这不证明生产级共识、性能或容错能力。'
   });
   Object.assign(I18N.ru, {
     createFinancing:'Создать заявку на финансирование',presetCases:'Загрузить 3 готовых кейса',journeyTitle:'Контур одобрения и риск-контроля',journeySub:'Одна заявка проходит путь от регистрации до проверяемого аудиторского следа; выдача и погашение кредита не моделируются.',journeyApplication:'Заявка',journeyAssessment:'Оценка риска',journeyDecision:'Решение',journeyControl:'Контроль',journeyAudit:'Аудит',journeyDraft:'Этап 1 · ввод данных',journeyProcessing:'Этап 2 · выполняется оценка',journeyComplete:'5 этапов завершены · доказательства сохранены',viewAuditEvidence:'Открыть аудиторский след',viewResearchEvidence:'Открыть доказательства модели'

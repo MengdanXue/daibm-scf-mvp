@@ -149,8 +149,14 @@ services:
       - ../../../output/fabric/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/keystore:/fabric/msp/keystore:ro
       - ../../../output/fabric/crypto-config/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt:/fabric/tls/ca.crt:ro
     networks:
-      - fabric
+      fabric:
+      app:
+        aliases:
+          - fabric-gateway
 
 networks:
   fabric:
     name: daibm-fabric-demo-network
+  app:
+    external: true
+    name: daibm-scf-mvp-network

@@ -5,5 +5,12 @@
   "reset_warning": "ВНИМАНИЕ: чистый сброс удалит том PostgreSQL только этого Compose-проекта и все синтетические демонстрационные данные. / 警告：全新重置将仅删除当前 Compose 项目的 PostgreSQL 卷及全部合成演示数据。",
   "reset_cancelled": "Сброс отменён: подтверждение не совпало с RESET DEMO. / 已取消重置：确认文字必须与 RESET DEMO 完全一致。",
   "docker_context_unavailable": "Локальный контекст Docker Desktop desktop-linux недоступен; сброс не выполнялся. / 本机 Docker Desktop 的 desktop-linux 上下文不可用；未执行重置。",
-  "preflight_failed": "Сервис запущен, но обязательная предполётная проверка защиты не пройдена; исправьте перечисленные ошибки. / 服务已启动，但答辩预检未通过；请修复上方列出的错误。"
+  "preflight_failed": "Сервис запущен, но обязательная предполётная проверка защиты не пройдена; исправьте перечисленные ошибки. / 服务已启动，但答辩预检未通过；请修复上方列出的错误。",
+  "fabric_start_base": "Запуск PostgreSQL и приложения. / 正在启动 PostgreSQL 与应用。",
+  "fabric_start_network": "Запуск изолированной сети Fabric. / 正在启动隔离 Fabric 网络。",
+  "fabric_deploy": "Развёртывание chaincode. / 正在部署链码。",
+  "fabric_gateway_check": "Проверка внутреннего Fabric Gateway. / 正在检查内部 Fabric Gateway。",
+  "fabric_ready": "Расширенный режим Fabric готов. / Fabric 高级模式已就绪。",
+  "fabric_reset_warning": "ВНИМАНИЕ: будут удалены только контейнеры и локальное состояние Fabric; PostgreSQL сохранится. / 警告：仅删除 Fabric 容器与本地状态；PostgreSQL 数据会保留。",
+  "fabric_reset_cancelled": "Очистка Fabric отменена: требуется точное подтверждение RESET FABRIC. / 已取消 Fabric 清理：必须准确输入 RESET FABRIC。"
 }

@@ -281,6 +281,35 @@ body.authenticated .auth-gate { display: none; }
 .facility-pending { opacity: .62; }
 .facility-pending .facility-detail-panel,.facility-pending .facility-create-panel { cursor: progress; }
 
+.fabric-anchor-panel { margin: 18px 0; padding: 22px; border: 1px solid #c7d7e8; border-radius: 14px; background: linear-gradient(135deg,#f7fbff 0%,#fff 62%); box-shadow: 0 12px 34px rgba(16,38,74,.08); color: var(--wf-ink); }
+.fabric-anchor-bridge { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin-bottom: 16px; color: #51657f; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+.fabric-anchor-bridge i { height: 2px; background: linear-gradient(90deg,#10264a,#0072b2); position: relative; }
+.fabric-anchor-bridge i::after { content: ""; position: absolute; right: 0; top: -3px; width: 8px; height: 8px; border: 2px solid #0072b2; border-radius: 50%; background: #fff; }
+.fabric-anchor-head { display: grid; grid-template-columns: minmax(0,1fr) minmax(260px,.55fr); gap: 24px; align-items: start; }
+.fabric-anchor-head h2 { margin: 4px 0 7px; font-size: 22px; }
+.fabric-anchor-head p { margin: 0; color: #60718b; line-height: 1.55; }
+.fabric-anchor-eyebrow { color: #0072b2; font-size: 9px; font-weight: 900; letter-spacing: .14em; }
+.fabric-anchor-mode { border-left: 3px solid #d55e00; padding: 10px 12px; background: #fff8f2; font-size: 11px; }
+.anchor-kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin: 18px 0; }
+.anchor-kpis article { min-height: 74px; padding: 13px 15px; border: 1px solid #d7e2ef; border-radius: 10px; background: #fff; }
+.anchor-kpis span { display: block; color: #60718b; font-size: 9px; font-weight: 700; }
+.anchor-kpis strong { display: block; margin-top: 7px; color: #10264a; font-size: 22px; }
+.fabric-anchor-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 18px; padding-top: 14px; border-top: 1px solid #dfe7f0; }
+.fabric-anchor-toolbar > div:first-child { display: grid; gap: 4px; }
+#anchorDispatchSummary { color: #60718b; font-size: 9px; }
+.anchor-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.anchor-list { display: grid; gap: 8px; margin-top: 12px; }
+.anchor-record { display: grid; grid-template-columns: minmax(150px,1fr) 130px minmax(210px,1.25fr) auto; gap: 16px; align-items: center; padding: 12px 14px; border-left: 4px solid #8da1b8; background: #f7f9fc; }
+.anchor-record[data-anchor-status="anchored"] { border-left-color: #0072b2; }
+.anchor-record[data-anchor-status="retry"] { border-left-color: #d55e00; }
+.anchor-record[data-anchor-status="permanent_failed"] { border-left-color: #ba383f; }
+.anchor-hash { display: grid; gap: 3px; font-family: ui-monospace,SFMono-Regular,Consolas,monospace; }
+.anchor-hash span { color: #10264a; font-weight: 800; }
+.anchor-hash small,.anchor-record p { margin: 0; color: #60718b; font-size: 9px; line-height: 1.45; }
+.anchor-retry { min-height: 34px; border: 1px solid #ba383f; border-radius: 7px; background: #fff; color: #8f2730; font-weight: 750; cursor: pointer; }
+.anchor-empty { margin: 0; padding: 16px; color: #60718b; background: #f7f9fc; }
+.fabric-anchor-panel[aria-busy="true"] { cursor: progress; opacity: .72; }
+
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline: 3px solid color-mix(in srgb,var(--role-color,var(--wf-blue)) 25%,transparent); outline-offset: 2px; }
 
 @media (max-width: 1180px) {
@@ -305,6 +334,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .facility-list { max-height: 340px; }
   .facility-create-form { grid-template-columns: 1fr 1fr !important; }
   .facility-create-submit { grid-column: 1/-1; }
+  .fabric-anchor-head { grid-template-columns: 1fr; }
+  .anchor-record { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 600px) {
@@ -331,6 +362,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .facility-payment-row small { grid-column: 1/-1; }
   .facility-evidence { grid-template-columns: 1fr; }
   .facility-evidence-boundary { display: grid; }
+  .anchor-kpis { grid-template-columns: 1fr 1fr; }
+  .fabric-anchor-toolbar { align-items: stretch; flex-direction: column; }
+  .anchor-actions { display: grid; grid-template-columns: 1fr; }
+  .anchor-record { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

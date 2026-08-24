@@ -188,6 +188,59 @@ def test_workflow_javascript_uses_authenticated_versioned_apis():
     assert "Demo123!" in javascript
 
 
+def test_auditor_ledger_exposes_accessible_bilingual_fabric_anchor_controls():
+    html = _html()
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for element_id in (
+        "fabricAnchorPanel",
+        "fabricAnchorMode",
+        "anchorPendingCount",
+        "anchorRetryCount",
+        "anchorAnchoredCount",
+        "anchorFailedCount",
+        "refreshAnchors",
+        "dispatchAnchors",
+        "anchorDispatchSummary",
+        "anchorList",
+    ):
+        assert f'id="{element_id}"' in html
+    assert 'aria-labelledby="fabricAnchorTitle"' in html
+    assert html.count('aria-live="polite"') >= 3
+    for key in (
+        "fabricAnchorTitle",
+        "fabricAnchorOptional",
+        "anchorPending",
+        "anchorRetry",
+        "anchorAnchored",
+        "anchorPermanentFailed",
+        "anchorRefresh",
+        "anchorDispatch",
+        "anchorRetryFailed",
+    ):
+        assert javascript.count(f"{key}:") == 2
+
+
+def test_fabric_anchor_controls_use_real_auditor_apis_without_fake_success():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    assert 'wfApi("/api/v1/anchors?limit=50")' in javascript
+    assert 'wfApi("/api/v1/anchor-dispatches"' in javascript
+    assert 'wfApi(`/api/v1/anchors/${anchorId}/retry`' in javascript
+    assert 'anchor.status === "permanent_failed"' in javascript
+    assert 'summary.anchored' in javascript
+    assert "fabricAnchorOptional" in javascript
+
+
+def test_ui_scientific_boundary_distinguishes_optional_fabric_from_postgresql():
+    html = _html()
+
+    assert "локальную опциональную привязку хешей к Hyperledger Fabric" in html
+    assert "可选的本地 Hyperledger Fabric 哈希锚定" in html
+    assert "получение консенсуса промышленного уровня" in html
+    assert "生产级共识" in html
+
+
 def test_workflow_translates_created_draft_and_rerenders_user_on_language_change():
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 

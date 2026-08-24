@@ -67,7 +67,10 @@
       installment_scheduled: "По графику", installment_partially_paid: "Частично погашено", installment_paid: "Погашено", installment_overdue: "Просрочено",
       payment_submitted: "На проверке", payment_confirmed: "Подтверждён", payment_rejected: "Отклонён",
       facility_not_found: "Финансовое досье не найдено или недоступно вашей роли.", forbidden_role: "Текущая роль не может выполнить это действие.",
-      facility_precondition_failed: "Для создания нужна одобренная заявка с завершённым аудитом и совпадающей суммой.", facility_conflict: "Данные изменились или действие больше недоступно. Обновите досье и повторите с новой командой."
+      facility_precondition_failed: "Для создания нужна одобренная заявка с завершённым аудитом и совпадающей суммой.", facility_conflict: "Данные изменились или действие больше недоступно. Обновите досье и повторите с новой командой.",
+      fabricAnchorEyebrow: "ОПЦИОНАЛЬНЫЙ ВНЕШНИЙ ЯКОРЬ", fabricAnchorTitle: "Якорение в Fabric", fabricAnchorSubtitle: "Хеши аудиторских событий передаются через транзакционный outbox; бизнес-записи остаются в PostgreSQL.",
+      fabricAnchorOptional: "Опциональный расширенный режим: бизнес-процесс продолжается, а хеши остаются в очереди, если Fabric недоступен.", fabricAnchorConnected: "Эта отправка получила реальные подтверждения Fabric. Обновление списка само по себе не проверяет доступность Gateway.",
+      anchorPending: "Ожидают", anchorRetry: "Повтор", anchorAnchored: "Закреплены", anchorPermanentFailed: "Постоянная ошибка", anchorRefresh: "Обновить", anchorDispatch: "Отправить одну партию", anchorRetryFailed: "Повторить", anchorRecent: "Последние записи", anchorEmpty: "Записей для якорения пока нет.", anchorAttempt: "попыток", anchorError: "ошибка", anchorNoError: "без ошибки"
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
@@ -121,7 +124,10 @@
       overdue: "已逾期", repaid: "已还清", closed: "已关闭", installment_scheduled: "按计划", installment_partially_paid: "部分已还",
       installment_paid: "已还清", installment_overdue: "已逾期", payment_submitted: "待审核", payment_confirmed: "已确认", payment_rejected: "已拒绝",
       facility_not_found: "融资卷宗不存在或当前角色无权查看。", forbidden_role: "当前角色不能执行此操作。",
-      facility_precondition_failed: "创建融资要求申请已批准、审计完成且本金一致。", facility_conflict: "数据已变化或操作不再可用。请刷新卷宗后使用新命令重试。"
+      facility_precondition_failed: "创建融资要求申请已批准、审计完成且本金一致。", facility_conflict: "数据已变化或操作不再可用。请刷新卷宗后使用新命令重试。",
+      fabricAnchorEyebrow: "可选外部锚定", fabricAnchorTitle: "Fabric 锚定", fabricAnchorSubtitle: "审计事件哈希经事务型 outbox 发送；业务记录仍保存在 PostgreSQL。",
+      fabricAnchorOptional: "可选高级模式：Fabric 不可用时业务流程仍会继续，哈希保留在队列中。", fabricAnchorConnected: "本次派发已收到真实 Fabric 确认；仅刷新列表并不探测 Gateway 当前状态。",
+      anchorPending: "待处理", anchorRetry: "待重试", anchorAnchored: "已锚定", anchorPermanentFailed: "永久失败", anchorRefresh: "刷新", anchorDispatch: "派发一批", anchorRetryFailed: "重新入队", anchorRecent: "最近记录", anchorEmpty: "暂时没有待锚定记录。", anchorAttempt: "尝试次数", anchorError: "错误", anchorNoError: "无错误"
     }
   };
 
@@ -142,7 +148,8 @@
     lang: localStorage.getItem("daibm-lang") || "ru", user: null,
     accounts: [], coreEnterprises: [], dashboard: null, tasks: [],
     applications: [], selected: null, editing: null, busy: false,
-    facilities: [], selectedFacility: null, facilityPending: false
+    facilities: [], selectedFacility: null, facilityPending: false,
+    anchors: [], anchorsBusy: false, anchorLastSummary: null
   };
 
   const tr = (key) => COPY[state.lang][key] || key;
@@ -230,6 +237,7 @@
     if (state.user) {
       renderWorkbench();
       renderFacilityWorkbench();
+      renderAnchors();
     }
   }
 
@@ -305,6 +313,8 @@
     state.editing = null;
     state.facilities = [];
     state.selectedFacility = null;
+    state.anchors = [];
+    state.anchorLastSummary = null;
     document.body.classList.remove("authenticated");
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
@@ -354,8 +364,84 @@
     state.coreEnterprises = state.user.role === "supplier"
       ? await wfApi("/api/v1/organizations/core-enterprises")
       : [];
-    await Promise.all([refreshWorkflow(), refreshFacilities()]);
+    await Promise.all([refreshWorkflow(), refreshFacilities(), state.user.role === "auditor" ? refreshAnchors() : Promise.resolve()]);
     await refreshLegacyForRole();
+  }
+
+  function anchorDisplayStatus(anchor) {
+    return anchor.status === "pending" && Number(anchor.attempt_count) > 0 ? "retry" : anchor.status;
+  }
+
+  function setAnchorPending(value) {
+    state.anchorsBusy = value;
+    const panel = document.querySelector("#fabricAnchorPanel");
+    panel?.setAttribute("aria-busy", String(value));
+    panel?.querySelectorAll("button").forEach((button) => { button.disabled = value; });
+  }
+
+  function renderAnchors() {
+    const panel = document.querySelector("#fabricAnchorPanel");
+    if (!panel) return;
+    const isAuditor = state.user?.role === "auditor";
+    panel.hidden = !isAuditor;
+    if (!isAuditor) return;
+    const counts = { pending: 0, retry: 0, anchored: 0, permanent_failed: 0 };
+    state.anchors.forEach((anchor) => { counts[anchorDisplayStatus(anchor)] += 1; });
+    document.querySelector("#anchorPendingCount").textContent = counts.pending;
+    document.querySelector("#anchorRetryCount").textContent = counts.retry;
+    document.querySelector("#anchorAnchoredCount").textContent = counts.anchored;
+    document.querySelector("#anchorFailedCount").textContent = counts.permanent_failed;
+    document.querySelector("#fabricAnchorMode").textContent = state.anchorLastSummary?.anchored > 0 ? tr("fabricAnchorConnected") : tr("fabricAnchorOptional");
+    const summary = state.anchorLastSummary;
+    document.querySelector("#anchorDispatchSummary").textContent = summary
+      ? `${tr("anchorAnchored")}: ${summary.anchored} · ${tr("anchorRetry")}: ${summary.retryable} · ${tr("anchorPermanentFailed")}: ${summary.permanent_failed}`
+      : "";
+    const list = document.querySelector("#anchorList");
+    if (!state.anchors.length) {
+      list.innerHTML = `<p class="anchor-empty">${escapeHtml(tr("anchorEmpty"))}</p>`;
+      return;
+    }
+    list.innerHTML = state.anchors.slice(0, 12).map((anchor) => {
+      const displayStatus = anchorDisplayStatus(anchor);
+      const retry = anchor.status === "permanent_failed"
+        ? `<button type="button" class="anchor-retry" data-anchor-retry="${escapeHtml(anchor.anchor_id)}">${escapeHtml(tr("anchorRetryFailed"))}</button>`
+        : "";
+      return `<article class="anchor-record" data-anchor-status="${escapeHtml(displayStatus)}" data-anchor-id="${escapeHtml(anchor.anchor_id)}"><div class="anchor-hash"><span>${escapeHtml(String(anchor.event_hash).slice(0, 12))}…</span><small>${escapeHtml(String(anchor.anchor_id).slice(0, 8))}</small></div><b>${escapeHtml(tr(displayStatus === "permanent_failed" ? "anchorPermanentFailed" : `anchor${displayStatus[0].toUpperCase()}${displayStatus.slice(1)}`))}</b><p>${escapeHtml(tr("anchorAttempt"))}: ${Number(anchor.attempt_count) || 0}<br>${escapeHtml(tr("anchorError"))}: ${escapeHtml(anchor.last_error_code || tr("anchorNoError"))}</p>${retry}</article>`;
+    }).join("");
+  }
+
+  async function refreshAnchors() {
+    if (state.user?.role !== "auditor") return;
+    setAnchorPending(true);
+    try {
+      state.anchors = await wfApi("/api/v1/anchors?limit=50");
+      renderAnchors();
+    } catch (error) { notify(error.message, true); }
+    finally { setAnchorPending(false); }
+  }
+
+  async function dispatchAnchors() {
+    if (state.user?.role !== "auditor") return;
+    setAnchorPending(true);
+    try {
+      const summary = await wfApi("/api/v1/anchor-dispatches", { method: "POST", body: JSON.stringify({ limit: 20 }) });
+      state.anchorLastSummary = summary;
+      state.anchors = await wfApi("/api/v1/anchors?limit=50");
+      renderAnchors();
+    } catch (error) { notify(error.message, true); }
+    finally { setAnchorPending(false); }
+  }
+
+  async function retryAnchor(anchorId) {
+    const anchor = state.anchors.find((candidate) => candidate.anchor_id === anchorId);
+    if (!anchor || anchor.status !== "permanent_failed" || state.user?.role !== "auditor") return;
+    setAnchorPending(true);
+    try {
+      await wfApi(`/api/v1/anchors/${anchorId}/retry`, { method: "POST" });
+      state.anchors = await wfApi("/api/v1/anchors?limit=50");
+      renderAnchors();
+    } catch (error) { notify(error.message, true); }
+    finally { setAnchorPending(false); }
   }
 
   async function refreshWorkflow(preferredId = null) {
@@ -768,6 +854,8 @@
     document.querySelector("#logoutButton").addEventListener("click", logout);
     document.querySelector("#refreshWorkflow").addEventListener("click", () => refreshWorkflow());
     document.querySelector("#refreshFacilities").addEventListener("click", () => refreshFacilities());
+    document.querySelector("#refreshAnchors").addEventListener("click", refreshAnchors);
+    document.querySelector("#dispatchAnchors").addEventListener("click", dispatchAnchors);
     document.querySelector("#applicationForm").addEventListener("submit", saveApplication);
     document.querySelector("#facilityCreateForm").addEventListener("submit", createFacility);
     document.addEventListener("submit", (event) => {
@@ -780,6 +868,8 @@
     document.addEventListener("click", (event) => {
       const button = event.target.closest?.("[data-workflow-action]");
       if (button) executeAction(button);
+      const anchorRetry = event.target.closest?.("[data-anchor-retry]");
+      if (anchorRetry) retryAnchor(anchorRetry.dataset.anchorRetry);
     });
     applyWorkflowLanguage();
     try { state.accounts = await wfApi("/api/v1/auth/demo-accounts"); } catch (_) { state.accounts = []; }
