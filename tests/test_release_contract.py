@@ -125,6 +125,7 @@ def test_reset_launcher_is_separate_confirmed_and_scoped():
     assert 'set "COMPOSE_FILE="' in reset
     assert 'set "COMPOSE_PROJECT_NAME="' in reset
     assert 'set "DOCKER_HOST="' in reset
+    assert 'set "DOCKER_CONTEXT=desktop-linux"' in reset
     down = (
         'docker --context desktop-linux compose -f "%~dp0docker-compose.yml" '
         "--project-name daibm-scf-mvp down -v"
@@ -154,6 +155,7 @@ def test_reset_launcher_messages_and_documentation_are_bilingual():
         assert any("\u4e00" <= character <= "\u9fff" for character in messages[key])
     assert "reset-defense-demo.cmd" in readme
     assert "scripts\\defense_preflight.py" in readme
+    assert "docker compose down -v" not in readme
 
 
 def test_release_documentation_exposes_reproducibility_and_true_boundaries():

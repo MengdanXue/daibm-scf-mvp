@@ -75,13 +75,7 @@ docker compose down
 .\.venv\Scripts\python.exe scripts\defense_preflight.py --base-url http://127.0.0.1:8010
 ```
 
-Для намеренно полного сброса только текущего Compose-проекта используйте `reset-defense-demo.cmd`: он требует точного ввода `RESET DEMO`, удаляет том PostgreSQL, запускает `start-demo.cmd`, а затем выполняет предполётную проверку. / 如确需仅对当前 Compose 项目执行全新重置，请运行 `reset-defense-demo.cmd`：脚本要求准确输入 `RESET DEMO`，随后删除 PostgreSQL 卷、调用 `start-demo.cmd` 并执行答辩预检。
-
-Эквивалентная разрушительная команда внутри подтверждённого сценария / 经确认后脚本内部执行的破坏性命令：
-
-```powershell
-docker compose down -v
-```
+Для намеренно полного сброса только текущего Compose-проекта используйте исключительно `reset-defense-demo.cmd`: он требует точного ввода `RESET DEMO`, фиксирует локальный контекст Docker Desktop и Compose-проект, удаляет том PostgreSQL, запускает `start-demo.cmd`, а затем выполняет предполётную проверку. Не выполняйте удаление тома вручную. / 如确需仅对当前 Compose 项目执行全新重置，请只运行 `reset-defense-demo.cmd`：脚本要求准确输入 `RESET DEMO`，固定本机 Docker Desktop 上下文和 Compose 项目，随后删除 PostgreSQL 卷、调用 `start-demo.cmd` 并执行答辩预检。请勿手动执行卷删除操作。
 
 Основной сценарий начинается с **«Создать заявку на финансирование»** / 主流程从 **“创建供应链融资申请”** 开始，并按“申请—评估—决策—控制—审计”完成审批、风控与审计闭环。Кнопка **«Загрузить 3 готовых кейса»** / **“载入 3 组预置案例”** 保留用于快速对比三类决策。
 

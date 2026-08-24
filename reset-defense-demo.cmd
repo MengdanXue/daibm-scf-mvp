@@ -11,6 +11,7 @@ if errorlevel 1 goto reset_cancelled
 set "COMPOSE_FILE="
 set "COMPOSE_PROJECT_NAME="
 set "DOCKER_HOST="
+set "DOCKER_CONTEXT=desktop-linux"
 
 call docker --context desktop-linux info >nul 2>nul
 if errorlevel 1 goto docker_context_unavailable

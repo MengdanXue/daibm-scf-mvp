@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -250,6 +251,9 @@ def _run_reset(
     confirmation: str,
     *,
     context_available: bool = True,
+    compose_exit: int = 23,
+    launcher_root: Path = ROOT,
+    extra_environment: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[bytes], str]:
     docker_log = tmp_path / "docker.log"
     fake_docker = tmp_path / "docker.cmd"
@@ -263,7 +267,7 @@ def _run_reset(
                     f'HOST=[%DOCKER_HOST%] ARGS=%*>>"%DOCKER_LOG%"'
                 ),
                 f'if "%3"=="info" exit /b {context_exit}',
-                "exit /b 23",
+                f"exit /b {compose_exit}",
             )
         )
         + "\r\n",
@@ -277,11 +281,14 @@ def _run_reset(
             "COMPOSE_FILE": "C:\\outside\\hostile-compose.yml",
             "COMPOSE_PROJECT_NAME": "hostile-project",
             "DOCKER_HOST": "tcp://hostile.example:2375",
+            "DOCKER_CONTEXT": "hostile-remote",
         }
     )
+    if extra_environment:
+        environment.update(extra_environment)
     completed = subprocess.run(
-        ["cmd.exe", "/d", "/c", str(ROOT / "reset-defense-demo.cmd")],
-        cwd=ROOT,
+        ["cmd.exe", "/d", "/c", str(launcher_root / "reset-defense-demo.cmd")],
+        cwd=launcher_root,
         env=environment,
         input=f"{confirmation}\r\n".encode(),
         capture_output=True,
@@ -293,6 +300,41 @@ def _run_reset(
         else ""
     )
     return completed, log
+
+
+def test_reset_launcher_passes_fixed_local_context_to_start_after_successful_down(
+    tmp_path,
+):
+    launcher_root = tmp_path / "controlled-demo"
+    launcher_root.mkdir()
+    for filename in ("reset-defense-demo.cmd", "launcher-messages.json"):
+        shutil.copy2(ROOT / filename, launcher_root / filename)
+    (launcher_root / "docker-compose.yml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    start_log = tmp_path / "start.log"
+    (launcher_root / "start-demo.cmd").write_bytes(
+        (
+            "@echo off\r\n"
+            "echo CONTEXT=[%DOCKER_CONTEXT%] HOST=[%DOCKER_HOST%] "
+            "CF=[%COMPOSE_FILE%] PROJECT=[%COMPOSE_PROJECT_NAME%] "
+            "> \"%START_LOG%\"\r\n"
+            "exit /b 19\r\n"
+        ).encode("utf-8")
+    )
+    completed, docker_log = _run_reset(
+        tmp_path,
+        "RESET DEMO",
+        compose_exit=0,
+        launcher_root=launcher_root,
+        extra_environment={"START_LOG": str(start_log)},
+    )
+
+    assert completed.returncode == 1
+    assert docker_log.count("--context desktop-linux") == 2
+    assert start_log.read_text(encoding="utf-8").strip() == (
+        "CONTEXT=[desktop-linux] HOST=[] CF=[] PROJECT=[]"
+    )
 
 
 @pytest.mark.parametrize(
