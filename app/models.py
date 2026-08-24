@@ -22,6 +22,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = ["Base", "FinancingRequestModel", "LedgerEventModel"]
 
+# Financing lifecycle tables live in ``app.models_facility``. Alembic imports
+# that module explicitly so this foundational module stays free of circular
+# imports while both model groups share the same metadata registry.
+
 LEDGER_EVENT_TYPES = (
     "FINANCING_REQUEST",
     "RISK_ASSESSMENT",
