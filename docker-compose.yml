@@ -32,6 +32,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - calibration-artifacts:/app/artifacts/candidates/calibration
     networks:
       - app
     healthcheck:
@@ -48,6 +50,7 @@ services:
 
 volumes:
   postgres-data:
+  calibration-artifacts:
 
 networks:
   app:

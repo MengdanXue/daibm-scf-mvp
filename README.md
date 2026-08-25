@@ -93,6 +93,8 @@ docker compose down
 
 После закрытия объекта аудитор может записать контролируемый/симулированный фактический результат. Ссылка на свидетельство хешируется SHA-256 только в браузере; сервер получает лишь хеш. Каждый неизменяемый результат запускает детерминированное обучение слоя Platt. Версия активируется автоматически только при `n >= 20`, не менее 5 положительных и 5 отрицательных наблюдений, проверенном SHA-256/schema артефакта и отсутствии регрессии Brier/log loss. PostgreSQL гарантирует единственную активную версию; аудитор может вернуть только её непосредственного предшественника. Новые оценки сохраняют исходный и итоговый баллы, ID версии или код безопасного возврата к baseline. / 融资结清后，审计员可录入受控/模拟实际结果；证据引用只在浏览器中计算 SHA-256，服务端仅接收哈希。每个不可变结果都会触发确定性的 Platt 层训练。只有样本数不少于 20、正负样本各不少于 5、工件 SHA-256/schema 校验通过且 Brier/log loss 不退化时才自动激活。PostgreSQL 保证仅有一个激活版本；审计员只能回滚到其直接前序版本。新评估同时保存原始分、最终分、校准版本 ID 或安全回退代码。
 
+PostgreSQL data and published calibration artifacts use separate Docker named volumes (`postgres-data` and `calibration-artifacts`), so rebuilding the application container preserves both outcome lineage and the active calibration file. / PostgreSQL 数据与已发布校准工件分别使用 Docker 命名卷（`postgres-data` 与 `calibration-artifacts`），重建应用容器不会丢失结果血缘或当前激活校准文件。
+
 ## Архитектура / 架构
 
 ```text

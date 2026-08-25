@@ -104,6 +104,32 @@ def test_compose_requires_research_core_in_application_service_only():
     assert "DATABASE_URL" not in compose
 
 
+def test_compose_persists_adaptive_calibration_artifacts():
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    compose = json.loads(result.stdout)
+
+    calibration_mounts = [
+        mount
+        for mount in compose["services"]["mvp"]["volumes"]
+        if mount["target"] == "/app/artifacts/candidates/calibration"
+    ]
+    assert calibration_mounts == [
+        {
+            "type": "volume",
+            "source": "calibration-artifacts",
+            "target": "/app/artifacts/candidates/calibration",
+            "volume": {},
+        }
+    ]
+    assert "calibration-artifacts" in compose["volumes"]
+
+
 def test_fabric_overlay_joins_only_gateway_to_the_internal_application_network():
     base = _read("docker-compose.yml")
     fabric = _read("advanced/fabric/network/docker-compose.fabric.yml")
