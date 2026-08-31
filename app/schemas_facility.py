@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 from uuid import UUID
@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
+    computed_field,
     Field,
     WithJsonSchema,
     field_validator,
@@ -100,3 +101,57 @@ class DecisionPaymentRequest(VersionedFacilityCommand):
         if not normalized:
             raise ValueError("comment must not be blank")
         return normalized
+
+
+class EvidenceCommand(VersionedFacilityCommand):
+    reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{2,63}$")
+    comment: str = Field(min_length=1, max_length=500)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("comment")
+    @classmethod
+    def comment_must_not_be_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("comment must not be blank")
+        return normalized
+
+
+class MarkOverdueRequest(VersionedFacilityCommand):
+    installment_id: UUID
+    days_past_due: int = Field(strict=True, ge=1, le=36500)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RestructureFacilityRequest(EvidenceCommand):
+    installments: list[InstallmentRequest] = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def schedule_sequences_must_be_unique_and_contiguous(
+        self,
+    ) -> RestructureFacilityRequest:
+        sequences = [item.sequence for item in self.installments]
+        if sorted(sequences) != list(range(1, len(self.installments) + 1)):
+            raise ValueError("installment sequences must be unique and contiguous")
+        return self
+
+    @computed_field
+    @property
+    def schedule_total(self) -> Decimal:
+        return sum((row.amount for row in self.installments), Decimal("0.00"))
+
+
+class DeclareDefaultRequest(EvidenceCommand):
+    defaulted_at: datetime
+    days_past_due: int = Field(strict=True, ge=1, le=36500)
+
+    @field_validator("defaulted_at")
+    @classmethod
+    def defaulted_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("defaulted_at must be timezone-aware")
+        return value
+
+
+class WriteOffRequest(EvidenceCommand):
+    pass

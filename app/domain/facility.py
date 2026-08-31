@@ -11,7 +11,10 @@ class FacilityStatus(StrEnum):
     DISBURSED = "disbursed"
     ACTIVE = "active"
     OVERDUE = "overdue"
+    RESTRUCTURED = "restructured"
+    DEFAULTED = "defaulted"
     REPAID = "repaid"
+    WRITTEN_OFF = "written_off"
     CLOSED = "closed"
 
 
@@ -20,6 +23,7 @@ class InstallmentStatus(StrEnum):
     PARTIALLY_PAID = "partially_paid"
     PAID = "paid"
     OVERDUE = "overdue"
+    SUPERSEDED = "superseded"
 
 
 class PaymentStatus(StrEnum):
@@ -37,6 +41,9 @@ class FacilityAction(StrEnum):
     REJECT_PAYMENT = "reject_payment"
     CONFIRM_FINAL_PAYMENT = "confirm_final_payment"
     MARK_OVERDUE = "mark_overdue"
+    RESTRUCTURE = "restructure"
+    DECLARE_DEFAULT = "declare_default"
+    WRITE_OFF = "write_off"
     CLOSE = "close"
 
 
@@ -81,6 +88,16 @@ _TRANSITIONS = {
         Role.SUPPLIER,
     ): FacilityStatus.OVERDUE,
     (
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.SUBMIT_PAYMENT,
+        Role.SUPPLIER,
+    ): FacilityStatus.RESTRUCTURED,
+    (
+        FacilityStatus.DEFAULTED,
+        FacilityAction.SUBMIT_PAYMENT,
+        Role.SUPPLIER,
+    ): FacilityStatus.DEFAULTED,
+    (
         FacilityStatus.ACTIVE,
         FacilityAction.CONFIRM_PAYMENT,
         Role.FINANCIER,
@@ -91,6 +108,16 @@ _TRANSITIONS = {
         Role.FINANCIER,
     ): FacilityStatus.OVERDUE,
     (
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.CONFIRM_PAYMENT,
+        Role.FINANCIER,
+    ): FacilityStatus.RESTRUCTURED,
+    (
+        FacilityStatus.DEFAULTED,
+        FacilityAction.CONFIRM_PAYMENT,
+        Role.FINANCIER,
+    ): FacilityStatus.DEFAULTED,
+    (
         FacilityStatus.ACTIVE,
         FacilityAction.REJECT_PAYMENT,
         Role.FINANCIER,
@@ -100,6 +127,16 @@ _TRANSITIONS = {
         FacilityAction.REJECT_PAYMENT,
         Role.FINANCIER,
     ): FacilityStatus.OVERDUE,
+    (
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.REJECT_PAYMENT,
+        Role.FINANCIER,
+    ): FacilityStatus.RESTRUCTURED,
+    (
+        FacilityStatus.DEFAULTED,
+        FacilityAction.REJECT_PAYMENT,
+        Role.FINANCIER,
+    ): FacilityStatus.DEFAULTED,
     (
         FacilityStatus.ACTIVE,
         FacilityAction.CONFIRM_FINAL_PAYMENT,
@@ -107,20 +144,68 @@ _TRANSITIONS = {
     ): FacilityStatus.REPAID,
     (
         FacilityStatus.OVERDUE,
+        FacilityAction.CONFIRM_FINAL_PAYMENT,
+        Role.FINANCIER,
+    ): FacilityStatus.REPAID,
+    (
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.CONFIRM_FINAL_PAYMENT,
+        Role.FINANCIER,
+    ): FacilityStatus.REPAID,
+    (
+        FacilityStatus.DEFAULTED,
         FacilityAction.CONFIRM_FINAL_PAYMENT,
         Role.FINANCIER,
     ): FacilityStatus.REPAID,
     (
         FacilityStatus.ACTIVE,
         FacilityAction.MARK_OVERDUE,
-        Role.RISK_MANAGER,
+        Role.FINANCIER,
     ): FacilityStatus.OVERDUE,
+    (
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.MARK_OVERDUE,
+        Role.FINANCIER,
+    ): FacilityStatus.OVERDUE,
+    (
+        FacilityStatus.OVERDUE,
+        FacilityAction.RESTRUCTURE,
+        Role.RISK_MANAGER,
+    ): FacilityStatus.RESTRUCTURED,
+    (
+        FacilityStatus.OVERDUE,
+        FacilityAction.DECLARE_DEFAULT,
+        Role.RISK_MANAGER,
+    ): FacilityStatus.DEFAULTED,
+    (
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.DECLARE_DEFAULT,
+        Role.RISK_MANAGER,
+    ): FacilityStatus.DEFAULTED,
+    (
+        FacilityStatus.DEFAULTED,
+        FacilityAction.WRITE_OFF,
+        Role.AUDITOR,
+    ): FacilityStatus.WRITTEN_OFF,
     (
         FacilityStatus.REPAID,
         FacilityAction.CLOSE,
         Role.AUDITOR,
     ): FacilityStatus.CLOSED,
+    (
+        FacilityStatus.WRITTEN_OFF,
+        FacilityAction.CLOSE,
+        Role.AUDITOR,
+    ): FacilityStatus.CLOSED,
 }
+
+
+def derive_closure_reason(*, has_default: bool, has_writeoff: bool) -> str:
+    if has_writeoff:
+        if not has_default:
+            raise ValueError("write-off requires default history")
+        return "written_off"
+    return "settled_after_default" if has_default else "repaid"
 
 
 def next_facility_status(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Annotated, Any
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -13,6 +12,7 @@ from app.identity import AuthenticatedUser
 from app.schemas_facility import (
     CreateFacilityRequest,
     DecisionPaymentRequest,
+    MarkOverdueRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
 )
@@ -72,10 +72,6 @@ class FacilityResponse(BaseModel):
     allowed_actions: list[str]
     installments: list[FacilityInstallmentResponse]
     payments: list[FacilityPaymentResponse]
-
-
-class MarkOverdueRequest(VersionedFacilityCommand):
-    installment_id: UUID
 
 
 def _execute(operation: Callable[[], Any]) -> Any:
@@ -246,14 +242,11 @@ def mark_overdue(
     user: CurrentUser,
     request: Request,
 ):
-    command = VersionedFacilityCommand.model_validate(
-        payload.model_dump(exclude={"installment_id"})
-    )
     return _execute(
         lambda: request.app.state.facility_service.mark_overdue(
             facility_id,
             payload.installment_id,
-            command,
+            payload,
             user,
         )
     )
