@@ -112,6 +112,42 @@ def _create_facility(client, session_factory) -> dict:
     return response.json()
 
 
+def _default_facility(client, session_factory) -> dict:
+    facility = _create_facility(client, session_factory)
+    facility_id = facility["facility_id"]
+    initiated = client.post(
+        f"/api/v1/facilities/{facility_id}/initiate-disbursement",
+        json=_command(facility["version"]),
+    ).json()
+    active = client.post(
+        f"/api/v1/facilities/{facility_id}/confirm-disbursement",
+        json=_command(initiated["version"]),
+    ).json()
+    overdue = client.post(
+        f"/api/v1/facilities/{facility_id}/mark-overdue",
+        json={
+            **_command(active["version"]),
+            "installment_id": active["installments"][0]["installment_id"],
+            "days_past_due": 60,
+            "evidence_sha256": "b" * 64,
+        },
+    ).json()
+    _login(client, "risk.demo")
+    response = client.post(
+        f"/api/v1/facilities/{facility_id}/declare-default",
+        json={
+            **_command(overdue["version"]),
+            "reason_code": "PAYMENT_DEFAULT",
+            "comment": "Governed delinquency remains unresolved",
+            "evidence_sha256": "d" * 64,
+            "defaulted_at": "2026-08-24T12:00:00Z",
+            "days_past_due": 90,
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_facility_routes_require_authentication(
     facility_client,
 ):
@@ -490,3 +526,87 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
         "/api/v1/facilities/{facility_id}/write-off",
     ):
         assert path in paths
+
+
+def test_pending_recovery_suppresses_writeoff_and_returns_stable_409(
+    facility_client,
+    session_factory,
+):
+    defaulted = _default_facility(facility_client, session_factory)
+    facility_id = defaulted["facility_id"]
+    _login(facility_client, "supplier.demo")
+    submitted = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/payments",
+        json={
+            **_command(defaulted["version"]),
+            "installment_id": defaulted["installments"][0]["installment_id"],
+            "amount": "100.00",
+            "payment_reference": "PENDING-API-WRITEOFF",
+        },
+    )
+    assert submitted.status_code == 200
+
+    _login(facility_client, "auditor.demo")
+    rejected = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/write-off",
+        json={
+            **_command(submitted.json()["version"]),
+            "reason_code": "UNCOLLECTIBLE_BALANCE",
+            "comment": "Cannot strand pending recovery",
+            "evidence_sha256": "e" * 64,
+        },
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "facility_conflict"
+
+    unchanged = facility_client.get(f"/api/v1/facilities/{facility_id}")
+    assert unchanged.status_code == 200
+    assert unchanged.json()["status"] == "defaulted"
+    assert unchanged.json()["outstanding_amount"] == "1000.00"
+    assert unchanged.json()["writeoff_event"] is None
+    assert unchanged.json()["payments"][0]["status"] == "submitted"
+    assert "write_off" not in unchanged.json()["allowed_actions"]
+
+
+def test_repeated_default_and_writeoff_commands_return_stable_409(
+    facility_client,
+    session_factory,
+):
+    defaulted = _default_facility(facility_client, session_factory)
+    facility_id = defaulted["facility_id"]
+    repeated_default = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/declare-default",
+        json={
+            **_command(defaulted["version"]),
+            "reason_code": "PAYMENT_DEFAULT",
+            "comment": "Repeated declaration",
+            "evidence_sha256": "f" * 64,
+            "defaulted_at": "2026-08-25T12:00:00Z",
+            "days_past_due": 91,
+        },
+    )
+    assert repeated_default.status_code == 409
+    assert repeated_default.json()["detail"]["code"] == "facility_conflict"
+
+    _login(facility_client, "auditor.demo")
+    written_off = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/write-off",
+        json={
+            **_command(defaulted["version"]),
+            "reason_code": "UNCOLLECTIBLE_BALANCE",
+            "comment": "Independent recovery review completed",
+            "evidence_sha256": "e" * 64,
+        },
+    )
+    assert written_off.status_code == 200
+    repeated_writeoff = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/write-off",
+        json={
+            **_command(written_off.json()["version"]),
+            "reason_code": "UNCOLLECTIBLE_BALANCE",
+            "comment": "Repeated write-off",
+            "evidence_sha256": "a" * 64,
+        },
+    )
+    assert repeated_writeoff.status_code == 409
+    assert repeated_writeoff.json()["detail"]["code"] == "facility_conflict"

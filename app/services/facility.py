@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -833,6 +834,16 @@ class FacilityService:
                 return replay
             self._check_version(facility, command.version)
             target = self._next(facility, FacilityAction.WRITE_OFF, user)
+            payments = self.repository.list_payments(
+                session, facility.facility_id
+            )
+            if any(
+                item.status == PaymentStatus.SUBMITTED.value
+                for item in payments
+            ):
+                raise FacilityConflict(
+                    "Pending payment decisions must be resolved before write-off"
+                )
             if self.repository.get_default(session, facility.facility_id) is None:
                 raise FacilityConflict("Write-off requires immutable default history")
             if self.repository.get_writeoff(session, facility.facility_id) is not None:
@@ -955,13 +966,16 @@ class FacilityService:
     ) -> dict[str, Any]:
         normalized_id = self._normalize_uuid(facility_id)
         with self.session_factory() as session:
-            facility = session.get(FinancingFacilityModel, normalized_id)
+            facility = self.repository.get_visible_for_share(
+                session,
+                normalized_id,
+                role=user.role,
+                organization_id=user.organization_id,
+            )
             if facility is None:
                 raise FacilityNotFound(str(facility_id))
-            application, creator = self._scope_models(session, facility)
-            if not self._can_view(application, creator, user):
-                raise FacilityNotFound(str(facility_id))
-            return self._serialize(session, facility, user)
+            related = self._load_related_batch(session, [facility])
+            return self._serialize(session, facility, user, related=related)
 
     def list_for_user(
         self,
@@ -973,21 +987,17 @@ class FacilityService:
         if limit < 1 or limit > 200 or offset < 0:
             raise ValueError("limit must be 1-200 and offset must be non-negative")
         with self.session_factory() as session:
-            facilities = list(
-                session.scalars(
-                    select(FinancingFacilityModel).order_by(
-                        FinancingFacilityModel.updated_at.desc()
-                    )
-                )
+            facilities = self.repository.list_visible_for_share(
+                session,
+                role=user.role,
+                organization_id=user.organization_id,
+                limit=limit,
+                offset=offset,
             )
-            visible = []
-            for facility in facilities:
-                application, creator = self._scope_models(session, facility)
-                if self._can_view(application, creator, user):
-                    visible.append(facility)
+            related = self._load_related_batch(session, facilities)
             return [
-                self._serialize(session, facility, user)
-                for facility in visible[offset : offset + limit]
+                self._serialize(session, facility, user, related=related)
+                for facility in facilities
             ]
 
     def _load_for_command(
@@ -1195,22 +1205,35 @@ class FacilityService:
         session: Session,
         facility: FinancingFacilityModel,
         user: AuthenticatedUser,
+        *,
+        related: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        installments = self.repository.list_installments(
-            session,
-            facility.facility_id,
-        )
-        payments = self.repository.list_payments(session, facility.facility_id)
-        delinquencies = self.repository.list_delinquencies(
-            session, facility.facility_id
-        )
-        restructures = self.repository.list_restructures(
-            session, facility.facility_id
-        )
-        default_event = self.repository.get_default(session, facility.facility_id)
-        writeoff_event = self.repository.get_writeoff(
-            session, facility.facility_id
-        )
+        if related is None:
+            installments = self.repository.list_installments(
+                session,
+                facility.facility_id,
+            )
+            payments = self.repository.list_payments(session, facility.facility_id)
+            delinquencies = self.repository.list_delinquencies(
+                session, facility.facility_id
+            )
+            restructures = self.repository.list_restructures(
+                session, facility.facility_id
+            )
+            default_event = self.repository.get_default(
+                session, facility.facility_id
+            )
+            writeoff_event = self.repository.get_writeoff(
+                session, facility.facility_id
+            )
+        else:
+            facility_id = facility.facility_id
+            installments = related["installments"].get(facility_id, [])
+            payments = related["payments"].get(facility_id, [])
+            delinquencies = related["delinquencies"].get(facility_id, [])
+            restructures = related["restructures"].get(facility_id, [])
+            default_event = related["defaults"].get(facility_id)
+            writeoff_event = related["writeoffs"].get(facility_id)
         return {
             "facility_id": str(facility.facility_id),
             "request_id": str(facility.request_id),
@@ -1317,6 +1340,38 @@ class FacilityService:
             ),
         }
 
+    def _load_related_batch(
+        self,
+        session: Session,
+        facilities: list[FinancingFacilityModel],
+    ) -> dict[str, Any]:
+        facility_ids = [item.facility_id for item in facilities]
+
+        def grouped(rows) -> dict[uuid.UUID, list[Any]]:
+            result: defaultdict[uuid.UUID, list[Any]] = defaultdict(list)
+            for row in rows:
+                result[row.facility_id].append(row)
+            return dict(result)
+
+        defaults = self.repository.list_defaults_batch(session, facility_ids)
+        writeoffs = self.repository.list_writeoffs_batch(session, facility_ids)
+        return {
+            "installments": grouped(
+                self.repository.list_installments_batch(session, facility_ids)
+            ),
+            "payments": grouped(
+                self.repository.list_payments_batch(session, facility_ids)
+            ),
+            "delinquencies": grouped(
+                self.repository.list_delinquencies_batch(session, facility_ids)
+            ),
+            "restructures": grouped(
+                self.repository.list_restructures_batch(session, facility_ids)
+            ),
+            "defaults": {row.facility_id: row for row in defaults},
+            "writeoffs": {row.facility_id: row for row in writeoffs},
+        }
+
     @staticmethod
     def _allowed_actions(
         facility: FinancingFacilityModel,
@@ -1366,6 +1421,11 @@ class FacilityService:
                 return [FacilityAction.DECLARE_DEFAULT.value]
         if user.role == Role.AUDITOR.value:
             if status == FacilityStatus.DEFAULTED:
+                if any(
+                    item.status == PaymentStatus.SUBMITTED.value
+                    for item in payments
+                ):
+                    return []
                 return [FacilityAction.WRITE_OFF.value]
             if status in {FacilityStatus.REPAID, FacilityStatus.WRITTEN_OFF}:
                 return [FacilityAction.CLOSE.value]

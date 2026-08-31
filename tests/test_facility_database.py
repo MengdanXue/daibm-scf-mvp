@@ -481,3 +481,42 @@ def test_repository_reads_lifecycle_history_in_deterministic_order(session_facto
         assert repository.get_writeoff(
             session, facility.facility_id
         ).amount == Decimal("1000.00")
+
+
+def test_read_model_share_lock_prevents_writer_from_tearing_snapshot(
+    session_factory,
+):
+    from app.repositories.facility import FacilityRepository
+
+    request_id, user_id = _seed_prerequisites(session_factory)
+    facility = _facility(request_id=request_id, user_id=user_id)
+    repository = FacilityRepository()
+    with session_factory.begin() as session:
+        repository.add(session, facility)
+
+    reader = session_factory()
+    writer = session_factory()
+    try:
+        locked = repository.get_visible_for_share(
+            reader,
+            facility.facility_id,
+            role="auditor",
+            organization_id=None,
+        )
+        assert locked is not None
+        assert repository.list_installments(reader, facility.facility_id) == []
+
+        writer.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(DBAPIError):
+            writer.execute(
+                text(
+                    "UPDATE financing_facilities SET version = version + 1 "
+                    "WHERE facility_id = :facility_id"
+                ),
+                {"facility_id": facility.facility_id},
+            )
+    finally:
+        reader.rollback()
+        writer.rollback()
+        reader.close()
+        writer.close()

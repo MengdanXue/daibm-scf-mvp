@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel, LedgerEventModel
@@ -246,6 +246,94 @@ def _write_off(version: int, *, key=None):
         comment="Independent recovery review completed",
         evidence_sha256="a" * 64,
     )
+
+
+def _defaulted(
+    service: FacilityService,
+    users: dict[str, AuthenticatedUser],
+    request_id: uuid.UUID,
+    *,
+    amounts: tuple[str, ...] = ("500.00", "500.00"),
+) -> dict:
+    facility = _mark_overdue(
+        service,
+        users,
+        _activate(service, users, request_id, amounts=amounts),
+    )
+    return service.declare_default(
+        facility["facility_id"],
+        _declare_default(facility["version"]),
+        users["risk.demo"],
+    )
+
+
+def _persistence_snapshot(service: FacilityService, facility_id: str) -> dict:
+    normalized_id = uuid.UUID(facility_id)
+    with service.session_factory() as session:
+        facility = session.get(FinancingFacilityModel, normalized_id)
+        return {
+            "facility": (
+                facility.status,
+                facility.version,
+                Decimal(facility.outstanding_amount),
+                facility.current_schedule_version,
+                facility.closure_reason,
+            ),
+            "installments": [
+                (
+                    row.installment_id,
+                    row.schedule_version,
+                    Decimal(row.paid_amount),
+                    row.status,
+                )
+                for row in session.scalars(
+                    select(InstallmentModel)
+                    .where(InstallmentModel.facility_id == normalized_id)
+                    .order_by(
+                        InstallmentModel.schedule_version,
+                        InstallmentModel.sequence,
+                    )
+                )
+            ],
+            "payments": [
+                (row.payment_id, row.status, Decimal(row.amount))
+                for row in session.scalars(
+                    select(PaymentModel)
+                    .where(PaymentModel.facility_id == normalized_id)
+                    .order_by(PaymentModel.submitted_at, PaymentModel.payment_id)
+                )
+            ],
+            "actions": session.scalar(
+                select(func.count()).select_from(FacilityActionModel).where(
+                    FacilityActionModel.facility_id == normalized_id
+                )
+            ),
+            "ledger": session.scalar(
+                select(func.count()).select_from(LedgerEventModel).where(
+                    LedgerEventModel.entity_id == normalized_id
+                )
+            ),
+            "delinquencies": session.scalar(
+                select(func.count()).select_from(FacilityDelinquencyModel).where(
+                    FacilityDelinquencyModel.facility_id == normalized_id
+                )
+            ),
+            "restructures": session.scalar(
+                select(func.count()).select_from(FacilityRestructureModel).where(
+                    FacilityRestructureModel.facility_id == normalized_id
+                )
+            ),
+            "defaults": session.scalar(
+                select(func.count()).select_from(FacilityDefaultModel).where(
+                    FacilityDefaultModel.facility_id == normalized_id
+                )
+            ),
+            "writeoffs": session.scalar(
+                select(func.count()).select_from(FacilityWriteOffModel).where(
+                    FacilityWriteOffModel.facility_id == normalized_id
+                )
+            ),
+        }
 
 
 @pytest.fixture
@@ -924,3 +1012,318 @@ def test_lifecycle_conflicts_and_replays_preserve_all_transactional_records(
     with service.session_factory() as session:
         assert session.scalar(select(func.count()).select_from(FacilityDefaultModel)) == 1
         assert session.scalar(select(func.count()).select_from(FacilityWriteOffModel)) == 0
+
+
+def test_writeoff_rejects_pending_recovery_without_any_transactional_change(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    facility = _defaulted(service, users, request_id)
+    facility = service.submit_payment(
+        facility["facility_id"],
+        _submit(facility, 0, "100.00", "PENDING-BEFORE-WRITEOFF"),
+        users["supplier.demo"],
+    )
+    before = _persistence_snapshot(service, facility["facility_id"])
+
+    with pytest.raises(FacilityConflict, match="Pending payment"):
+        service.write_off(
+            facility["facility_id"],
+            _write_off(facility["version"]),
+            users["auditor.demo"],
+        )
+
+    assert _persistence_snapshot(service, facility["facility_id"]) == before
+    auditor_view = service.get(facility["facility_id"], users["auditor.demo"])
+    assert auditor_view["allowed_actions"] == []
+    assert auditor_view["payments"][0]["status"] == "submitted"
+
+
+def test_partial_default_recovery_writes_off_exact_remaining_balance(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    facility = _defaulted(service, users, request_id, amounts=("1000.00",))
+    facility = service.submit_payment(
+        facility["facility_id"],
+        _submit(facility, 0, "400.00", "PARTIAL-RECOVERY"),
+        users["supplier.demo"],
+    )
+    facility = service.decide_payment(
+        facility["facility_id"],
+        facility["payments"][0]["payment_id"],
+        _decision(facility["version"]),
+        users["financier.demo"],
+    )
+    assert facility["status"] == "defaulted"
+    assert facility["outstanding_amount"] == "600.00"
+
+    written_off = service.write_off(
+        facility["facility_id"],
+        _write_off(facility["version"]),
+        users["auditor.demo"],
+    )
+    assert written_off["writeoff_event"]["amount"] == "600.00"
+    assert written_off["outstanding_amount"] == "0.00"
+    assert written_off["payments"][0]["status"] == "confirmed"
+
+
+def test_defaulted_over_recovery_rejection_rolls_back_every_record(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    facility = _defaulted(service, users, request_id, amounts=("1000.00",))
+    for amount, reference in (
+        ("600.00", "RECOVERY-FIRST"),
+        ("600.00", "RECOVERY-TOO-LARGE"),
+    ):
+        facility = service.submit_payment(
+            facility["facility_id"],
+            _submit(facility, 0, amount, reference),
+            users["supplier.demo"],
+        )
+    first, second = facility["payments"]
+    facility = service.decide_payment(
+        facility["facility_id"],
+        first["payment_id"],
+        _decision(facility["version"]),
+        users["financier.demo"],
+    )
+    before = _persistence_snapshot(service, facility["facility_id"])
+
+    with pytest.raises(FacilityConflict, match="exceed"):
+        service.decide_payment(
+            facility["facility_id"],
+            second["payment_id"],
+            _decision(facility["version"]),
+            users["financier.demo"],
+        )
+
+    assert _persistence_snapshot(service, facility["facility_id"]) == before
+    unchanged = service.get(facility["facility_id"], users["financier.demo"])
+    assert unchanged["outstanding_amount"] == "400.00"
+    assert [row["status"] for row in unchanged["payments"]] == [
+        "confirmed",
+        "submitted",
+    ]
+
+
+def test_allowed_actions_role_state_and_pending_payment_matrix(session_factory):
+    users = _users(session_factory)
+    roles = (
+        "supplier.demo",
+        "core.demo",
+        "financier.demo",
+        "risk.demo",
+        "auditor.demo",
+    )
+    expected_by_status = {
+        "ready_for_disbursement": {
+            "financier.demo": ["initiate_disbursement"],
+        },
+        "disbursed": {
+            "financier.demo": ["confirm_disbursement"],
+        },
+        "active": {
+            "supplier.demo": ["submit_payment"],
+            "financier.demo": ["mark_overdue"],
+        },
+        "overdue": {
+            "supplier.demo": ["submit_payment"],
+            "risk.demo": ["restructure", "declare_default"],
+        },
+        "restructured": {
+            "supplier.demo": ["submit_payment"],
+            "financier.demo": ["mark_overdue"],
+            "risk.demo": ["declare_default"],
+        },
+        "defaulted": {
+            "supplier.demo": ["submit_payment"],
+            "auditor.demo": ["write_off"],
+        },
+        "repaid": {"auditor.demo": ["close"]},
+        "written_off": {"auditor.demo": ["close"]},
+        "closed": {},
+    }
+    for status, role_expectations in expected_by_status.items():
+        facility = FinancingFacilityModel(status=status)
+        for role in roles:
+            assert FacilityService._allowed_actions(
+                facility, [], users[role]
+            ) == role_expectations.get(role, [])
+
+    defaulted = FinancingFacilityModel(status="defaulted")
+    pending = [PaymentModel(status="submitted")]
+    assert FacilityService._allowed_actions(
+        defaulted, pending, users["supplier.demo"]
+    ) == ["submit_payment"]
+    assert FacilityService._allowed_actions(
+        defaulted, pending, users["financier.demo"]
+    ) == ["confirm_payment", "reject_payment"]
+    assert FacilityService._allowed_actions(
+        defaulted, pending, users["auditor.demo"]
+    ) == []
+
+
+def test_each_new_lifecycle_command_rejects_a_stale_version(facility_context):
+    service, users, request_id = facility_context
+    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+    with pytest.raises(FacilityConflict, match="Expected version"):
+        service.restructure(
+            overdue["facility_id"],
+            _restructure(overdue["version"] - 1, total="1000.00"),
+            users["risk.demo"],
+        )
+    with pytest.raises(FacilityConflict, match="Expected version"):
+        service.declare_default(
+            overdue["facility_id"],
+            _declare_default(overdue["version"] - 1),
+            users["risk.demo"],
+        )
+    defaulted = service.declare_default(
+        overdue["facility_id"],
+        _declare_default(overdue["version"]),
+        users["risk.demo"],
+    )
+    before = _persistence_snapshot(service, defaulted["facility_id"])
+    with pytest.raises(FacilityConflict, match="Expected version"):
+        service.write_off(
+            defaulted["facility_id"],
+            _write_off(defaulted["version"] - 1),
+            users["auditor.demo"],
+        )
+    assert _persistence_snapshot(service, defaulted["facility_id"]) == before
+
+
+def test_restructure_semantic_replay_does_not_duplicate_any_record(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+    key = uuid.uuid4()
+    command = _restructure(overdue["version"], total="1000.00", key=key)
+    first = service.restructure(overdue["facility_id"], command, users["risk.demo"])
+    snapshot = _persistence_snapshot(service, first["facility_id"])
+
+    replay = service.restructure(overdue["facility_id"], command, users["risk.demo"])
+
+    assert replay["version"] == first["version"]
+    assert replay["restructures"] == first["restructures"]
+    assert _persistence_snapshot(service, first["facility_id"]) == snapshot
+    assert snapshot["restructures"] == 1
+
+
+def test_concurrent_default_and_writeoff_return_one_conflict_not_integrity_error(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+
+    def race(commands, operation):
+        barrier = threading.Barrier(2)
+
+        def run(command):
+            barrier.wait(timeout=5)
+            try:
+                return ("ok", operation(command))
+            except FacilityConflict:
+                return ("conflict", None)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            return list(executor.map(run, commands))
+
+    default_results = race(
+        [_declare_default(overdue["version"]), _declare_default(overdue["version"])],
+        lambda command: service.declare_default(
+            overdue["facility_id"], command, users["risk.demo"]
+        ),
+    )
+    assert sorted(row[0] for row in default_results) == ["conflict", "ok"]
+    defaulted = next(row[1] for row in default_results if row[0] == "ok")
+
+    writeoff_results = race(
+        [_write_off(defaulted["version"]), _write_off(defaulted["version"])],
+        lambda command: service.write_off(
+            defaulted["facility_id"], command, users["auditor.demo"]
+        ),
+    )
+    assert sorted(row[0] for row in writeoff_results) == ["conflict", "ok"]
+    with service.session_factory() as session:
+        facility_uuid = uuid.UUID(defaulted["facility_id"])
+        assert session.scalar(
+            select(func.count()).select_from(FacilityDefaultModel).where(
+                FacilityDefaultModel.facility_id == facility_uuid
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(FacilityWriteOffModel).where(
+                FacilityWriteOffModel.facility_id == facility_uuid
+            )
+        ) == 1
+
+
+def test_flushed_writeoff_failure_rolls_back_aggregate_and_every_child_record(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    defaulted = _defaulted(service, users, request_id)
+    before = _persistence_snapshot(service, defaulted["facility_id"])
+
+    class FlushThenFailRepository(FacilityRepository):
+        def list_installments(self, session, facility_id):
+            session.flush()
+            raise RuntimeError("injected failure after flush")
+
+    failing_service = FacilityService(
+        service.session_factory,
+        repository=FlushThenFailRepository(),
+    )
+    with pytest.raises(RuntimeError, match="after flush"):
+        failing_service.write_off(
+            defaulted["facility_id"],
+            _write_off(defaulted["version"]),
+            users["auditor.demo"],
+        )
+
+    assert _persistence_snapshot(service, defaulted["facility_id"]) == before
+
+
+def test_list_paginates_in_sql_and_uses_bounded_real_query_count(
+    session_factory,
+    migrated_engine,
+):
+    users = _users(session_factory)
+    service = FacilityService(session_factory)
+    created = []
+    for _ in range(6):
+        request_id = _approved_application(session_factory, users)
+        created.append(
+            service.create(_create_request(request_id), users["financier.demo"])
+        )
+
+    def measured_page(*, limit, offset):
+        statements = []
+
+        def capture(_connection, _cursor, statement, _parameters, _context, _many):
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        event.listen(migrated_engine, "before_cursor_execute", capture)
+        try:
+            page = service.list_for_user(
+                users["financier.demo"], limit=limit, offset=offset
+            )
+        finally:
+            event.remove(migrated_engine, "before_cursor_execute", capture)
+        return page, len(statements)
+
+    page, narrow_query_count = measured_page(limit=2, offset=1)
+    wide_page, wide_query_count = measured_page(limit=6, offset=0)
+
+    assert [row["facility_id"] for row in page] == [
+        created[-2]["facility_id"],
+        created[-3]["facility_id"],
+    ]
+    assert len(wide_page) == 6
+    assert narrow_query_count == wide_query_count
+    assert wide_query_count <= 7
