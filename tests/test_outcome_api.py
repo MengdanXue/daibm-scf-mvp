@@ -328,9 +328,19 @@ def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_clie
 def test_outcome_routes_are_auditor_only(outcome_client, session_factory):
     facility_id = _seed_closed_facility(session_factory)
     assert outcome_client.get("/api/v1/outcomes").status_code == 401
+    assert outcome_client.get("/api/v1/calibration-runs").status_code == 401
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        == 401
+    )
 
     _login(outcome_client, "financier.demo")
     assert outcome_client.get("/api/v1/outcomes").status_code == 403
+    assert outcome_client.get("/api/v1/calibration-runs").status_code == 403
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        == 403
+    )
     assert outcome_client.post(
         f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
     ).status_code == 403

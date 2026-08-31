@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models_facility import FinancingFacilityModel
@@ -17,11 +17,25 @@ from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 
 class OutcomeRepository:
     CALIBRATION_LOCK_KEY = 0x43414C494252
+    SCOPE_LOCK_KEYS = {
+        "controlled_demo": 0x43414C494201,
+        "external_verified": 0x43414C494202,
+    }
 
     def acquire_training_lock(self, session: Session) -> None:
         session.execute(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": self.CALIBRATION_LOCK_KEY},
+        )
+
+    def acquire_scope_lock(self, session: Session, *, scope: str) -> None:
+        try:
+            lock_key = self.SCOPE_LOCK_KEYS[scope]
+        except KeyError as error:
+            raise ValueError("scope must be a deployable calibration scope") from error
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
         )
 
     def get_facility_for_update(
@@ -153,6 +167,47 @@ class OutcomeRepository:
             )
         )
 
+    def run_membership_is_eligible(
+        self,
+        session: Session,
+        run_id: uuid.UUID,
+        *,
+        scope: str,
+    ) -> bool:
+        provenance = self._provenance_for_scope(scope)
+        latest_action = (
+            select(OutcomeCorrectionModel.action)
+            .where(
+                OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id
+            )
+            .order_by(
+                OutcomeCorrectionModel.recorded_at.desc(),
+                OutcomeCorrectionModel.correction_id.desc(),
+            )
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        membership_count, invalid_count = session.execute(
+            select(
+                func.count(),
+                func.count().filter(
+                    or_(
+                        ActualOutcomeModel.provenance != provenance,
+                        latest_action == "EXCLUDE",
+                    )
+                ),
+            )
+            .select_from(CalibrationRunObservationModel)
+            .join(
+                ActualOutcomeModel,
+                ActualOutcomeModel.outcome_id
+                == CalibrationRunObservationModel.outcome_id,
+            )
+            .where(CalibrationRunObservationModel.calibration_run_id == run_id)
+        ).one()
+        return membership_count > 0 and invalid_count == 0
+
     def invalidate_active_runs_containing(
         self,
         session: Session,
@@ -260,17 +315,24 @@ class OutcomeRepository:
             select(CalibrationRunModel)
             .where(CalibrationRunModel.calibration_run_id == run_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
 
     def get_active_run(
         self,
         session: Session,
         *,
+        scope: str | None = None,
         for_update: bool = False,
     ) -> CalibrationRunModel | None:
         statement = select(CalibrationRunModel).where(
             CalibrationRunModel.deployment_status == "active"
         )
+        if scope is not None:
+            self._provenance_for_scope(scope)
+            statement = statement.where(
+                CalibrationRunModel.deployment_scope == scope
+            )
         if for_update:
             statement = statement.with_for_update()
         return session.scalar(statement)
@@ -311,6 +373,45 @@ class OutcomeRepository:
                 .offset(offset)
             )
         )
+
+    def list_outcomes_with_eligibility(
+        self,
+        session: Session,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[tuple[ActualOutcomeModel, bool]]:
+        latest_action = (
+            select(OutcomeCorrectionModel.action)
+            .where(
+                OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id
+            )
+            .order_by(
+                OutcomeCorrectionModel.recorded_at.desc(),
+                OutcomeCorrectionModel.correction_id.desc(),
+            )
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                ActualOutcomeModel,
+                or_(latest_action.is_(None), latest_action == "REINSTATE").label(
+                    "effective_training_eligible"
+                ),
+            )
+            .order_by(
+                ActualOutcomeModel.recorded_at.desc(),
+                ActualOutcomeModel.outcome_id,
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        return [
+            (outcome, bool(eligible))
+            for outcome, eligible in session.execute(statement)
+        ]
 
     def list_all_outcomes(self, session: Session) -> list[ActualOutcomeModel]:
         return list(

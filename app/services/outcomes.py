@@ -271,9 +271,19 @@ class OutcomeService:
                     session, replay, normalized_id, request_sha256
                 )
 
+            # Global governed-write lock order: immutable identity/provenance read,
+            # scope advisory xact lock, outcome row, correction head, ordered runs,
+            # then append-only correction/ledger/job writes.
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
+                raise OutcomeNotFound(str(normalized_id))
+            scope = self._scope_for_provenance(outcome.provenance)
+            self.repository.acquire_scope_lock(session, scope=scope)
             outcome = self.repository.get_outcome_for_update(session, normalized_id)
             if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            if self._scope_for_provenance(outcome.provenance) != scope:
+                raise OutcomeConflict("Outcome provenance changed during correction")
             replay = self.repository.get_correction_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -311,7 +321,7 @@ class OutcomeService:
             invalidated = (
                 self.repository.invalidate_active_runs_containing(
                     session, outcome.outcome_id,
-                    scope=application.assessment_scope, now=now,
+                    scope=scope, now=now,
                 )
                 if payload.action == "EXCLUDE"
                 else []
@@ -328,7 +338,7 @@ class OutcomeService:
                         "action": correction.action,
                         "reason_code": correction.reason_code,
                         "evidence_sha256": correction.evidence_sha256,
-                        "deployment_scope": application.assessment_scope,
+                        "deployment_scope": scope,
                     },
                 )
             ]
@@ -339,7 +349,7 @@ class OutcomeService:
                         "outcome_id": str(outcome.outcome_id),
                         "correction_id": str(correction.correction_id),
                         "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": application.assessment_scope,
+                        "deployment_scope": scope,
                         "reason": "outcome_excluded",
                     },
                 )
@@ -349,7 +359,7 @@ class OutcomeService:
             job = self.repository.add_job(
                 session,
                 self._new_job(
-                    scope=application.assessment_scope,
+                    scope=scope,
                     trigger_type=(
                         "correction_exclude"
                         if payload.action == "EXCLUDE"
@@ -411,11 +421,9 @@ class OutcomeService:
             return [
                 self._serialize_outcome(
                     item,
-                    effective_training_eligible=self._is_eligible(
-                        session, item.outcome_id
-                    ),
+                    effective_training_eligible=eligible,
                 )
-                for item in self.repository.list_outcomes(
+                for item, eligible in self.repository.list_outcomes_with_eligibility(
                     session, limit=limit, offset=offset
                 )
             ]
@@ -497,8 +505,14 @@ class OutcomeService:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
         with self.session_factory.begin() as session:
-            self.repository.acquire_training_lock(session)
-            current = self.repository.get_active_run(session, for_update=True)
+            current_hint = self.repository.get_active_run(session)
+            if current_hint is None:
+                raise OutcomeNotFound("active calibration deployment")
+            scope = current_hint.deployment_scope
+            self.repository.acquire_scope_lock(session, scope=scope)
+            current = self.repository.get_active_run(
+                session, scope=scope, for_update=True
+            )
             if current is None:
                 raise OutcomeNotFound("active calibration deployment")
             if current.calibration_run_id != expected_id:
@@ -511,6 +525,8 @@ class OutcomeService:
             )
             if restored is None or restored.deployment_status != "superseded":
                 raise OutcomeConflict("rollback predecessor is unavailable")
+            if restored.deployment_scope != scope:
+                raise OutcomeConflict("rollback predecessor scope is inconsistent")
 
             now = self._now()
             current.deployment_status = "superseded"
@@ -602,10 +618,18 @@ class OutcomeService:
         application: FinancingRequestModel,
         outcome: ActualOutcomeModel,
     ) -> None:
-        facts = self._validate_lifecycle_snapshot(session, facility)
-        lineage = self._prediction_lineage(session, application)
+        if (
+            facility.facility_id != outcome.facility_id
+            or facility.request_id != outcome.request_id
+            or application.request_id != outcome.request_id
+        ):
+            raise OutcomeConflict("Outcome request/facility association is inconsistent")
+        if application.risk_assessment_id != outcome.risk_assessment_id:
+            raise OutcomeConflict("Outcome assessment identity is inconsistent")
         if self._provenance(application.assessment_scope) != outcome.provenance:
             raise OutcomeConflict("Outcome provenance lineage is inconsistent")
+        facts = self._validate_lifecycle_snapshot(session, facility)
+        lineage = self._prediction_lineage(session, application)
         if (
             facts.defaulted != outcome.defaulted
             or facts.days_past_due != outcome.days_past_due
@@ -804,6 +828,10 @@ class OutcomeService:
         run_id: uuid.UUID,
     ) -> datetime:
         with self.session_factory.begin() as session:
+            unlocked = self.repository.get_run(session, run_id)
+            if unlocked is None:
+                raise RuntimeError("Committed calibration run is missing")
+            self._acquire_run_lock(session, unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
@@ -850,7 +878,11 @@ class OutcomeService:
         provenances: tuple[str, ...],
     ) -> None:
         with self.session_factory.begin() as session:
-            self.repository.acquire_training_lock(session)
+            unlocked = self.repository.get_run(session, run_id)
+            if unlocked is None:
+                raise RuntimeError("Committed calibration run is missing")
+            scope = unlocked.deployment_scope
+            self._acquire_run_lock(session, scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
@@ -874,7 +906,20 @@ class OutcomeService:
                 artifact_integrity=integrity,
                 provenances=provenances,
             )
-            run.deployment_scope = decision.deployment_scope
+            if decision.deployment_scope != scope:
+                run.deployment_status = "rejected"
+                run.activation_reason = "deployment_scope_mismatch"
+                self.ledger_repository.append_many(
+                    session,
+                    run.calibration_run_id,
+                    [("CALIBRATION_AUTO_REJECTED", {
+                        "calibration_run_id": str(run.calibration_run_id),
+                        "deployment_scope": scope,
+                        "activation_reason": run.activation_reason,
+                        "artifact_integrity": integrity,
+                    })],
+                )
+                return
             run.activation_reason = decision.reason
             if not decision.activate:
                 run.deployment_status = "rejected"
@@ -890,7 +935,25 @@ class OutcomeService:
                 }
             else:
                 now = self._now()
-                previous = self.repository.get_active_run(session, for_update=True)
+                if not self.repository.run_membership_is_eligible(
+                    session, run.calibration_run_id, scope=scope
+                ):
+                    run.deployment_status = "rejected"
+                    run.activation_reason = "outcome_ineligible"
+                    event_type = "CALIBRATION_AUTO_REJECTED"
+                    payload = {
+                        "calibration_run_id": str(run.calibration_run_id),
+                        "deployment_scope": scope,
+                        "activation_reason": run.activation_reason,
+                        "artifact_integrity": integrity,
+                    }
+                    self.ledger_repository.append_many(
+                        session, run.calibration_run_id, [(event_type, payload)]
+                    )
+                    return
+                previous = self.repository.get_active_run(
+                    session, scope=scope, for_update=True
+                )
                 if previous is not None and not is_strictly_newer_candidate(
                     run.sample_count,
                     active_sample_count=previous.sample_count,
@@ -942,7 +1005,10 @@ class OutcomeService:
 
     def _reject_unrecoverable_deployment(self, run_id: uuid.UUID) -> None:
         with self.session_factory.begin() as session:
-            self.repository.acquire_training_lock(session)
+            unlocked = self.repository.get_run(session, run_id)
+            if unlocked is None:
+                return
+            self._acquire_run_lock(session, unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None or run.deployment_status != "not_deployed":
                 return
@@ -1288,6 +1354,25 @@ class OutcomeService:
             return mapping[scope]
         except KeyError as error:
             raise OutcomeConflict("Assessment scope is not deployable") from error
+
+    @staticmethod
+    def _scope_for_provenance(provenance: str) -> str:
+        mapping = {
+            "CONTROLLED_DEMO": "controlled_demo",
+            "EXTERNAL_VERIFIED": "external_verified",
+        }
+        try:
+            return mapping[provenance]
+        except KeyError as error:
+            raise OutcomeConflict("Outcome provenance is not deployable") from error
+
+    def _acquire_run_lock(self, session: Session, scope: str) -> None:
+        if scope in {"controlled_demo", "external_verified"}:
+            self.repository.acquire_scope_lock(session, scope=scope)
+        else:
+            # Frozen-schema legacy/mixed candidates cannot collide with a governed
+            # deployable scope; retain the Task 3 dataset lock for their recovery.
+            self.repository.acquire_training_lock(session)
 
     @staticmethod
     def _money(value: Decimal) -> str:

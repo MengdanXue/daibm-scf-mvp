@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
+from threading import Barrier
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select, text
 
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel, LedgerEventModel
@@ -31,7 +34,9 @@ from app.models_research import (
 )
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import ActualOutcomeCreate, OutcomeCorrectionCreate
+from app.services.adaptive_risk import AdaptiveRiskInferenceService
 from app.services.identity import IdentityService
+from app.services.outcome_calibration import CalibrationCandidate
 from app.services.outcomes import (
     ForbiddenOutcome,
     OutcomeConflict,
@@ -184,6 +189,80 @@ def _active_run_with_membership(session_factory, outcome_id: uuid.UUID, scope: s
             correction_head_id=None,
         ))
     return run_id
+
+
+def _candidate_run_with_membership(
+    session_factory,
+    outcome_id: uuid.UUID,
+    *,
+    scope: str = "controlled_demo",
+) -> tuple[uuid.UUID, CalibrationCandidate]:
+    run_id = uuid.uuid4()
+    dataset_sha256 = uuid.uuid4().hex * 2
+    metrics_before = {"brier_score": 0.25, "log_loss": 0.70}
+    metrics_after = {"brier_score": 0.20, "log_loss": 0.60}
+    candidate = CalibrationCandidate(
+        dataset_sha256=dataset_sha256,
+        sample_count=20,
+        positive_count=5,
+        negative_count=15,
+        status="eligible_candidate",
+        slope=1.0,
+        intercept=0.0,
+        metrics_before=metrics_before,
+        metrics_after=metrics_after,
+        artifact={},
+        artifact_bytes=b"{}",
+    )
+    with session_factory.begin() as session:
+        session.add(CalibrationRunModel(
+            calibration_run_id=run_id, trigger_outcome_id=None, trigger_job_id=None,
+            dataset_sha256=dataset_sha256, sample_count=20,
+            positive_count=5, negative_count=15,
+            metrics_before=metrics_before, metrics_after=metrics_after,
+            configuration={}, status="eligible_candidate",
+            artifact_locator="memory://candidate", artifact_sha256="c" * 64,
+            artifact_schema="daibm.platt-calibration.v3", failure_code=None,
+            deployment_status="not_deployed", deployment_scope=scope,
+            activation_mode=None, activated_at=None, deactivated_at=None,
+            previous_active_run_id=None, activation_reason="not_evaluated",
+            started_at=NOW, completed_at=NOW,
+        ))
+        session.flush()
+        session.add(CalibrationRunObservationModel(
+            calibration_run_id=run_id,
+            outcome_id=outcome_id,
+            correction_head_id=None,
+        ))
+    return run_id, candidate
+
+
+def _governance_counts(session_factory) -> tuple[int, int, int]:
+    with session_factory() as session:
+        return (
+            session.scalar(select(func.count()).select_from(OutcomeCorrectionModel)),
+            session.scalar(select(func.count()).select_from(CalibrationJobModel)),
+            session.scalar(select(func.count()).select_from(LedgerEventModel)),
+        )
+
+
+def _write_candidate_artifact(tmp_path, run_id, dataset_sha256, outcome_id):
+    artifact = {
+        "artifact_schema": "daibm.platt-calibration.v2",
+        "coefficients": {"slope": 1.0, "intercept": 0.0},
+        "configuration": {"probability_epsilon": 0.000001},
+        "dataset": {
+            "sha256": dataset_sha256,
+            "outcome_ids": [str(outcome_id)],
+        },
+    }
+    artifact_bytes = json.dumps(
+        artifact, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+    path = tmp_path / f"{run_id}.json"
+    path.write_bytes(artifact_bytes)
+    return path, artifact_sha256
 
 
 def test_submission_derives_written_off_facts_and_queues_job_atomically(
@@ -344,6 +423,112 @@ def test_exclude_is_append_only_invalidates_only_exact_membership_and_queues(
         assert session.scalar(select(func.count()).select_from(OutcomeCorrectionModel)) == 1
 
 
+def test_exclude_uses_immutable_outcome_scope_when_request_scope_drifted(
+    session_factory, tmp_path
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    controlled_run = _active_run_with_membership(
+        session_factory, outcome_id, "controlled_demo"
+    )
+    external_run = _active_run_with_membership(
+        session_factory, outcome_id, "external_verified"
+    )
+    with session_factory.begin() as session:
+        facility = session.get(FinancingFacilityModel, facility_id)
+        application = session.get(FinancingRequestModel, facility.request_id)
+        application.assessment_scope = "external_verified"
+
+    result = service.create_correction(
+        outcome_id, _correction("EXCLUDE"), auditor
+    )
+
+    assert result["invalidated_run_ids"] == [str(controlled_run)]
+    assert result["calibration_job"]["deployment_scope"] == "controlled_demo"
+    with session_factory() as session:
+        assert session.get(CalibrationRunModel, controlled_run).deployment_status == "invalidated"
+        assert session.get(CalibrationRunModel, external_run).deployment_status == "active"
+        event = session.scalar(
+            select(LedgerEventModel)
+            .where(LedgerEventModel.event_type == "OUTCOME_TRAINING_EXCLUDED")
+            .order_by(LedgerEventModel.id.desc())
+        )
+    assert event.payload["deployment_scope"] == "controlled_demo"
+
+
+def test_exclude_and_activation_share_scope_lock_and_leave_no_active_member(
+    session_factory, tmp_path, monkeypatch
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    submitted = OutcomeService(
+        session_factory, artifact_root=tmp_path, clock=lambda: NOW
+    ).submit(facility_id, _submission(), auditor)
+    outcome_id = uuid.UUID(submitted["outcome"]["outcome_id"])
+    run_id, candidate = _candidate_run_with_membership(session_factory, outcome_id)
+    rendezvous = Barrier(2)
+
+    class CoordinatedRepository(OutcomeRepository):
+        def _rendezvous(self, session):
+            session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            rendezvous.wait(timeout=5)
+
+        def acquire_training_lock(self, session):
+            self._rendezvous(session)
+            return super().acquire_training_lock(session)
+
+        def acquire_scope_lock(self, session, *, scope):
+            self._rendezvous(session)
+            return super().acquire_scope_lock(session, scope=scope)
+
+    repository = CoordinatedRepository()
+    service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        repository=repository,
+        clock=lambda: NOW,
+    )
+    monkeypatch.setattr(
+        "app.services.outcomes.load_verified_calibration",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        activation = pool.submit(
+            service._evaluate_deployment,
+            run_id,
+            candidate,
+            provenances=("CONTROLLED_DEMO",) * 20,
+        )
+        exclusion = pool.submit(
+            service.create_correction,
+            outcome_id,
+            _correction("EXCLUDE"),
+            auditor,
+        )
+        activation.result(timeout=10)
+        exclusion.result(timeout=10)
+
+    with session_factory() as session:
+        run = session.get(CalibrationRunModel, run_id)
+        active_members = session.scalar(
+            select(func.count())
+            .select_from(CalibrationRunModel)
+            .join(CalibrationRunObservationModel)
+            .where(
+                CalibrationRunObservationModel.outcome_id == outcome_id,
+                CalibrationRunModel.deployment_status == "active",
+            )
+        )
+        inference = AdaptiveRiskInferenceService().assess(session, 0.61)
+    assert run.deployment_status in {"invalidated", "rejected"}
+    assert active_members == 0
+    assert inference.final_score == 0.61
+    assert inference.calibration_run_id is None
+
+
 def test_correction_replay_noop_conflict_and_reinstate(session_factory, tmp_path):
     facility_id, auditor = _seed_closed_facility(session_factory)
     service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
@@ -384,6 +569,62 @@ def test_reinstate_revalidates_prediction_lineage(session_factory, tmp_path):
             auditor,
         )
     assert len(service.list_corrections(outcome_id, auditor)) == 1
+
+
+def test_reinstate_rejects_changed_assessment_identity_and_rolls_back(
+    session_factory, tmp_path
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    service.create_correction(outcome_id, _correction("EXCLUDE"), auditor)
+    with session_factory.begin() as session:
+        facility = session.get(FinancingFacilityModel, facility_id)
+        application = session.get(FinancingRequestModel, facility.request_id)
+        application.risk_assessment_id = uuid.uuid4()
+    before = _governance_counts(session_factory)
+
+    with pytest.raises(OutcomeConflict, match="assessment identity"):
+        service.create_correction(
+            outcome_id,
+            _correction("REINSTATE", reason_code="LIFECYCLE_VERIFIED"),
+            auditor,
+        )
+
+    assert _governance_counts(session_factory) == before
+
+
+def test_reinstate_rejects_changed_baseline_assessment_identity(
+    session_factory, tmp_path
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    first_assessment_id = uuid.uuid4()
+    with session_factory.begin() as session:
+        facility = session.get(FinancingFacilityModel, facility_id)
+        application = session.get(FinancingRequestModel, facility.request_id)
+        application.risk_assessment_id = first_assessment_id
+        application.risk_engine_version = "transparent_logistic_baseline_v0.1"
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    service.create_correction(outcome_id, _correction("EXCLUDE"), auditor)
+    with session_factory.begin() as session:
+        facility = session.get(FinancingFacilityModel, facility_id)
+        application = session.get(FinancingRequestModel, facility.request_id)
+        application.risk_assessment_id = uuid.uuid4()
+    before = _governance_counts(session_factory)
+
+    with pytest.raises(OutcomeConflict, match="assessment identity"):
+        service.create_correction(
+            outcome_id,
+            _correction("REINSTATE", reason_code="LIFECYCLE_VERIFIED"),
+            auditor,
+        )
+
+    assert _governance_counts(session_factory) == before
 
 
 def test_correction_job_failure_rolls_back_append_and_invalidation(
@@ -457,3 +698,190 @@ def test_preview_returns_only_server_derived_facts(session_factory, tmp_path):
         "expected_provenance": "EXTERNAL_VERIFIED",
         "deployment_scope": "external_verified",
     }
+
+
+def test_list_outcomes_fetches_latest_eligibility_in_one_constant_query(
+    session_factory, tmp_path
+):
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    auditor = None
+    outcome_ids = []
+    for _index in range(2):
+        facility_id, auditor = _seed_closed_facility(session_factory)
+        outcome_ids.append(
+            service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+        )
+    service.create_correction(outcome_ids[0], _correction("EXCLUDE"), auditor)
+
+    engine = session_factory.kw["bind"]
+    statements: list[str] = []
+
+    def record_select(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    def measured_list() -> tuple[list[dict], int]:
+        statements.clear()
+        event.listen(engine, "before_cursor_execute", record_select)
+        try:
+            result = service.list_outcomes(auditor, limit=200)
+        finally:
+            event.remove(engine, "before_cursor_execute", record_select)
+        return result, len(statements)
+
+    first_page, small_query_count = measured_list()
+    for _index in range(4):
+        facility_id, auditor = _seed_closed_facility(session_factory)
+        service.submit(facility_id, _submission(), auditor)
+    larger_page, large_query_count = measured_list()
+
+    eligibility = {
+        item["outcome_id"]: item["effective_training_eligible"]
+        for item in first_page
+    }
+    assert eligibility[outcome_ids[0]] is False
+    assert eligibility[outcome_ids[1]] is True
+    assert len(larger_page) == 6
+    assert small_query_count == large_query_count == 1
+
+
+def test_seeded_deployment_rollback_preserves_expected_version_contract(
+    session_factory, tmp_path
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    active_id = _active_run_with_membership(
+        session_factory, outcome_id, "controlled_demo"
+    )
+    predecessor_id = uuid.uuid4()
+    with session_factory.begin() as session:
+        session.add(CalibrationRunModel(
+            calibration_run_id=predecessor_id, trigger_outcome_id=None,
+            trigger_job_id=None, dataset_sha256=uuid.uuid4().hex * 2,
+            sample_count=19, positive_count=5, negative_count=14,
+            metrics_before={"brier": 0.2}, metrics_after={"brier": 0.1},
+            configuration={}, status="eligible_candidate",
+            artifact_locator="memory://predecessor", artifact_sha256="d" * 64,
+            artifact_schema="daibm.platt-calibration.v3", failure_code=None,
+            deployment_status="superseded", deployment_scope="controlled_demo",
+            activation_mode="automatic", activated_at=NOW, deactivated_at=NOW,
+            previous_active_run_id=None, activation_reason="gate_passed",
+            started_at=NOW, completed_at=NOW,
+        ))
+        session.get(
+            CalibrationRunModel, active_id
+        ).previous_active_run_id = predecessor_id
+
+    with pytest.raises(OutcomeConflict, match="active calibration changed"):
+        service.rollback(uuid.uuid4(), auditor)
+    restored = service.rollback(active_id, auditor)
+
+    assert restored["calibration_run_id"] == str(predecessor_id)
+    assert restored["deployment_status"] == "active"
+    assert restored["activation_mode"] == "manual_rollback"
+    with session_factory() as session:
+        assert (
+            session.get(CalibrationRunModel, active_id).deployment_status
+            == "superseded"
+        )
+        count = session.scalar(
+            select(func.count()).select_from(LedgerEventModel).where(
+                LedgerEventModel.event_type == "CALIBRATION_ROLLED_BACK"
+            )
+        )
+    assert count == 1
+
+
+def test_startup_reconciliation_finishes_direct_seeded_pending_run(
+    session_factory, tmp_path
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    run_id, candidate = _candidate_run_with_membership(session_factory, outcome_id)
+    path, artifact_sha256 = _write_candidate_artifact(
+        tmp_path, run_id, candidate.dataset_sha256, outcome_id
+    )
+    with session_factory.begin() as session:
+        run = session.get(CalibrationRunModel, run_id)
+        run.status = "exploratory_candidate"
+        run.artifact_locator = str(path)
+        run.artifact_sha256 = artifact_sha256
+
+    service.reconcile_deployments()
+
+    with session_factory() as session:
+        reconciled = session.get(CalibrationRunModel, run_id)
+        count = session.scalar(
+            select(func.count()).select_from(LedgerEventModel).where(
+                LedgerEventModel.event_type == "CALIBRATION_AUTO_REJECTED"
+            )
+        )
+    assert reconciled.deployment_status == "rejected"
+    assert reconciled.activation_reason == "training_not_eligible"
+    assert count == 1
+
+
+def test_seeded_unrecoverable_artifact_is_durably_failed_once(
+    session_factory, tmp_path, monkeypatch
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    run_id, _candidate = _candidate_run_with_membership(session_factory, outcome_id)
+    with session_factory.begin() as session:
+        session.get(CalibrationRunModel, run_id).trigger_outcome_id = outcome_id
+    barrier = Barrier(2)
+
+    def missing(*_args, **_kwargs):
+        barrier.wait(timeout=10)
+        return "missing"
+
+    monkeypatch.setattr("app.services.outcomes.recover_candidate_artifact", missing)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(lambda _index: service.get_run(run_id, auditor), range(2))
+        )
+
+    assert {item["status"] for item in results} == {"failed"}
+    with session_factory() as session:
+        count = session.scalar(
+            select(func.count()).select_from(LedgerEventModel).where(
+                LedgerEventModel.event_type == "CALIBRATION_CANDIDATE_FAILED"
+            )
+        )
+    assert count == 1
+
+
+def test_seeded_artifact_lineage_mismatch_rejects_deployment(
+    session_factory, tmp_path
+):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    run_id, candidate = _candidate_run_with_membership(session_factory, outcome_id)
+    path, artifact_sha256 = _write_candidate_artifact(
+        tmp_path, run_id, "f" * 64, outcome_id
+    )
+    with session_factory.begin() as session:
+        run = session.get(CalibrationRunModel, run_id)
+        run.artifact_locator = str(path)
+        run.artifact_sha256 = artifact_sha256
+
+    service._evaluate_deployment(
+        run_id, candidate, provenances=("CONTROLLED_DEMO",)
+    )
+
+    with session_factory() as session:
+        rejected = session.get(CalibrationRunModel, run_id)
+    assert rejected.deployment_status == "rejected"
+    assert rejected.activation_reason == "artifact_unverified"
