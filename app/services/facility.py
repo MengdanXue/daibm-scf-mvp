@@ -1037,7 +1037,7 @@ class FacilityService:
             raise FacilityConflict(
                 "Idempotency key was already used for different command semantics"
             )
-        facility = session.get(FinancingFacilityModel, action.facility_id)
+        facility = self.repository.get_for_update(session, action.facility_id)
         if facility is None:
             raise FacilityNotFound(str(action.facility_id))
         application, creator = self._scope_models(session, facility)

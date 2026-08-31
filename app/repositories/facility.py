@@ -76,7 +76,10 @@ class FacilityRepository:
                 role=role,
                 organization_id=organization_id,
             )
-            .order_by(FinancingFacilityModel.updated_at.desc())
+            .order_by(
+                FinancingFacilityModel.updated_at.desc(),
+                FinancingFacilityModel.facility_id.asc(),
+            )
             .limit(limit)
             .offset(offset)
             .with_for_update(read=True, of=FinancingFacilityModel)

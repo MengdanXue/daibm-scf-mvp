@@ -8,7 +8,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, select, text
+from sqlalchemy.exc import DBAPIError
 
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel, LedgerEventModel
@@ -1327,3 +1328,136 @@ def test_list_paginates_in_sql_and_uses_bounded_real_query_count(
     assert len(wide_page) == 6
     assert narrow_query_count == wide_query_count
     assert wide_query_count <= 7
+
+
+def test_list_uses_facility_id_as_stable_tiebreaker_across_pages(
+    session_factory,
+):
+    users = _users(session_factory)
+    service = FacilityService(session_factory)
+    fixed_updated_at = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+    expected_ids = [str(uuid.UUID(int=value)) for value in range(1, 7)]
+
+    with session_factory.begin() as session:
+        for value in range(6, 0, -1):
+            request_id = _approved_application(session_factory, users)
+            facility_id = uuid.UUID(int=value)
+            session.add(
+                FinancingFacilityModel(
+                    facility_id=facility_id,
+                    request_id=request_id,
+                    principal=Decimal("1000.00"),
+                    outstanding_amount=Decimal("1000.00"),
+                    currency="RUB",
+                    status="ready_for_disbursement",
+                    version=1,
+                    current_schedule_version=1,
+                    created_by_user_id=users["financier.demo"].user_id,
+                    created_at=fixed_updated_at,
+                    updated_at=fixed_updated_at,
+                )
+            )
+            session.add(
+                InstallmentModel(
+                    installment_id=uuid.UUID(int=100 + value),
+                    facility_id=facility_id,
+                    sequence=1,
+                    schedule_version=1,
+                    due_date=date(2027, 1, 1),
+                    amount=Decimal("1000.00"),
+                    paid_amount=Decimal("0.00"),
+                    status="scheduled",
+                    created_at=fixed_updated_at,
+                    updated_at=fixed_updated_at,
+                )
+            )
+
+    def traverse_pages() -> list[str]:
+        return [
+            row["facility_id"]
+            for offset in range(0, 6, 2)
+            for row in service.list_for_user(
+                users["financier.demo"], limit=2, offset=offset
+            )
+        ]
+
+    first_traversal = traverse_pages()
+    second_traversal = traverse_pages()
+
+    assert first_traversal == expected_ids
+    assert second_traversal == expected_ids
+    assert len(set(first_traversal)) == len(expected_ids)
+
+
+def test_replay_holds_aggregate_lock_until_all_child_reads_finish(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+    key = uuid.uuid4()
+    command = _restructure(overdue["version"], total="1000.00", key=key)
+    first = service.restructure(
+        overdue["facility_id"], command, users["risk.demo"]
+    )
+    child_reads_started = threading.Event()
+    allow_child_reads = threading.Event()
+
+    class PausingReplayRepository(FacilityRepository):
+        def list_installments(self, session, facility_id):
+            child_reads_started.set()
+            if not allow_child_reads.wait(timeout=5):
+                raise TimeoutError("replay child reads were not released")
+            return super().list_installments(session, facility_id)
+
+    replay_service = FacilityService(
+        service.session_factory,
+        repository=PausingReplayRepository(),
+    )
+    writer_was_blocked = False
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            replay_service.restructure,
+            overdue["facility_id"],
+            command,
+            users["risk.demo"],
+        )
+        assert child_reads_started.wait(timeout=5)
+        writer = service.session_factory()
+        try:
+            writer.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            try:
+                writer.execute(
+                    text(
+                        "UPDATE financing_facilities SET version = version + 1 "
+                        "WHERE facility_id = :facility_id"
+                    ),
+                    {"facility_id": uuid.UUID(overdue["facility_id"])},
+                )
+            except DBAPIError:
+                writer_was_blocked = True
+        finally:
+            writer.rollback()
+            writer.close()
+            allow_child_reads.set()
+        replay = future.result(timeout=5)
+
+    assert writer_was_blocked
+    assert replay["version"] == first["version"]
+    assert replay["status"] == first["status"]
+    assert replay["installments"] == first["installments"]
+    assert replay["restructures"] == first["restructures"]
+
+    writer_after_replay = service.session_factory()
+    try:
+        writer_after_replay.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        result = writer_after_replay.execute(
+            text(
+                "UPDATE financing_facilities SET version = version + 1 "
+                "WHERE facility_id = :facility_id"
+            ),
+            {"facility_id": uuid.UUID(overdue["facility_id"])},
+        )
+        assert result.rowcount == 1
+    finally:
+        writer_after_replay.rollback()
+        writer_after_replay.close()
