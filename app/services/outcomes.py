@@ -35,6 +35,7 @@ from app.repositories.ledger import LedgerRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import ActualOutcomeCreate, OutcomeCorrectionCreate
 from app.services.adaptive_risk import (
+    ActivationDecision,
     evaluate_activation_gate,
     is_strictly_newer_candidate,
     load_verified_calibration,
@@ -486,6 +487,14 @@ class OutcomeService:
                     run = self.repository.get_run(session, run_id)
                     if run is None:
                         continue
+                    if run.trigger_job_id is not None:
+                        job = self.repository.get_job(session, run.trigger_job_id)
+                        if job is not None and job.status == "failed":
+                            self._reject_unrecoverable_deployment(
+                                run_id,
+                                reason="job_failed",
+                            )
+                        continue
                     memberships = tuple(session.scalars(
                         select(CalibrationRunObservationModel)
                         .where(
@@ -849,7 +858,6 @@ class OutcomeService:
 
     def _mark_publication_failed(
         self,
-        outcome_id: uuid.UUID,
         run_id: uuid.UUID,
     ) -> datetime:
         with self.session_factory.begin() as session:
@@ -874,7 +882,7 @@ class OutcomeService:
             run.completed_at = self._now()
             self.ledger_repository.append_many(
                 session,
-                outcome_id,
+                run.calibration_run_id,
                 [
                     (
                         "CALIBRATION_CANDIDATE_FAILED",
@@ -902,17 +910,113 @@ class OutcomeService:
         *,
         provenances: tuple[str, ...],
     ) -> None:
+        scope, integrity, decision = self._deployment_decision(
+            run_id,
+            candidate,
+            provenances=provenances,
+        )
         with self.session_factory.begin() as session:
-            unlocked = self.repository.get_run(session, run_id)
-            if unlocked is None:
-                raise RuntimeError("Committed calibration run is missing")
-            scope = unlocked.deployment_scope
             self._acquire_run_lock(session, scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
-            if run.deployment_status != "not_deployed":
+            if not self.repository.run_membership_matches_eligible_snapshot(
+                session,
+                run_id,
+                scope=scope,
+            ):
+                if run.deployment_status == "not_deployed":
+                    run.deployment_status = "rejected"
+                    run.activation_reason = "dataset_snapshot_changed"
+                    self.ledger_repository.append_many(
+                        session,
+                        run.calibration_run_id,
+                        [("CALIBRATION_AUTO_REJECTED", {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "deployment_scope": scope,
+                            "activation_reason": run.activation_reason,
+                            "artifact_integrity": integrity,
+                        })],
+                    )
                 return
+            self._apply_deployment_decision(
+                session,
+                run,
+                decision=decision,
+                integrity=integrity,
+            )
+
+    def _complete_claimed_deployment(
+        self,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        run_id: uuid.UUID,
+        candidate: CalibrationCandidate,
+        provenances: tuple[str, ...],
+        now: datetime,
+    ) -> None:
+        scope, integrity, decision = self._deployment_decision(
+            run_id,
+            candidate,
+            provenances=provenances,
+        )
+        with self.session_factory.begin() as session:
+            self._acquire_run_lock(session, scope)
+            job = self.repository.get_job_for_update(session, job_id)
+            self.repository._require_job_owner(job, worker_id)
+            if job.deployment_scope != scope:
+                raise RuntimeError("calibration job and run scopes differ")
+            if job.leased_until is None or job.leased_until <= now:
+                raise RuntimeError("calibration job lease expired")
+            run = self.repository.get_run_for_update(session, run_id)
+            if run is None:
+                raise RuntimeError("Committed calibration run is missing")
+            if not self.repository.run_membership_matches_eligible_snapshot(
+                session,
+                run_id,
+                scope=scope,
+            ):
+                if run.deployment_status == "not_deployed":
+                    run.deployment_status = "rejected"
+                    run.activation_reason = "dataset_snapshot_changed"
+                    self.ledger_repository.append_many(
+                        session,
+                        run.calibration_run_id,
+                        [("CALIBRATION_AUTO_REJECTED", {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "deployment_scope": scope,
+                            "activation_reason": run.activation_reason,
+                            "artifact_integrity": integrity,
+                        })],
+                    )
+            else:
+                self._apply_deployment_decision(
+                    session,
+                    run,
+                    decision=decision,
+                    integrity=integrity,
+                )
+            self.repository.complete_job(
+                session,
+                job_id=job_id,
+                worker_id=worker_id,
+                result_run_id=run_id,
+                now=now,
+            )
+
+    def _deployment_decision(
+        self,
+        run_id: uuid.UUID,
+        candidate: CalibrationCandidate,
+        *,
+        provenances: tuple[str, ...],
+    ) -> tuple[str, str, ActivationDecision]:
+        with self.session_factory() as session:
+            run = self.repository.get_run(session, run_id)
+            if run is None:
+                raise RuntimeError("Committed calibration run is missing")
+            scope = run.deployment_scope
             integrity = "not_applicable"
             if run.artifact_locator is not None and run.artifact_sha256 is not None:
                 try:
@@ -920,115 +1024,113 @@ class OutcomeService:
                         Path(run.artifact_locator),
                         expected_sha256=run.artifact_sha256,
                         run_id=str(run.calibration_run_id),
-                        deployment_scope=run.deployment_scope,
+                        deployment_scope=scope,
                         expected_dataset_sha256=run.dataset_sha256,
                     )
                     integrity = "verified"
                 except ValueError:
                     integrity = "invalid"
-            decision = evaluate_activation_gate(
-                candidate,
-                artifact_integrity=integrity,
-                provenances=provenances,
-            )
-            if decision.deployment_scope != scope:
-                run.deployment_status = "rejected"
-                run.activation_reason = "deployment_scope_mismatch"
-                self.ledger_repository.append_many(
-                    session,
-                    run.calibration_run_id,
-                    [("CALIBRATION_AUTO_REJECTED", {
-                        "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": scope,
-                        "activation_reason": run.activation_reason,
-                        "artifact_integrity": integrity,
-                    })],
-                )
-                return
+        decision = evaluate_activation_gate(
+            candidate,
+            artifact_integrity=integrity,
+            provenances=provenances,
+        )
+        return scope, integrity, decision
+
+    def _apply_deployment_decision(
+        self,
+        session: Session,
+        run: CalibrationRunModel,
+        *,
+        decision: ActivationDecision,
+        integrity: str,
+    ) -> None:
+        if run.deployment_status != "not_deployed":
+            return
+        scope = run.deployment_scope
+        if decision.deployment_scope != scope:
+            run.deployment_status = "rejected"
+            run.activation_reason = "deployment_scope_mismatch"
+            event_type = "CALIBRATION_AUTO_REJECTED"
+            payload = {
+                "calibration_run_id": str(run.calibration_run_id),
+                "deployment_scope": scope,
+                "activation_reason": run.activation_reason,
+                "artifact_integrity": integrity,
+            }
+        elif not decision.activate:
+            run.deployment_status = "rejected"
             run.activation_reason = decision.reason
-            if not decision.activate:
+            event_type = "CALIBRATION_AUTO_REJECTED"
+            payload = {
+                "calibration_run_id": str(run.calibration_run_id),
+                "deployment_scope": scope,
+                "activation_reason": decision.reason,
+                "sample_count": run.sample_count,
+                "positive_count": run.positive_count,
+                "negative_count": run.negative_count,
+                "artifact_integrity": integrity,
+            }
+        else:
+            now = self._now()
+            previous = self.repository.get_active_run(
+                session, scope=scope, for_update=True
+            )
+            if previous is not None and not is_strictly_newer_candidate(
+                run.sample_count,
+                active_sample_count=previous.sample_count,
+            ):
                 run.deployment_status = "rejected"
+                run.activation_reason = "stale_candidate"
                 event_type = "CALIBRATION_AUTO_REJECTED"
                 payload = {
                     "calibration_run_id": str(run.calibration_run_id),
-                    "deployment_scope": decision.deployment_scope,
-                    "activation_reason": decision.reason,
+                    "deployment_scope": scope,
+                    "activation_reason": run.activation_reason,
+                    "active_run_id": str(previous.calibration_run_id),
                     "sample_count": run.sample_count,
-                    "positive_count": run.positive_count,
-                    "negative_count": run.negative_count,
+                    "active_sample_count": previous.sample_count,
                     "artifact_integrity": integrity,
                 }
             else:
-                now = self._now()
-                if not self.repository.run_membership_is_eligible(
-                    session, run.calibration_run_id, scope=scope
-                ):
-                    run.deployment_status = "rejected"
-                    run.activation_reason = "outcome_ineligible"
-                    event_type = "CALIBRATION_AUTO_REJECTED"
-                    payload = {
-                        "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": scope,
-                        "activation_reason": run.activation_reason,
-                        "artifact_integrity": integrity,
-                    }
-                    self.ledger_repository.append_many(
-                        session, run.calibration_run_id, [(event_type, payload)]
-                    )
-                    return
-                previous = self.repository.get_active_run(
-                    session, scope=scope, for_update=True
+                if previous is not None:
+                    previous.deployment_status = "superseded"
+                    previous.deactivated_at = now
+                    session.flush()
+                run.deployment_status = "active"
+                run.activation_mode = "automatic"
+                run.activation_reason = decision.reason
+                run.activated_at = now
+                run.deactivated_at = None
+                run.previous_active_run_id = (
+                    previous.calibration_run_id if previous is not None else None
                 )
-                if previous is not None and not is_strictly_newer_candidate(
-                    run.sample_count,
-                    active_sample_count=previous.sample_count,
-                ):
-                    run.deployment_status = "rejected"
-                    run.activation_reason = "stale_candidate"
-                    event_type = "CALIBRATION_AUTO_REJECTED"
-                    payload = {
-                        "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": decision.deployment_scope,
-                        "activation_reason": run.activation_reason,
-                        "active_run_id": str(previous.calibration_run_id),
-                        "sample_count": run.sample_count,
-                        "active_sample_count": previous.sample_count,
-                        "artifact_integrity": integrity,
-                    }
-                else:
-                    if previous is not None:
-                        previous.deployment_status = "superseded"
-                        previous.deactivated_at = now
-                        session.flush()
-                    run.deployment_status = "active"
-                    run.activation_mode = "automatic"
-                    run.activated_at = now
-                    run.deactivated_at = None
-                    run.previous_active_run_id = (
-                        previous.calibration_run_id if previous is not None else None
-                    )
-                    event_type = "CALIBRATION_AUTO_ACTIVATED"
-                    payload = {
-                        "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": decision.deployment_scope,
-                        "activation_reason": decision.reason,
-                        "previous_active_run_id": (
-                            str(previous.calibration_run_id)
-                            if previous is not None
-                            else None
-                        ),
-                        "artifact_sha256": run.artifact_sha256,
-                        "sample_count": run.sample_count,
-                        "positive_count": run.positive_count,
-                        "negative_count": run.negative_count,
-                    }
-            self.ledger_repository.append_many(
-                session,
-                run.calibration_run_id,
-                [(event_type, payload)],
-            )
+                event_type = "CALIBRATION_AUTO_ACTIVATED"
+                payload = {
+                    "calibration_run_id": str(run.calibration_run_id),
+                    "deployment_scope": scope,
+                    "activation_reason": decision.reason,
+                    "previous_active_run_id": (
+                        str(previous.calibration_run_id)
+                        if previous is not None else None
+                    ),
+                    "artifact_sha256": run.artifact_sha256,
+                    "sample_count": run.sample_count,
+                    "positive_count": run.positive_count,
+                    "negative_count": run.negative_count,
+                }
+        self.ledger_repository.append_many(
+            session,
+            run.calibration_run_id,
+            [(event_type, payload)],
+        )
 
-    def _reject_unrecoverable_deployment(self, run_id: uuid.UUID) -> None:
+    def _reject_unrecoverable_deployment(
+        self,
+        run_id: uuid.UUID,
+        *,
+        reason: str = "artifact_unverified",
+    ) -> None:
         with self.session_factory.begin() as session:
             unlocked = self.repository.get_run(session, run_id)
             if unlocked is None:
@@ -1038,7 +1140,7 @@ class OutcomeService:
             if run is None or run.deployment_status != "not_deployed":
                 return
             run.deployment_status = "activation_failed"
-            run.activation_reason = "artifact_unverified"
+            run.activation_reason = reason
             self.ledger_repository.append_many(
                 session,
                 run.calibration_run_id,
@@ -1322,7 +1424,6 @@ class OutcomeService:
                     sha256=run.artifact_sha256,
                 )
                 completed_at = self._mark_publication_failed(
-                    run.trigger_outcome_id,
                     run.calibration_run_id,
                 )
                 self._discard_failed_publication(staged)

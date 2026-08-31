@@ -54,6 +54,32 @@ class OutcomeRepository:
             or lease_until <= now
         ):
             raise ValueError("job lease timestamps must be aware and increasing")
+        exhausted = session.scalar(
+            select(CalibrationJobModel)
+            .where(
+                CalibrationJobModel.status == "running",
+                CalibrationJobModel.leased_until <= now,
+                CalibrationJobModel.attempt_count == 3,
+            )
+            .order_by(CalibrationJobModel.created_at, CalibrationJobModel.job_id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if exhausted is not None:
+            abandoned_run = self.get_run_by_job(session, exhausted.job_id)
+            if (
+                abandoned_run is not None
+                and abandoned_run.deployment_status == "not_deployed"
+            ):
+                abandoned_run.deployment_status = "activation_failed"
+                abandoned_run.activation_reason = "job_failed"
+            exhausted.status = "failed"
+            exhausted.lease_owner = None
+            exhausted.leased_until = None
+            exhausted.completed_at = now
+            exhausted.failure_code = "calibration_lease_exhausted"
+            exhausted.result_run_id = None
+            session.flush()
         job = session.scalar(
             select(CalibrationJobModel)
             .where(
@@ -100,6 +126,25 @@ class OutcomeRepository:
         job.failure_code = None
         job.result_run_id = result_run_id
         job.completed_at = now
+        session.flush()
+        return job
+
+    def renew_job_lease(
+        self,
+        session: Session,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        now: datetime,
+        lease_until: datetime,
+    ) -> CalibrationJobModel:
+        if lease_until <= now:
+            raise ValueError("renewed lease must end after now")
+        job = self.get_job_for_update(session, job_id)
+        self._require_job_owner(job, worker_id)
+        if job.leased_until is None or job.leased_until <= now:
+            raise RuntimeError("calibration job lease expired")
+        job.leased_until = lease_until
         session.flush()
         return job
 
@@ -517,16 +562,49 @@ class OutcomeRepository:
             )
         )
 
-    def get_run_by_dataset(
+    def get_reusable_run_by_dataset(
         self,
         session: Session,
         dataset_sha256: str,
+        *,
+        scope: str,
     ) -> CalibrationRunModel | None:
+        self._provenance_for_scope(scope)
         return session.scalar(
             select(CalibrationRunModel).where(
-                CalibrationRunModel.dataset_sha256 == dataset_sha256
+                CalibrationRunModel.dataset_sha256 == dataset_sha256,
+                CalibrationRunModel.deployment_scope == scope,
+                CalibrationRunModel.status == "eligible_candidate",
+                CalibrationRunModel.deployment_status.in_(
+                    ("not_deployed", "active")
+                ),
             )
+            .order_by(
+                CalibrationRunModel.completed_at.desc(),
+                CalibrationRunModel.calibration_run_id.desc(),
+            )
+            .limit(1)
         )
+
+    def run_membership_matches_eligible_snapshot(
+        self,
+        session: Session,
+        run_id: uuid.UUID,
+        *,
+        scope: str,
+    ) -> bool:
+        current = {
+            (outcome.outcome_id, correction_head_id)
+            for outcome, correction_head_id in self.list_eligible_outcomes_with_heads(
+                session,
+                scope=scope,
+            )
+        }
+        persisted = {
+            (row.outcome_id, row.correction_head_id)
+            for row in self.list_run_membership(session, run_id)
+        }
+        return bool(current) and current == persisted
 
     def list_run_membership(
         self,

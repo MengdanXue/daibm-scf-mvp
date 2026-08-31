@@ -173,7 +173,7 @@ class CalibrationRunModel(Base):
         unique=True,
     )
     trigger_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    dataset_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    dataset_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
     positive_count: Mapped[int] = mapped_column(Integer, nullable=False)
     negative_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -227,6 +227,11 @@ Index(
 )
 Index("ix_calibration_runs_trigger_outcome_id", CalibrationRunModel.trigger_outcome_id)
 Index("ix_calibration_runs_trigger_job_id", CalibrationRunModel.trigger_job_id)
+Index(
+    "ix_calibration_runs_scope_dataset",
+    CalibrationRunModel.deployment_scope,
+    CalibrationRunModel.dataset_sha256,
+)
 
 
 __all__ = ["ActualOutcomeModel", "CalibrationRunModel"]

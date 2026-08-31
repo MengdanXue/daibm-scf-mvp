@@ -35,7 +35,8 @@ def test_self_training_revision_extends_the_single_head():
 
     assert revision.down_revision == "20260824_0008"
     assert scripts.get_revision("20260824_0010").down_revision == "20260824_0009"
-    assert scripts.get_current_head() == "20260824_0010"
+    assert scripts.get_revision("20260824_0011").down_revision == "20260824_0010"
+    assert scripts.get_current_head() == "20260824_0011"
 
 
 def test_self_training_schema_has_constrained_single_active_deployment(

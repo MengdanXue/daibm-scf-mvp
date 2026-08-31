@@ -81,25 +81,27 @@ class CalibrationJobService:
             if prepared.staged is None:
                 self._complete(claim, prepared.run_id)
                 return True
+            self._renew(claim)
             self.artifact_publisher(prepared.staged)
             candidate = prepared.candidate or self._reload_candidate(prepared.run_id)
             provenances = self._run_provenances(prepared.run_id)
-            self.outcome_service._evaluate_deployment(
-                prepared.run_id,
-                candidate,
+            self.outcome_service._complete_claimed_deployment(
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                run_id=prepared.run_id,
+                candidate=candidate,
                 provenances=provenances,
+                now=self._now(),
             )
-            self._complete(claim, prepared.run_id)
         except DeterministicCalibrationRejection:
             self._fail(claim, "calibration_data_rejected", retryable=False)
         except Exception:
-            terminal = self._fail(
+            terminal = self._settle_infrastructure_failure(
                 claim,
-                "calibration_infrastructure_failure",
-                retryable=True,
+                prepared,
             )
-            if terminal and prepared is not None:
-                self._terminalize_artifact_failure(prepared)
+            if terminal and prepared is not None and prepared.staged is not None:
+                self.outcome_service._discard_failed_publication(prepared.staged)
         return True
 
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -184,9 +186,10 @@ class CalibrationJobService:
             if candidate.deployment_scope != claim.deployment_scope:
                 raise DeterministicCalibrationRejection
 
-            duplicate = self.repository.get_run_by_dataset(
+            duplicate = self.repository.get_reusable_run_by_dataset(
                 session,
                 candidate.dataset_sha256,
+                scope=claim.deployment_scope,
             )
             if duplicate is not None:
                 return self._prepared_existing(duplicate)
@@ -337,12 +340,6 @@ class CalibrationJobService:
             observations,
             config=self.outcome_service.training_config,
         )
-        duplicate = self.repository.get_run_by_dataset(
-            session,
-            summary.dataset_sha256,
-        )
-        if duplicate is not None:
-            return self._prepared_existing(duplicate)
         now = self._now()
         run = self.repository.add_run(
             session,
@@ -453,6 +450,17 @@ class CalibrationJobService:
                 now=self._now(),
             )
 
+    def _renew(self, claim: ClaimedJob) -> None:
+        now = self._now()
+        with self.session_factory.begin() as session:
+            self.repository.renew_job_lease(
+                session,
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                now=now,
+                lease_until=now + self.lease_duration,
+            )
+
     def _fail(
         self,
         claim: ClaimedJob,
@@ -471,16 +479,60 @@ class CalibrationJobService:
             )
             return job.status == "failed"
 
-    def _terminalize_artifact_failure(self, prepared: PreparedRun) -> None:
-        if prepared.staged is None:
-            return
-        try:
-            self.outcome_service._mark_publication_failed(
-                prepared.run_id,
-                prepared.run_id,
+    def _settle_infrastructure_failure(
+        self,
+        claim: ClaimedJob,
+        prepared: PreparedRun | None,
+    ) -> bool:
+        with self.session_factory.begin() as session:
+            self.repository.acquire_scope_lock(
+                session,
+                scope=claim.deployment_scope,
             )
-        finally:
-            self.outcome_service._discard_failed_publication(prepared.staged)
+            job = self.repository.get_job_for_update(session, claim.job_id)
+            if (
+                job is None
+                or job.status != "running"
+                or job.lease_owner != claim.worker_id
+            ):
+                return False
+            terminal = job.attempt_count >= 3
+            if terminal and prepared is not None and prepared.staged is not None:
+                run = self.repository.get_run_for_update(session, prepared.run_id)
+                if run is not None and run.deployment_status != "active":
+                    run.status = "failed"
+                    run.artifact_locator = None
+                    run.artifact_sha256 = None
+                    run.metrics_after = None
+                    run.failure_code = "artifact_write_failed"
+                    run.deployment_status = "activation_failed"
+                    run.activation_reason = "artifact_publication_failed"
+                    run.completed_at = self._now()
+                    self.outcome_service.ledger_repository.append_many(
+                        session,
+                        run.calibration_run_id,
+                        [("CALIBRATION_CANDIDATE_FAILED", {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "dataset_sha256": run.dataset_sha256,
+                            "sample_count": run.sample_count,
+                            "positive_count": run.positive_count,
+                            "negative_count": run.negative_count,
+                            "status": "failed",
+                            "artifact_sha256": None,
+                            "failure_code": "artifact_write_failed",
+                            "deployment_status": run.deployment_status,
+                            "activation_reason": run.activation_reason,
+                        })],
+                    )
+            settled = self.repository.fail_or_retry_job(
+                session,
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                now=self._now(),
+                failure_code="calibration_infrastructure_failure",
+                retryable=True,
+            )
+            return settled.status == "failed"
 
     def _now(self) -> datetime:
         value = self.clock()
