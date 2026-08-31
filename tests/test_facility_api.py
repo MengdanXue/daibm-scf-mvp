@@ -406,3 +406,87 @@ def test_facility_openapi_documents_resource_actions_and_string_money(
     assert installment_schema["properties"]["paid_amount"]["type"] == "string"
     payment_schema = components["FacilityPaymentResponse"]
     assert payment_schema["properties"]["amount"]["type"] == "string"
+
+
+def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
+    facility_client,
+    session_factory,
+):
+    facility = _create_facility(facility_client, session_factory)
+    facility_id = facility["facility_id"]
+    initiated = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/initiate-disbursement",
+        json=_command(facility["version"]),
+    ).json()
+    active = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/confirm-disbursement",
+        json=_command(initiated["version"]),
+    ).json()
+    overdue = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/mark-overdue",
+        json={
+            **_command(active["version"]),
+            "installment_id": active["installments"][0]["installment_id"],
+            "days_past_due": 60,
+            "evidence_sha256": "b" * 64,
+        },
+    )
+    assert overdue.status_code == 200
+
+    _login(facility_client, "risk.demo")
+    invalid_schedule = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/restructure",
+        json={
+            **_command(overdue.json()["version"]),
+            "reason_code": "BORROWER_CASH_FLOW",
+            "comment": "Verified revised capacity",
+            "evidence_sha256": "c" * 64,
+            "installments": [
+                {"sequence": 1, "due_date": "2027-01-01", "amount": "999.99"}
+            ],
+        },
+    )
+    assert invalid_schedule.status_code == 409
+    assert invalid_schedule.json()["detail"]["code"] == "facility_conflict"
+
+    defaulted = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/declare-default",
+        json={
+            **_command(overdue.json()["version"]),
+            "reason_code": "PAYMENT_DEFAULT",
+            "comment": "Governed delinquency remains unresolved",
+            "evidence_sha256": "d" * 64,
+            "defaulted_at": "2026-08-24T12:00:00Z",
+            "days_past_due": 90,
+        },
+    )
+    assert defaulted.status_code == 200
+    assert defaulted.json()["default_event"]["days_past_due"] == 90
+
+    _login(facility_client, "auditor.demo")
+    written_off = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/write-off",
+        json={
+            **_command(defaulted.json()["version"]),
+            "reason_code": "UNCOLLECTIBLE_BALANCE",
+            "comment": "Independent recovery review completed",
+            "evidence_sha256": "e" * 64,
+        },
+    )
+    assert written_off.status_code == 200
+    assert written_off.json()["writeoff_event"]["amount"] == "1000.00"
+    assert written_off.json()["outstanding_amount"] == "0.00"
+
+    malformed = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/write-off",
+        json={**_command(written_off.json()["version"]), "reason_code": "bad"},
+    )
+    assert malformed.status_code == 422
+
+    paths = facility_client.get("/openapi.json").json()["paths"]
+    for path in (
+        "/api/v1/facilities/{facility_id}/restructure",
+        "/api/v1/facilities/{facility_id}/declare-default",
+        "/api/v1/facilities/{facility_id}/write-off",
+    ):
+        assert path in paths

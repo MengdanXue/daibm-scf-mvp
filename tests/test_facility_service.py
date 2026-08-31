@@ -12,13 +12,28 @@ from sqlalchemy import func, select
 
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel, LedgerEventModel
-from app.models_facility import FacilityActionModel, PaymentModel
+from app.models_facility import (
+    FacilityActionModel,
+    FinancingFacilityModel,
+    InstallmentModel,
+    PaymentModel,
+)
+from app.models_lifecycle import (
+    FacilityDefaultModel,
+    FacilityDelinquencyModel,
+    FacilityRestructureModel,
+    FacilityWriteOffModel,
+)
 from app.repositories.facility import FacilityRepository
 from app.schemas_facility import (
     CreateFacilityRequest,
+    DeclareDefaultRequest,
     DecisionPaymentRequest,
+    MarkOverdueRequest,
+    RestructureFacilityRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
+    WriteOffRequest,
 )
 from app.services.facility import (
     FacilityConflict,
@@ -140,6 +155,99 @@ def _decision(
     )
 
 
+def _activate(
+    service: FacilityService,
+    users: dict[str, AuthenticatedUser],
+    request_id: uuid.UUID,
+    *,
+    amounts: tuple[str, ...] = ("500.00", "500.00"),
+) -> dict:
+    facility = service.create(
+        _create_request(
+            request_id,
+            amounts=amounts,
+            due_dates=tuple(
+                date(2025, index + 1, 1) for index in range(len(amounts))
+            ),
+        ),
+        users["financier.demo"],
+    )
+    facility = service.initiate_disbursement(
+        facility["facility_id"],
+        _command(facility["version"]),
+        users["financier.demo"],
+    )
+    return service.confirm_disbursement(
+        facility["facility_id"],
+        _command(facility["version"]),
+        users["financier.demo"],
+    )
+
+
+def _mark_overdue(
+    service: FacilityService,
+    users: dict[str, AuthenticatedUser],
+    facility: dict,
+    *,
+    installment_index: int = 0,
+    days: int = 45,
+) -> dict:
+    installment_id = facility["installments"][installment_index]["installment_id"]
+    return service.mark_overdue(
+        facility["facility_id"],
+        installment_id,
+        MarkOverdueRequest(
+            installment_id=installment_id,
+            days_past_due=days,
+            evidence_sha256="d" * 64,
+            version=facility["version"],
+            idempotency_key=uuid.uuid4(),
+        ),
+        users["financier.demo"],
+    )
+
+
+def _restructure(
+    version: int,
+    *,
+    total: str = "500.00",
+    due_date: str = "2027-01-01",
+    key=None,
+):
+    return RestructureFacilityRequest(
+        version=version,
+        idempotency_key=key or uuid.uuid4(),
+        reason_code="BORROWER_CASH_FLOW",
+        comment="Verified revised repayment capacity",
+        evidence_sha256="e" * 64,
+        installments=[
+            {"sequence": 1, "due_date": due_date, "amount": total}
+        ],
+    )
+
+
+def _declare_default(version: int, *, key=None):
+    return DeclareDefaultRequest(
+        version=version,
+        idempotency_key=key or uuid.uuid4(),
+        reason_code="PAYMENT_DEFAULT",
+        comment="Governed delinquency remains unresolved",
+        evidence_sha256="f" * 64,
+        defaulted_at="2026-08-24T12:00:00Z",
+        days_past_due=90,
+    )
+
+
+def _write_off(version: int, *, key=None):
+    return WriteOffRequest(
+        version=version,
+        idempotency_key=key or uuid.uuid4(),
+        reason_code="UNCOLLECTIBLE_BALANCE",
+        comment="Independent recovery review completed",
+        evidence_sha256="a" * 64,
+    )
+
+
 @pytest.fixture
 def facility_context(session_factory):
     users = _users(session_factory)
@@ -195,6 +303,7 @@ def test_full_path_commits_exact_balances_actions_and_ledger(facility_context):
         users["auditor.demo"],
     )
     assert facility["status"] == "closed"
+    assert facility["closure_reason"] == "repaid"
 
     with service.session_factory() as session:
         actions = list(
@@ -445,17 +554,24 @@ def test_mark_overdue_requires_financier_and_a_past_due_installment(
     facility = service.confirm_disbursement(
         facility["facility_id"], _command(2), users["financier.demo"]
     )
+    overdue_command = MarkOverdueRequest(
+        installment_id=facility["installments"][0]["installment_id"],
+        days_past_due=30,
+        evidence_sha256="c" * 64,
+        version=facility["version"],
+        idempotency_key=uuid.uuid4(),
+    )
     with pytest.raises(ForbiddenFacility):
         service.mark_overdue(
             facility["facility_id"],
             facility["installments"][0]["installment_id"],
-            _command(facility["version"]),
+            overdue_command,
             users["risk.demo"],
         )
     overdue = service.mark_overdue(
         facility["facility_id"],
         facility["installments"][0]["installment_id"],
-        _command(facility["version"]),
+        overdue_command,
         users["financier.demo"],
     )
     assert overdue["status"] == "overdue"
@@ -596,3 +712,215 @@ def test_duplicate_payment_reference_rolls_back_without_action_or_ledger(
             session.scalar(select(func.count()).select_from(LedgerEventModel)),
         )
     assert after == before
+
+
+def test_restructure_preserves_paid_history_and_replaces_exact_outstanding(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    facility = _activate(service, users, request_id)
+    facility = service.submit_payment(
+        facility["facility_id"],
+        _submit(facility, 0, "500.00", "PAID-BEFORE-RESTRUCTURE"),
+        users["supplier.demo"],
+    )
+    facility = service.decide_payment(
+        facility["facility_id"],
+        facility["payments"][0]["payment_id"],
+        _decision(facility["version"]),
+        users["financier.demo"],
+    )
+    facility = _mark_overdue(service, users, facility, installment_index=1)
+
+    result = service.restructure(
+        facility["facility_id"],
+        _restructure(facility["version"]),
+        users["risk.demo"],
+    )
+
+    assert result["status"] == "restructured"
+    assert result["outstanding_amount"] == "500.00"
+    assert result["current_schedule_version"] == 2
+    old_rows = [row for row in result["installments"] if row["schedule_version"] == 1]
+    new_rows = [row for row in result["installments"] if row["schedule_version"] == 2]
+    assert [(row["status"], row["paid_amount"]) for row in old_rows] == [
+        ("paid", "500.00"),
+        ("superseded", "0.00"),
+    ]
+    assert [row["sequence"] for row in new_rows] == [1]
+    assert sum(Decimal(row["amount"]) for row in new_rows) == Decimal("500.00")
+    assert result["restructures"][0]["old_schedule_version"] == 1
+    assert result["restructures"][0]["new_schedule_version"] == 2
+    assert result["delinquencies"][0]["days_past_due"] == 45
+
+
+def test_default_recovery_and_close_retain_default_evidence(facility_context):
+    service, users, request_id = facility_context
+    facility = _mark_overdue(service, users, _activate(service, users, request_id))
+    facility = service.declare_default(
+        facility["facility_id"],
+        _declare_default(facility["version"]),
+        users["risk.demo"],
+    )
+    default_id = facility["default_event"]["default_id"]
+    assert facility["status"] == "defaulted"
+
+    for index, reference in enumerate(("DEFAULT-RECOVERY-A", "DEFAULT-RECOVERY-B")):
+        facility = service.submit_payment(
+            facility["facility_id"],
+            _submit(facility, index, "500.00", reference),
+            users["supplier.demo"],
+        )
+        facility = service.decide_payment(
+            facility["facility_id"],
+            facility["payments"][-1]["payment_id"],
+            _decision(facility["version"]),
+            users["financier.demo"],
+        )
+    assert facility["status"] == "repaid"
+    assert facility["outstanding_amount"] == "0.00"
+    assert facility["default_event"]["default_id"] == default_id
+
+    closed = service.close(
+        facility["facility_id"],
+        _command(facility["version"]),
+        users["auditor.demo"],
+    )
+    assert closed["status"] == "closed"
+    assert closed["closure_reason"] == "settled_after_default"
+    assert closed["default_event"]["default_id"] == default_id
+
+
+def test_writeoff_records_exact_remaining_balance_and_closes_from_history(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    facility = _mark_overdue(service, users, _activate(service, users, request_id))
+    facility = service.declare_default(
+        facility["facility_id"],
+        _declare_default(facility["version"]),
+        users["risk.demo"],
+    )
+    with pytest.raises(ForbiddenFacility):
+        service.write_off(
+            facility["facility_id"],
+            _write_off(facility["version"]),
+            users["risk.demo"],
+        )
+
+    writeoff_key = uuid.uuid4()
+    writeoff_command = _write_off(facility["version"], key=writeoff_key)
+    facility = service.write_off(
+        facility["facility_id"],
+        writeoff_command,
+        users["auditor.demo"],
+    )
+    assert facility["status"] == "written_off"
+    assert facility["outstanding_amount"] == "0.00"
+    assert facility["writeoff_event"]["amount"] == "1000.00"
+    assert facility["default_event"] is not None
+    replay = service.write_off(
+        facility["facility_id"], writeoff_command, users["auditor.demo"]
+    )
+    assert replay["writeoff_event"]["writeoff_id"] == facility["writeoff_event"][
+        "writeoff_id"
+    ]
+    with pytest.raises(FacilityConflict):
+        service.write_off(
+            facility["facility_id"],
+            _write_off(facility["version"]),
+            users["auditor.demo"],
+        )
+    closed = service.close(
+        facility["facility_id"],
+        _command(facility["version"]),
+        users["auditor.demo"],
+    )
+    assert closed["closure_reason"] == "written_off"
+
+
+def test_lifecycle_conflicts_and_replays_preserve_all_transactional_records(
+    facility_context,
+):
+    service, users, request_id = facility_context
+    facility = _mark_overdue(service, users, _activate(service, users, request_id))
+    facility_uuid = uuid.UUID(facility["facility_id"])
+    with service.session_factory() as session:
+        before = (
+            session.get(FinancingFacilityModel, facility_uuid).version,
+            session.scalar(select(func.count()).select_from(InstallmentModel)),
+            session.scalar(select(func.count()).select_from(FacilityActionModel)),
+            session.scalar(select(func.count()).select_from(LedgerEventModel)),
+            session.scalar(select(func.count()).select_from(FacilityDefaultModel)),
+            session.scalar(
+                select(func.count()).select_from(FacilityDelinquencyModel)
+            ),
+            session.scalar(select(func.count()).select_from(FacilityRestructureModel)),
+            session.scalar(select(func.count()).select_from(FacilityWriteOffModel)),
+        )
+
+    with pytest.raises(FacilityConflict, match="exact outstanding"):
+        service.restructure(
+            facility["facility_id"],
+            _restructure(facility["version"], total="499.99"),
+            users["risk.demo"],
+        )
+    with service.session_factory() as session:
+        after = (
+            session.get(FinancingFacilityModel, facility_uuid).version,
+            session.scalar(select(func.count()).select_from(InstallmentModel)),
+            session.scalar(select(func.count()).select_from(FacilityActionModel)),
+            session.scalar(select(func.count()).select_from(LedgerEventModel)),
+            session.scalar(select(func.count()).select_from(FacilityDefaultModel)),
+            session.scalar(
+                select(func.count()).select_from(FacilityDelinquencyModel)
+            ),
+            session.scalar(select(func.count()).select_from(FacilityRestructureModel)),
+            session.scalar(select(func.count()).select_from(FacilityWriteOffModel)),
+        )
+    assert after == before
+
+    with pytest.raises(FacilityConflict, match="future"):
+        service.restructure(
+            facility["facility_id"],
+            _restructure(
+                facility["version"], total="1000.00", due_date="2025-01-01"
+            ),
+            users["risk.demo"],
+        )
+    with service.session_factory() as session:
+        assert (
+            session.get(FinancingFacilityModel, facility_uuid).version,
+            session.scalar(select(func.count()).select_from(InstallmentModel)),
+            session.scalar(select(func.count()).select_from(FacilityActionModel)),
+            session.scalar(select(func.count()).select_from(LedgerEventModel)),
+            session.scalar(select(func.count()).select_from(FacilityDefaultModel)),
+            session.scalar(
+                select(func.count()).select_from(FacilityDelinquencyModel)
+            ),
+            session.scalar(select(func.count()).select_from(FacilityRestructureModel)),
+            session.scalar(select(func.count()).select_from(FacilityWriteOffModel)),
+        ) == before
+
+    key = uuid.uuid4()
+    command = _declare_default(facility["version"], key=key)
+    first = service.declare_default(facility["facility_id"], command, users["risk.demo"])
+    replay = service.declare_default(facility["facility_id"], command, users["risk.demo"])
+    assert replay["default_event"]["default_id"] == first["default_event"]["default_id"]
+    with service.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(FacilityDefaultModel)) == 1
+        assert session.scalar(
+            select(func.count()).select_from(FacilityActionModel).where(
+                FacilityActionModel.idempotency_key == key
+            )
+        ) == 1
+
+    with pytest.raises(FacilityConflict):
+        service.declare_default(
+            facility["facility_id"],
+            _declare_default(facility["version"]),
+            users["risk.demo"],
+        )
+    with service.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(FacilityDefaultModel)) == 1
+        assert session.scalar(select(func.count()).select_from(FacilityWriteOffModel)) == 0

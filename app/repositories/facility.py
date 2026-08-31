@@ -11,6 +11,12 @@ from app.models_facility import (
     InstallmentModel,
     PaymentModel,
 )
+from app.models_lifecycle import (
+    FacilityDefaultModel,
+    FacilityDelinquencyModel,
+    FacilityRestructureModel,
+    FacilityWriteOffModel,
+)
 
 
 class FacilityRepository:
@@ -66,7 +72,64 @@ class FacilityRepository:
             session.scalars(
                 select(InstallmentModel)
                 .where(InstallmentModel.facility_id == facility_id)
-                .order_by(InstallmentModel.sequence)
+                .order_by(
+                    InstallmentModel.schedule_version,
+                    InstallmentModel.sequence,
+                )
+            )
+        )
+
+    def list_delinquencies(
+        self,
+        session: Session,
+        facility_id: uuid.UUID,
+    ) -> list[FacilityDelinquencyModel]:
+        return list(
+            session.scalars(
+                select(FacilityDelinquencyModel)
+                .where(FacilityDelinquencyModel.facility_id == facility_id)
+                .order_by(
+                    FacilityDelinquencyModel.recorded_at,
+                    FacilityDelinquencyModel.delinquency_id,
+                )
+            )
+        )
+
+    def list_restructures(
+        self,
+        session: Session,
+        facility_id: uuid.UUID,
+    ) -> list[FacilityRestructureModel]:
+        return list(
+            session.scalars(
+                select(FacilityRestructureModel)
+                .where(FacilityRestructureModel.facility_id == facility_id)
+                .order_by(
+                    FacilityRestructureModel.recorded_at,
+                    FacilityRestructureModel.restructure_id,
+                )
+            )
+        )
+
+    def get_default(
+        self,
+        session: Session,
+        facility_id: uuid.UUID,
+    ) -> FacilityDefaultModel | None:
+        return session.scalar(
+            select(FacilityDefaultModel).where(
+                FacilityDefaultModel.facility_id == facility_id
+            )
+        )
+
+    def get_writeoff(
+        self,
+        session: Session,
+        facility_id: uuid.UUID,
+    ) -> FacilityWriteOffModel | None:
+        return session.scalar(
+            select(FacilityWriteOffModel).where(
+                FacilityWriteOffModel.facility_id == facility_id
             )
         )
 

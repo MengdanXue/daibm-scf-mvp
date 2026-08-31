@@ -391,3 +391,93 @@ def test_get_for_update_holds_a_real_postgresql_row_lock(session_factory):
         second.rollback()
         first.close()
         second.close()
+
+
+def test_repository_reads_lifecycle_history_in_deterministic_order(session_factory):
+    from app.models_lifecycle import (
+        FacilityDefaultModel,
+        FacilityDelinquencyModel,
+        FacilityRestructureModel,
+        FacilityWriteOffModel,
+    )
+    from app.repositories.facility import FacilityRepository
+
+    request_id, user_id = _seed_prerequisites(session_factory)
+    facility = _facility(request_id=request_id, user_id=user_id)
+    repository = FacilityRepository()
+    now = datetime.now(timezone.utc)
+    with session_factory.begin() as session:
+        repository.add(session, facility)
+        session.add_all(
+            [
+                FacilityDelinquencyModel(
+                    delinquency_id=uuid.UUID(int=2),
+                    facility_id=facility.facility_id,
+                    marked_by_user_id=user_id,
+                    days_past_due=45,
+                    reason_code="PAST_DUE",
+                    comment="Second",
+                    evidence_sha256="b" * 64,
+                    recorded_at=now + timedelta(seconds=1),
+                ),
+                FacilityDelinquencyModel(
+                    delinquency_id=uuid.UUID(int=1),
+                    facility_id=facility.facility_id,
+                    marked_by_user_id=user_id,
+                    days_past_due=30,
+                    reason_code="PAST_DUE",
+                    comment="First",
+                    evidence_sha256="a" * 64,
+                    recorded_at=now,
+                ),
+                FacilityRestructureModel(
+                    restructure_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    restructured_by_user_id=user_id,
+                    old_schedule_version=1,
+                    new_schedule_version=2,
+                    reason_code="BORROWER_CASH_FLOW",
+                    comment="Revised",
+                    evidence_sha256="c" * 64,
+                    recorded_at=now,
+                ),
+                FacilityDefaultModel(
+                    default_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    declared_by_user_id=user_id,
+                    defaulted_at=now,
+                    days_past_due=45,
+                    reason_code="PAYMENT_DEFAULT",
+                    comment="Default",
+                    evidence_sha256="d" * 64,
+                    recorded_at=now,
+                ),
+                FacilityWriteOffModel(
+                    writeoff_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    amount=Decimal("1000.00"),
+                    auditor_user_id=user_id,
+                    reason_code="UNCOLLECTIBLE_BALANCE",
+                    comment="Write-off",
+                    evidence_sha256="e" * 64,
+                    recorded_at=now,
+                ),
+            ]
+        )
+
+    with session_factory() as session:
+        assert [
+            row.days_past_due
+            for row in repository.list_delinquencies(session, facility.facility_id)
+        ] == [30, 45]
+        assert [
+            row.new_schedule_version
+            for row in repository.list_restructures(session, facility.facility_id)
+        ] == [2]
+        assert (
+            repository.get_default(session, facility.facility_id).reason_code
+            == "PAYMENT_DEFAULT"
+        )
+        assert repository.get_writeoff(
+            session, facility.facility_id
+        ).amount == Decimal("1000.00")
