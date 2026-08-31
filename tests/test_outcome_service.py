@@ -4,7 +4,7 @@ import hashlib
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from threading import Barrier
 
@@ -36,7 +36,12 @@ from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import ActualOutcomeCreate, OutcomeCorrectionCreate
 from app.services.adaptive_risk import AdaptiveRiskInferenceService
 from app.services.identity import IdentityService
-from app.services.outcome_calibration import CalibrationCandidate
+from app.services.outcome_calibration import (
+    CalibrationCandidate,
+    CalibrationObservation,
+    build_calibration_candidate,
+    write_candidate_artifact,
+)
 from app.services.outcomes import (
     ForbiddenOutcome,
     OutcomeConflict,
@@ -825,6 +830,140 @@ def test_startup_reconciliation_finishes_direct_seeded_pending_run(
     assert reconciled.deployment_status == "rejected"
     assert reconciled.activation_reason == "training_not_eligible"
     assert count == 1
+
+
+def _seed_pending_v3_run(session_factory, tmp_path):
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    first_outcome_id = uuid.UUID(
+        service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
+    )
+    with session_factory() as session:
+        first = session.get(ActualOutcomeModel, first_outcome_id)
+        first_facility = session.get(FinancingFacilityModel, first.facility_id)
+        model_version_id = first.model_version_id
+        creator_id = first_facility.created_by_user_id
+    with session_factory.begin() as session:
+        for index in range(1, 20):
+            request_id = uuid.uuid4()
+            facility_id = uuid.uuid4()
+            risk_assessment_id = uuid.uuid4()
+            session.add(FinancingRequestModel(
+                request_id=request_id, created_at=NOW, updated_at=NOW,
+                applicant_id=f"E{index:04d}", assessment_scope="controlled_demo",
+                amount=Decimal("1000.00"), term_days=30, features={},
+                risk_score=0.05 + index * 0.04, decision="approved",
+                status="audited", version=1,
+                risk_assessment_id=risk_assessment_id,
+                risk_engine_version="tgnn-test@v3-recovery",
+                risk_input_sha256=f"{index + 20:064x}", risk_assessed_at=NOW,
+            ))
+            session.add(FinancingFacilityModel(
+                facility_id=facility_id, request_id=request_id,
+                principal=Decimal("1000.00"), outstanding_amount=Decimal("0.00"),
+                currency="CNY", status="closed", version=1,
+                current_schedule_version=1, closure_reason="repaid",
+                created_by_user_id=creator_id, created_at=NOW, updated_at=NOW,
+                closed_at=NOW,
+            ))
+            session.add(ActualOutcomeModel(
+                outcome_id=uuid.uuid4(), facility_id=facility_id,
+                request_id=request_id, risk_assessment_id=risk_assessment_id,
+                model_version_id=model_version_id,
+                submitted_by_user_id=auditor.user_id,
+                idempotency_key=uuid.uuid4(), request_sha256=f"{index + 40:064x}",
+                defaulted=index >= 10, days_past_due=30 if index >= 10 else 0,
+                loss_amount=Decimal("100.00") if index >= 10 else Decimal("0.00"),
+                observed_at=NOW + timedelta(minutes=index),
+                evidence_sha256=f"{index + 60:064x}",
+                provenance="CONTROLLED_DEMO",
+                original_risk_score=0.05 + index * 0.04,
+                risk_engine_version="tgnn-test@v3-recovery",
+                risk_input_sha256=f"{index + 20:064x}", recorded_at=NOW,
+            ))
+    with session_factory() as session:
+        outcomes = list(session.scalars(
+            select(ActualOutcomeModel).order_by(ActualOutcomeModel.outcome_id)
+        ))
+        observations = tuple(
+            CalibrationObservation(
+                outcome_id=str(row.outcome_id), facility_id=str(row.facility_id),
+                request_id=str(row.request_id),
+                risk_assessment_id=str(row.risk_assessment_id),
+                model_version_id=(str(row.model_version_id) if row.model_version_id else None),
+                risk_engine_version=row.risk_engine_version,
+                risk_input_sha256=row.risk_input_sha256,
+                evidence_sha256=row.evidence_sha256,
+                original_score=row.original_risk_score,
+                defaulted=row.defaulted,
+                observed_at=row.observed_at.isoformat(timespec="microseconds"),
+                provenance=row.provenance, correction_head_id=None,
+            )
+            for row in outcomes
+        )
+    candidate = build_calibration_candidate(observations)
+    published = write_candidate_artifact(tmp_path, candidate)
+    run_id = uuid.uuid4()
+    with session_factory.begin() as session:
+        session.add(CalibrationRunModel(
+            calibration_run_id=run_id, trigger_outcome_id=None, trigger_job_id=None,
+            dataset_sha256=candidate.dataset_sha256,
+            sample_count=candidate.sample_count,
+            positive_count=candidate.positive_count,
+            negative_count=candidate.negative_count,
+            metrics_before=dict(candidate.metrics_before),
+            metrics_after=dict(candidate.metrics_after),
+            configuration=dict(candidate.artifact["configuration"]),
+            status=candidate.status, artifact_locator=str(published.path),
+            artifact_sha256=published.sha256,
+            artifact_schema="daibm.platt-calibration.v3", failure_code=None,
+            deployment_status="not_deployed", deployment_scope="controlled_demo",
+            activation_mode=None, activated_at=None, deactivated_at=None,
+            previous_active_run_id=None, activation_reason="not_evaluated",
+            started_at=NOW, completed_at=NOW,
+        ))
+        session.flush()
+        session.add_all([
+            CalibrationRunObservationModel(
+                calibration_run_id=run_id, outcome_id=row.outcome_id,
+                correction_head_id=None,
+            )
+            for row in outcomes
+        ])
+    return service, run_id
+
+
+def test_startup_reconciliation_activates_an_eligible_verified_v3_run(
+    session_factory,
+    tmp_path,
+):
+    service, run_id = _seed_pending_v3_run(session_factory, tmp_path)
+
+    service.reconcile_deployments()
+
+    with session_factory() as session:
+        reconciled = session.get(CalibrationRunModel, run_id)
+    assert reconciled.deployment_status == "active"
+    assert reconciled.activation_reason == "gate_passed"
+
+
+def test_startup_reconciliation_rejects_v3_db_metrics_that_contradict_artifact(
+    session_factory,
+    tmp_path,
+):
+    service, run_id = _seed_pending_v3_run(session_factory, tmp_path)
+    with session_factory.begin() as session:
+        session.get(CalibrationRunModel, run_id).metrics_after = {
+            "brier_score": 0.0,
+            "log_loss": 0.0,
+        }
+
+    service.reconcile_deployments()
+
+    with session_factory() as session:
+        reconciled = session.get(CalibrationRunModel, run_id)
+    assert reconciled.deployment_status == "rejected"
+    assert reconciled.activation_reason == "artifact_unverified"
 
 
 def test_seeded_unrecoverable_artifact_is_durably_failed_once(

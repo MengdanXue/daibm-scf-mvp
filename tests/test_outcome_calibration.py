@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +13,7 @@ import pytest
 import app.services.outcome_calibration as calibration_module
 from app.services.outcome_calibration import (
     CalibrationObservation,
+    CalibrationTrainingConfig,
     _metrics,
     assign_stratified_folds,
     build_calibration_candidate,
@@ -93,8 +95,36 @@ def test_candidate_is_deterministic_and_reports_oof_metrics():
     ).encode("utf-8") == first.artifact_bytes
 
 
+def test_serialized_numeric_policy_is_stable_and_metric_snapshots_do_not_alias():
+    candidate = build_calibration_candidate(
+        _varied_observations(),
+        config=CalibrationTrainingConfig(
+            learning_rate=0.12345678901234567,
+            l2_penalty=0.0012345678901234567,
+            probability_epsilon=0.0000012345678901234567,
+        ),
+    )
+
+    assert candidate.artifact["configuration"] == {
+        "epochs": 800,
+        "learning_rate": 0.123456789012346,
+        "l2_penalty": 0.00123456789012346,
+        "probability_epsilon": 0.00000123456789012346,
+    }
+    assert candidate.slope == candidate.artifact["coefficients"]["slope"]
+    assert candidate.intercept == candidate.artifact["coefficients"]["intercept"]
+    assert candidate.metrics_before == candidate.artifact["validation"]["metrics_before"]
+    assert candidate.metrics_after == candidate.artifact["validation"]["metrics_after"]
+    artifact_before = dict(candidate.artifact["validation"]["metrics_before"])
+    candidate.metrics_before["brier_score"] = 0.0
+    assert candidate.artifact["validation"]["metrics_before"] == artifact_before
+
+
 def test_oof_fit_inputs_exclude_every_held_out_observation(monkeypatch):
-    observations = _varied_observations()
+    observations = tuple(
+        replace(row, original_score=0.2 + (index // 2) * 0.05)
+        for index, row in enumerate(_varied_observations())
+    )
     assignments = assign_stratified_folds(observations)
     calls: list[tuple[tuple[float, ...], tuple[float, ...]]] = []
     real_fit = calibration_module._fit_platt
@@ -109,20 +139,16 @@ def test_oof_fit_inputs_exclude_every_held_out_observation(monkeypatch):
 
     assert len(calls) == 6
     for fold, (training_scores, training_labels) in enumerate(calls[:5]):
-        expected_training = {
+        expected_training = [
             row.original_score
             for row in observations
             if assignments[row.outcome_id] != fold
-        }
-        held_out = {
-            row.original_score
-            for row in observations
-            if assignments[row.outcome_id] == fold
-        }
-        assert set(training_scores) == expected_training
-        assert set(training_scores).isdisjoint(held_out)
+        ]
+        assert Counter(training_scores) == Counter(expected_training)
         assert set(training_labels) == {0.0, 1.0}
-    assert set(calls[-1][0]) == {row.original_score for row in observations}
+    assert Counter(calls[-1][0]) == Counter(
+        row.original_score for row in observations
+    )
     held_out_ids = [
         outcome_id
         for fold_evidence in candidate.artifact["validation"]["folds"]
@@ -130,9 +156,17 @@ def test_oof_fit_inputs_exclude_every_held_out_observation(monkeypatch):
     ]
     assert sorted(held_out_ids) == sorted(row.outcome_id for row in observations)
     for fold_evidence in candidate.artifact["validation"]["folds"]:
-        assert set(fold_evidence["training_outcome_ids"]).isdisjoint(
-            fold_evidence["held_out_outcome_ids"]
-        )
+        fold = fold_evidence["fold"]
+        assert fold_evidence["held_out_outcome_ids"] == [
+            row.outcome_id
+            for row in sorted(observations, key=lambda item: item.outcome_id)
+            if assignments[row.outcome_id] == fold
+        ]
+        assert fold_evidence["training_outcome_ids"] == [
+            row.outcome_id
+            for row in sorted(observations, key=lambda item: item.outcome_id)
+            if assignments[row.outcome_id] != fold
+        ]
 
 
 def test_fold_assignment_is_stratified_canonical_and_order_independent():
@@ -153,6 +187,46 @@ def test_fold_assignment_is_stratified_canonical_and_order_independent():
             if assignment[row.outcome_id] == fold
         }
         assert labels == {False, True}
+
+
+def test_public_fold_assigner_requires_approved_support():
+    with pytest.raises(ValueError, match="at least 20"):
+        assign_stratified_folds(_varied_observations()[:-1])
+    unsupported = tuple(
+        replace(row, defaulted=index >= 16)
+        for index, row in enumerate(_varied_observations())
+    )
+    with pytest.raises(ValueError, match="five observations per class"):
+        assign_stratified_folds(unsupported)
+
+
+def test_semantically_identical_noncanonical_uuid_cannot_form_two_identities():
+    observations = _varied_observations()
+    semantic_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    malformed = (
+        replace(observations[0], outcome_id=semantic_id),
+        replace(observations[1], outcome_id=semantic_id.upper()),
+    ) + observations[2:]
+
+    with pytest.raises(ValueError, match="canonical UUID"):
+        assign_stratified_folds(malformed)
+
+
+def test_equivalent_timestamp_offsets_have_identical_lineage_and_fold_bytes():
+    observations = _varied_observations()
+    equivalent_offset = tuple(
+        replace(row, observed_at="2026-07-31T20:05:00.000000-04:00")
+        if index == 5
+        else row
+        for index, row in enumerate(observations)
+    )
+
+    baseline = build_calibration_candidate(observations)
+    equivalent = build_calibration_candidate(equivalent_offset)
+
+    assert equivalent.dataset_sha256 == baseline.dataset_sha256
+    assert equivalent.fold_assignment_sha256 == baseline.fold_assignment_sha256
+    assert equivalent.artifact_bytes == baseline.artifact_bytes
 
 
 def test_fold_hash_changes_only_when_assignment_changes():
@@ -252,6 +326,15 @@ def test_malformed_observations_are_rejected_early(mutation, message):
     malformed = (replace(observations[0], **mutation),) + observations[1:]
 
     with pytest.raises(ValueError, match=message):
+        build_calibration_candidate(malformed)
+
+
+@pytest.mark.parametrize("score", (-0.01, 1.01, math.nan, math.inf))
+def test_candidate_rejects_nonfinite_or_out_of_range_raw_scores(score):
+    observations = _varied_observations()
+    malformed = (replace(observations[0], original_score=score),) + observations[1:]
+
+    with pytest.raises(ValueError, match="original score"):
         build_calibration_candidate(malformed)
 
 

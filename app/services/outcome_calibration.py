@@ -8,7 +8,7 @@ import re
 import tempfile
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +64,12 @@ class CalibrationCandidate:
     artifact_bytes: bytes
     distinct_score_count: int = 0
     fold_assignment_sha256: str = ""
+    artifact_sha256: str = ""
+    outcome_ids: tuple[str, ...] = ()
+    correction_heads: tuple[tuple[str, str | None], ...] = ()
+    configuration: tuple[tuple[str, object], ...] = ()
+    artifact_schema: str = ""
+    deployment_scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,19 @@ def _canonical_bytes(value: object) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _serialized_float(value: float) -> float:
+    """Canonical artifact number: IEEE value rounded to 15 significant digits."""
+
+    if not math.isfinite(value):
+        raise ValueError("serialized calibration number must be finite")
+    serialized = float(format(value, ".15g"))
+    return 0.0 if serialized == 0.0 else serialized
+
+
+def _serialized_metrics(metrics: dict[str, float]) -> dict[str, float]:
+    return {key: _serialized_float(value) for key, value in metrics.items()}
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
@@ -141,7 +160,7 @@ def _observation_payload(item: CalibrationObservation) -> dict[str, object]:
         "facility_id": item.facility_id,
         "model_version_id": item.model_version_id,
         "risk_engine_version": item.risk_engine_version,
-        "observed_at": item.observed_at,
+        "observed_at": _canonical_observed_at(item.observed_at),
         "original_score": item.original_score,
         "outcome_id": item.outcome_id,
         "provenance": item.provenance,
@@ -160,8 +179,18 @@ def _validate_uuid(value: str, field: str) -> None:
         parsed = uuid.UUID(value)
     except (AttributeError, TypeError, ValueError) as error:
         raise ValueError(f"{field} must be a UUID") from error
-    if str(parsed) != value.lower():
+    if value != str(parsed):
         raise ValueError(f"{field} must use canonical UUID format")
+
+
+def _canonical_observed_at(value: str) -> str:
+    try:
+        observed_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError("observed timestamp must be ISO-8601") from error
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise ValueError("observed timestamp must be timezone-aware")
+    return observed_at.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _validate_observations(
@@ -191,12 +220,7 @@ def _validate_observations(
             raise ValueError("defaulted label must be boolean")
         if item.provenance not in _SUPPORTED_PROVENANCES:
             raise ValueError("calibration provenance is unsupported")
-        try:
-            observed_at = datetime.fromisoformat(item.observed_at.replace("Z", "+00:00"))
-        except (AttributeError, TypeError, ValueError) as error:
-            raise ValueError("observed timestamp must be ISO-8601") from error
-        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
-            raise ValueError("observed timestamp must be timezone-aware")
+        _canonical_observed_at(item.observed_at)
         if not math.isfinite(item.original_score) or not 0 <= item.original_score <= 1:
             raise ValueError("original score must be finite and between zero and one")
     return ordered
@@ -211,14 +235,24 @@ def assign_stratified_folds(
     if folds != 5:
         raise ValueError("calibration validation requires exactly five folds")
     ordered = _validate_observations(observations)
+    if len(ordered) < 20:
+        raise ValueError("fold assignment requires at least 20 observations")
+    class_counts = {
+        label: sum(row.defaulted is label for row in ordered)
+        for label in (False, True)
+    }
+    if min(class_counts.values()) < folds:
+        raise ValueError("fold assignment requires five observations per class")
     assignment: dict[str, int] = {}
     for label in (False, True):
         label_rows = sorted(
             (row for row in ordered if row.defaulted is label),
-            key=lambda row: (row.observed_at, row.outcome_id),
+            key=lambda row: (_canonical_observed_at(row.observed_at), row.outcome_id),
         )
         for index, row in enumerate(label_rows):
             assignment[row.outcome_id] = index % folds
+    if set(assignment.values()) != set(range(folds)):
+        raise ValueError("every calibration fold must be nonempty")
     return assignment
 
 
@@ -394,6 +428,11 @@ def build_calibration_candidate(
     final_metrics = _metrics(
         labels, final_probabilities, active_config.probability_epsilon
     )
+    serialized_before = _serialized_metrics(before)
+    serialized_after = _serialized_metrics(after)
+    serialized_final_metrics = _serialized_metrics(final_metrics)
+    serialized_slope = _serialized_float(slope)
+    serialized_intercept = _serialized_float(intercept)
     distinct_score_count = len(set(raw_scores.tolist()))
     limitations = ["activation_gate_required"]
     if distinct_score_count < 2:
@@ -403,14 +442,16 @@ def build_calibration_candidate(
     artifact: dict[str, object] = {
         "artifact_schema": "daibm.platt-calibration.v3",
         "coefficients": {
-            "intercept": intercept,
-            "slope": slope,
+            "intercept": serialized_intercept,
+            "slope": serialized_slope,
         },
         "configuration": {
             "epochs": active_config.epochs,
-            "l2_penalty": active_config.l2_penalty,
-            "learning_rate": active_config.learning_rate,
-            "probability_epsilon": active_config.probability_epsilon,
+            "l2_penalty": _serialized_float(active_config.l2_penalty),
+            "learning_rate": _serialized_float(active_config.learning_rate),
+            "probability_epsilon": _serialized_float(
+                active_config.probability_epsilon
+            ),
         },
         "dataset": {
             "correction_heads": {
@@ -430,7 +471,7 @@ def build_calibration_candidate(
         },
         "diagnostics": {
             "final_fit": {
-                "metrics": final_metrics,
+                "metrics": dict(serialized_final_metrics),
             }
         },
         "limitations": limitations,
@@ -442,25 +483,34 @@ def build_calibration_candidate(
             "fold_assignments": assignments,
             "folds": fold_evidence,
             "method": "deterministic_stratified_5_fold_oof",
-            "metrics_after": after,
-            "metrics_before": before,
+            "metrics_after": dict(serialized_after),
+            "metrics_before": dict(serialized_before),
         },
     }
     artifact_bytes = _canonical_bytes(artifact)
+    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
     return CalibrationCandidate(
         dataset_sha256=dataset_sha256,
         sample_count=sample_count,
         positive_count=positive_count,
         negative_count=negative_count,
         status=str(artifact["status"]),
-        slope=slope,
-        intercept=intercept,
-        metrics_before=before,
-        metrics_after=after,
+        slope=serialized_slope,
+        intercept=serialized_intercept,
+        metrics_before=dict(serialized_before),
+        metrics_after=dict(serialized_after),
         artifact=artifact,
         artifact_bytes=artifact_bytes,
         distinct_score_count=distinct_score_count,
         fold_assignment_sha256=fold_assignment_sha256,
+        artifact_sha256=artifact_sha256,
+        outcome_ids=tuple(item.outcome_id for item in ordered),
+        correction_heads=tuple(
+            (item.outcome_id, item.correction_head_id) for item in ordered
+        ),
+        configuration=tuple(sorted(artifact["configuration"].items())),
+        artifact_schema="daibm.platt-calibration.v3",
+        deployment_scope=str(artifact["deployment"]["scope"]),
     )
 
 

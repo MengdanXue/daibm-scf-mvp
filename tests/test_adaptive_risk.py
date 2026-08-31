@@ -24,52 +24,6 @@ from app.services.outcome_calibration import (
 )
 
 
-def _candidate(
-    *,
-    sample_count: int = 20,
-    positive_count: int = 5,
-    status: str = "eligible_candidate",
-    before_brier: float = 0.24,
-    after_brier: float = 0.18,
-    before_log_loss: float = 0.70,
-    after_log_loss: float = 0.56,
-) -> CalibrationCandidate:
-    artifact = {
-        "artifact_schema": "daibm.platt-calibration.v3",
-        "coefficients": {"intercept": -0.2, "slope": 1.3},
-        "configuration": {"probability_epsilon": 1e-6},
-        "dataset": {"sha256": "1" * 64, "distinct_score_count": 20},
-        "deployment": {"scope": "controlled_demo"},
-    }
-    artifact_bytes = json.dumps(
-        artifact,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return CalibrationCandidate(
-        dataset_sha256="1" * 64,
-        sample_count=sample_count,
-        positive_count=positive_count,
-        negative_count=sample_count - positive_count,
-        status=status,
-        slope=1.3,
-        intercept=-0.2,
-        metrics_before={
-            "brier_score": before_brier,
-            "log_loss": before_log_loss,
-        },
-        metrics_after={
-            "brier_score": after_brier,
-            "log_loss": after_log_loss,
-        },
-        artifact=artifact,
-        artifact_bytes=artifact_bytes,
-        distinct_score_count=20,
-        fold_assignment_sha256="2" * 64,
-    )
-
-
 def _built_candidate() -> CalibrationCandidate:
     started = datetime(2026, 8, 1, tzinfo=timezone.utc)
     observations = tuple(
@@ -93,6 +47,61 @@ def _built_candidate() -> CalibrationCandidate:
         for index in range(20)
     )
     return build_calibration_candidate(observations)
+
+
+def _candidate(
+    *,
+    sample_count: int = 20,
+    positive_count: int = 10,
+    status: str = "eligible_candidate",
+    before_brier: float | None = None,
+    after_brier: float | None = None,
+    before_log_loss: float | None = None,
+    after_log_loss: float | None = None,
+    distinct_score_count: int = 20,
+) -> CalibrationCandidate:
+    baseline = _built_candidate()
+    artifact = json.loads(baseline.artifact_bytes)
+    before = dict(baseline.metrics_before)
+    after = dict(baseline.metrics_after)
+    if before_brier is not None:
+        before["brier_score"] = before_brier
+    if after_brier is not None:
+        after["brier_score"] = after_brier
+    if before_log_loss is not None:
+        before["log_loss"] = before_log_loss
+    if after_log_loss is not None:
+        after["log_loss"] = after_log_loss
+    artifact["dataset"]["sample_count"] = sample_count
+    artifact["dataset"]["positive_count"] = positive_count
+    artifact["dataset"]["negative_count"] = sample_count - positive_count
+    artifact["dataset"]["distinct_score_count"] = distinct_score_count
+    artifact["limitations"] = ["activation_gate_required"]
+    if distinct_score_count < 2:
+        artifact["limitations"].insert(0, "insufficient_distinct_scores")
+    artifact["status"] = status
+    artifact["validation"]["metrics_before"] = before
+    artifact["validation"]["metrics_after"] = after
+    artifact_bytes = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return replace(
+        baseline,
+        sample_count=sample_count,
+        positive_count=positive_count,
+        negative_count=sample_count - positive_count,
+        status=status,
+        metrics_before=before,
+        metrics_after=after,
+        distinct_score_count=distinct_score_count,
+        artifact=artifact,
+        artifact_bytes=artifact_bytes,
+        artifact_sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+    )
 
 
 def test_gate_activates_only_an_integrity_verified_non_regressing_eligible_run():
@@ -149,7 +158,7 @@ def test_gate_never_labels_mixed_demo_data_as_externally_verified():
 
 def test_gate_rejects_identical_scores_despite_sample_and_class_support():
     decision = evaluate_activation_gate(
-        replace(_candidate(), distinct_score_count=1),
+        _candidate(distinct_score_count=1),
         artifact_integrity="verified",
         provenances=("CONTROLLED_DEMO",) * 20,
     )
@@ -179,6 +188,18 @@ def test_gate_rejects_inconsistent_count_evidence(candidate):
 def test_gate_rejects_v2_as_a_new_candidate():
     candidate = _candidate()
     candidate.artifact["artifact_schema"] = "daibm.platt-calibration.v2"
+    artifact_bytes = json.dumps(
+        candidate.artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    candidate = replace(
+        candidate,
+        artifact_bytes=artifact_bytes,
+        artifact_sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+    )
 
     decision = evaluate_activation_gate(
         candidate,
@@ -195,18 +216,27 @@ def test_gate_rejects_v2_as_a_new_candidate():
 
 def test_gate_does_not_read_final_fit_coefficients_or_diagnostics():
     baseline = _candidate()
-    changed_artifact = dict(baseline.artifact)
-    changed_artifact["coefficients"] = {"slope": math.nan, "intercept": math.inf}
+    changed_artifact = json.loads(baseline.artifact_bytes)
+    changed_artifact["coefficients"] = {"slope": 0.5, "intercept": 0.3}
     changed_artifact["diagnostics"] = {
         "final_fit": {
-            "metrics": {"brier_score": 999.0, "log_loss": 999.0}
+            "metrics": {"brier_score": 0.99, "log_loss": 0.99}
         }
     }
+    changed_bytes = json.dumps(
+        changed_artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
     changed = replace(
         baseline,
-        slope=math.nan,
-        intercept=math.inf,
+        slope=0.5,
+        intercept=0.3,
         artifact=changed_artifact,
+        artifact_bytes=changed_bytes,
+        artifact_sha256=hashlib.sha256(changed_bytes).hexdigest(),
     )
 
     first = evaluate_activation_gate(
@@ -279,6 +309,127 @@ def test_verified_v3_artifact_accepts_canonical_oof_lineage(tmp_path):
     assert calibration.slope == candidate.slope
     assert calibration.intercept == candidate.intercept
     assert calibration.deployment_scope == "controlled_demo"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "extra_field",
+        "reordered_holdout",
+        "duplicate_holdout",
+        "invalid_brier",
+        "boolean_metric",
+        "uppercase_uuid",
+    ),
+)
+def test_v3_loader_rejects_canonical_rehashed_noncanonical_evidence(
+    tmp_path,
+    mutation,
+):
+    candidate = _built_candidate()
+    artifact = json.loads(candidate.artifact_bytes)
+    if mutation == "extra_field":
+        artifact["dataset"]["unexpected"] = "not-governed"
+    elif mutation == "reordered_holdout":
+        artifact["validation"]["folds"][0]["held_out_outcome_ids"].reverse()
+    elif mutation == "duplicate_holdout":
+        held_out = artifact["validation"]["folds"][0]["held_out_outcome_ids"]
+        held_out.append(held_out[0])
+    elif mutation == "invalid_brier":
+        artifact["validation"]["metrics_after"]["brier_score"] = 1.1
+    elif mutation == "boolean_metric":
+        artifact["validation"]["metrics_after"]["brier_score"] = True
+    else:
+        first_id = artifact["dataset"]["outcome_ids"][0]
+        artifact["dataset"]["correction_heads"][first_id] = (
+            "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        )
+    artifact_bytes = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    path = tmp_path / f"{mutation}.json"
+    path.write_bytes(artifact_bytes)
+
+    with pytest.raises(ValueError, match="calibration artifact"):
+        load_verified_calibration(
+            path,
+            expected_sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+            run_id="run",
+            deployment_scope="controlled_demo",
+            expected_dataset_sha256=candidate.dataset_sha256,
+        )
+
+
+def test_gate_rejects_artifact_bytes_or_oof_metrics_that_contradict_candidate():
+    candidate = _built_candidate()
+    assert candidate.artifact_sha256 == hashlib.sha256(
+        candidate.artifact_bytes
+    ).hexdigest()
+    artifact = json.loads(candidate.artifact_bytes)
+    artifact["validation"]["metrics_after"]["brier_score"] = 0.99
+    contradictory_bytes = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    contradictory = replace(
+        candidate,
+        artifact=artifact,
+        artifact_bytes=contradictory_bytes,
+    )
+
+    decision = evaluate_activation_gate(
+        contradictory,
+        artifact_integrity="verified",
+        provenances=("CONTROLLED_DEMO",) * 20,
+    )
+
+    assert decision.activate is False
+    assert decision.reason == "artifact_unverified"
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("outcome_ids", "correction_heads", "configuration", "artifact_schema"),
+)
+def test_gate_rejects_persisted_manifest_evidence_that_contradicts_artifact(field):
+    candidate = _built_candidate()
+    artifact = json.loads(candidate.artifact_bytes)
+    assert candidate.outcome_ids == tuple(artifact["dataset"]["outcome_ids"])
+    changes = {
+        "outcome_ids": tuple(reversed(candidate.outcome_ids)),
+        "correction_heads": ((candidate.outcome_ids[0], "a" * 36),),
+        "configuration": (("epochs", 1),),
+        "artifact_schema": "daibm.platt-calibration.v2",
+    }
+
+    decision = evaluate_activation_gate(
+        replace(candidate, **{field: changes[field]}),
+        artifact_integrity="verified",
+        provenances=("CONTROLLED_DEMO",) * 20,
+    )
+
+    assert decision.activate is False
+    assert decision.reason == "artifact_unverified"
+
+
+def test_gate_rejects_missing_persisted_outcome_scope_evidence():
+    candidate = _built_candidate()
+
+    decision = evaluate_activation_gate(
+        candidate,
+        artifact_integrity="verified",
+        provenances=("CONTROLLED_DEMO",) * 19,
+    )
+
+    assert decision.activate is False
+    assert decision.reason == "count_evidence_mismatch"
 
 
 def test_v3_loader_rejects_noncanonical_bytes_and_internal_lineage_tampering(

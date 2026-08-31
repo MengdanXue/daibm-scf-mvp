@@ -19,7 +19,11 @@ from app.identity import AuthenticatedUser
 from app.ledger import canonical_json, canonical_timestamp
 from app.models import FinancingRequestModel, LedgerEventModel
 from app.models_facility import FinancingFacilityModel
-from app.models_governance import CalibrationJobModel, OutcomeCorrectionModel
+from app.models_governance import (
+    CalibrationJobModel,
+    CalibrationRunObservationModel,
+    OutcomeCorrectionModel,
+)
 from app.models_lifecycle import (
     FacilityDefaultModel,
     FacilityDelinquencyModel,
@@ -469,7 +473,15 @@ class OutcomeService:
                     run = self.repository.get_run(session, run_id)
                     if run is None:
                         continue
-                    candidate = self._candidate_from_run(run)
+                    memberships = tuple(session.scalars(
+                        select(CalibrationRunObservationModel)
+                        .where(
+                            CalibrationRunObservationModel.calibration_run_id
+                            == run_id
+                        )
+                        .order_by(CalibrationRunObservationModel.outcome_id)
+                    ))
+                    candidate = self._candidate_from_run(run, memberships)
                     dataset = candidate.artifact.get("dataset")
                     if not isinstance(dataset, dict):
                         raise ValueError("calibration dataset manifest is invalid")
@@ -1031,7 +1043,10 @@ class OutcomeService:
             )
 
     @staticmethod
-    def _candidate_from_run(run: CalibrationRunModel) -> CalibrationCandidate:
+    def _candidate_from_run(
+        run: CalibrationRunModel,
+        memberships: tuple[CalibrationRunObservationModel, ...] = (),
+    ) -> CalibrationCandidate:
         if (
             run.artifact_locator is None
             or run.artifact_sha256 is None
@@ -1044,15 +1059,36 @@ class OutcomeService:
             raise ValueError("calibration artifact cannot be recovered")
         artifact_bytes = path.read_bytes()
         artifact = json.loads(artifact_bytes)
-        coefficients = artifact["coefficients"]
+        calibration = load_verified_calibration(
+            path,
+            expected_sha256=run.artifact_sha256,
+            run_id=str(run.calibration_run_id),
+            deployment_scope=run.deployment_scope,
+            expected_dataset_sha256=run.dataset_sha256,
+        )
+        schema = artifact.get("artifact_schema")
+        dataset = artifact.get("dataset")
+        validation = artifact.get("validation")
+        if not isinstance(dataset, dict):
+            raise ValueError("calibration artifact dataset is invalid")
+        if schema == "daibm.platt-calibration.v3":
+            if not isinstance(validation, dict):
+                raise ValueError("calibration artifact validation is invalid")
+            distinct_score_count = int(dataset["distinct_score_count"])
+            fold_assignment_sha256 = str(
+                validation["fold_assignment_sha256"]
+            )
+        else:
+            distinct_score_count = 0
+            fold_assignment_sha256 = ""
         return CalibrationCandidate(
             dataset_sha256=run.dataset_sha256,
             sample_count=run.sample_count,
             positive_count=run.positive_count,
             negative_count=run.negative_count,
             status=run.status,
-            slope=float(coefficients["slope"]),
-            intercept=float(coefficients["intercept"]),
+            slope=calibration.slope,
+            intercept=calibration.intercept,
             metrics_before={
                 key: float(value) for key, value in run.metrics_before.items()
             },
@@ -1061,6 +1097,24 @@ class OutcomeService:
             },
             artifact=artifact,
             artifact_bytes=artifact_bytes,
+            distinct_score_count=distinct_score_count,
+            fold_assignment_sha256=fold_assignment_sha256,
+            artifact_sha256=run.artifact_sha256,
+            outcome_ids=tuple(str(item.outcome_id) for item in memberships),
+            correction_heads=tuple(
+                (
+                    str(item.outcome_id),
+                    (
+                        str(item.correction_head_id)
+                        if item.correction_head_id is not None
+                        else None
+                    ),
+                )
+                for item in memberships
+            ),
+            configuration=tuple(sorted(run.configuration.items())),
+            artifact_schema=run.artifact_schema or "",
+            deployment_scope=run.deployment_scope,
         )
 
     @staticmethod
