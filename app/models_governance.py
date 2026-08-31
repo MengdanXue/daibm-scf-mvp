@@ -58,12 +58,24 @@ class CalibrationJobModel(Base):
             "AND trigger_correction_id IS NULL) OR "
             "(trigger_type IN ('correction_exclude', 'correction_reinstate') "
             "AND trigger_outcome_id IS NULL AND trigger_correction_id IS NOT NULL)) AND "
-            "((status = 'running' AND lease_owner IS NOT NULL AND leased_until IS NOT NULL) OR "
-            "(status IN ('queued', 'completed', 'failed') AND lease_owner IS NULL AND leased_until IS NULL)) AND "
-            "((status IN ('completed', 'failed') AND completed_at IS NOT NULL) OR "
-            "(status IN ('queued', 'running') AND completed_at IS NULL)) AND "
-            "(result_run_id IS NULL OR status = 'completed') AND "
-            "(failure_code IS NULL OR status = 'failed')",
+            "((status = 'queued' AND lease_owner IS NULL AND leased_until IS NULL "
+            "AND started_at IS NULL AND completed_at IS NULL "
+            "AND failure_code IS NULL AND result_run_id IS NULL) OR "
+            "(status = 'running' AND lease_owner IS NOT NULL "
+            "AND btrim(lease_owner) <> '' AND leased_until IS NOT NULL "
+            "AND started_at IS NOT NULL AND leased_until > started_at "
+            "AND completed_at IS NULL AND failure_code IS NULL "
+            "AND result_run_id IS NULL) OR "
+            "(status = 'completed' AND lease_owner IS NULL "
+            "AND leased_until IS NULL AND started_at IS NOT NULL "
+            "AND completed_at IS NOT NULL AND completed_at >= started_at "
+            "AND failure_code IS NULL AND result_run_id IS NOT NULL) OR "
+            "(status = 'failed' AND lease_owner IS NULL AND leased_until IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND completed_at >= started_at "
+            "AND failure_code IS NOT NULL "
+            "AND failure_code ~ '^[a-z][a-z0-9_]{2,63}$' "
+            "AND result_run_id IS NULL))",
             name="ck_calibration_jobs_contract",
         ),
         ForeignKeyConstraint(

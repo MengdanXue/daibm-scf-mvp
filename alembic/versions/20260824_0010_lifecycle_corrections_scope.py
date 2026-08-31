@@ -61,6 +61,21 @@ _GOVERNANCE_EVENT_TYPES = (
     "OUTCOME_TRAINING_REINSTATED",
     "CALIBRATION_DEPLOYMENT_INVALIDATED",
 )
+_DOWNGRADE_GUARDED_TABLES = (
+    "ledger_events",
+    "financing_requests",
+    "financing_facilities",
+    "facility_installments",
+    "facility_actions",
+    "facility_delinquencies",
+    "facility_restructures",
+    "facility_defaults",
+    "facility_writeoffs",
+    "outcome_corrections",
+    "calibration_jobs",
+    "calibration_runs",
+    "calibration_run_observations",
+)
 
 
 def _event_type_check(values: tuple[str, ...]) -> str:
@@ -355,12 +370,18 @@ def upgrade() -> None:
             "attempt_count BETWEEN 0 AND 3 AND "
             "((trigger_type = 'outcome_submitted' AND trigger_outcome_id IS NOT NULL AND trigger_correction_id IS NULL) OR "
             "(trigger_type IN ('correction_exclude', 'correction_reinstate') AND trigger_outcome_id IS NULL AND trigger_correction_id IS NOT NULL)) AND "
-            "((status = 'running' AND lease_owner IS NOT NULL AND leased_until IS NOT NULL) OR "
-            "(status IN ('queued', 'completed', 'failed') AND lease_owner IS NULL AND leased_until IS NULL)) AND "
-            "((status IN ('completed', 'failed') AND completed_at IS NOT NULL) OR "
-            "(status IN ('queued', 'running') AND completed_at IS NULL)) AND "
-            "(result_run_id IS NULL OR status = 'completed') AND "
-            "(failure_code IS NULL OR status = 'failed')",
+            "((status = 'queued' AND lease_owner IS NULL AND leased_until IS NULL "
+            "AND started_at IS NULL AND completed_at IS NULL AND failure_code IS NULL AND result_run_id IS NULL) OR "
+            "(status = 'running' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' "
+            "AND leased_until IS NOT NULL AND started_at IS NOT NULL AND leased_until > started_at "
+            "AND completed_at IS NULL AND failure_code IS NULL AND result_run_id IS NULL) OR "
+            "(status = 'completed' AND lease_owner IS NULL AND leased_until IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL AND completed_at >= started_at "
+            "AND failure_code IS NULL AND result_run_id IS NOT NULL) OR "
+            "(status = 'failed' AND lease_owner IS NULL AND leased_until IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL AND completed_at >= started_at "
+            "AND failure_code IS NOT NULL AND failure_code ~ '^[a-z][a-z0-9_]{2,63}$' "
+            "AND result_run_id IS NULL))",
             name="ck_calibration_jobs_contract",
         ),
     )
@@ -424,7 +445,7 @@ def upgrade() -> None:
         "ck_calibration_runs_deployment_contract",
         "calibration_runs",
         "calibration_run_id IS DISTINCT FROM previous_active_run_id AND ("
-        "(deployment_status = 'active' AND status = 'eligible_candidate' AND activation_mode IS NOT NULL AND activated_at IS NOT NULL AND deactivated_at IS NULL) OR "
+        "(deployment_status = 'active' AND deployment_scope IN ('controlled_demo', 'external_verified') AND status = 'eligible_candidate' AND activation_mode IS NOT NULL AND activated_at IS NOT NULL AND deactivated_at IS NULL) OR "
         "(deployment_status = 'superseded' AND status = 'eligible_candidate' AND activation_mode IS NOT NULL AND activated_at IS NOT NULL AND deactivated_at IS NOT NULL) OR "
         "(deployment_status IN ('not_deployed', 'rejected', 'activation_failed') AND activation_mode IS NULL AND activated_at IS NULL AND deactivated_at IS NULL AND previous_active_run_id IS NULL) OR "
         "(deployment_status = 'invalidated' AND status = 'eligible_candidate' AND activation_mode IS NOT NULL AND activated_at IS NOT NULL AND deactivated_at IS NOT NULL))",
@@ -500,7 +521,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    count = op.get_bind().scalar(
+    bind = op.get_bind()
+    bind.execute(
+        sa.text(
+            "LOCK TABLE "
+            + ", ".join(_DOWNGRADE_GUARDED_TABLES)
+            + " IN ACCESS EXCLUSIVE MODE"
+        )
+    )
+    count = bind.scalar(
         sa.text(
             "SELECT "
             "(SELECT count(*) FROM facility_delinquencies) + "
@@ -509,7 +538,8 @@ def downgrade() -> None:
             "(SELECT count(*) FROM facility_writeoffs) + "
             "(SELECT count(*) FROM outcome_corrections) + "
             "(SELECT count(*) FROM calibration_jobs) + "
-            "(SELECT count(*) FROM financing_facilities WHERE current_schedule_version <> 1 OR closure_reason IS NOT NULL) + "
+            "(SELECT count(*) FROM financing_facilities WHERE current_schedule_version <> 1 OR closure_reason IS NOT NULL OR status IN ('restructured', 'defaulted', 'written_off')) + "
+            "(SELECT count(*) FROM facility_actions WHERE action_type IN ('restructure', 'declare_default', 'write_off')) + "
             "(SELECT count(*) FROM facility_installments WHERE schedule_version <> 1 OR status = 'superseded') + "
             "(SELECT count(*) FROM financing_requests WHERE assessment_scope <> 'controlled_demo') + "
             "(SELECT count(*) FROM calibration_runs WHERE trigger_job_id IS NOT NULL OR trigger_outcome_id IS NULL OR deployment_status = 'invalidated' OR (artifact_schema IS NOT NULL AND artifact_schema <> 'daibm.platt-calibration.v2')) + "

@@ -134,7 +134,9 @@ class CalibrationRunModel(Base):
         ),
         CheckConstraint(
             "calibration_run_id IS DISTINCT FROM previous_active_run_id AND ("
-            "(deployment_status = 'active' AND status = 'eligible_candidate' "
+            "(deployment_status = 'active' AND deployment_scope IN "
+            "('controlled_demo', 'external_verified') "
+            "AND status = 'eligible_candidate' "
             "AND activation_mode IS NOT NULL "
             "AND activated_at IS NOT NULL AND deactivated_at IS NULL) OR "
             "(deployment_status = 'superseded' AND status = 'eligible_candidate' "
