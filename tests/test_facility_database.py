@@ -53,10 +53,11 @@ def _seed_prerequisites(session_factory):
         session.execute(
             text(
                 "INSERT INTO financing_requests "
-                "(request_id, created_at, updated_at, applicant_id, amount, "
+                "(request_id, created_at, updated_at, applicant_id, assessment_scope, amount, "
                 "term_days, features, risk_score, decision, explanations, "
                 "control_action, status, version) "
-                "VALUES (:id, :created_at, :created_at, 'supplier-test', 1000.00, "
+                "VALUES (:id, :created_at, :created_at, 'supplier-test', "
+                "'controlled_demo', 1000.00, "
                 "30, '{}'::jsonb, 0.1, 'approved', '[]'::jsonb, NULL, 'audited', 1)"
             ),
             {"id": request_id, "created_at": now},
@@ -179,7 +180,7 @@ def test_schema_declares_business_checks_and_idempotency_uniqueness(
     }
     assert ("idempotency_key",) in action_uniques
     assert ("facility_id", "payment_reference") in payment_uniques
-    assert ("facility_id", "sequence") in installment_uniques
+    assert ("facility_id", "schedule_version", "sequence") in installment_uniques
 
 
 def test_database_rejects_invalid_outstanding_and_duplicate_idempotency(

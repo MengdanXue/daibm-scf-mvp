@@ -34,7 +34,8 @@ def test_self_training_revision_extends_the_single_head():
     revision = scripts.get_revision("20260824_0009")
 
     assert revision.down_revision == "20260824_0008"
-    assert scripts.get_current_head() == "20260824_0009"
+    assert scripts.get_revision("20260824_0010").down_revision == "20260824_0009"
+    assert scripts.get_current_head() == "20260824_0010"
 
 
 def test_self_training_schema_has_constrained_single_active_deployment(
@@ -98,10 +99,13 @@ def test_self_training_schema_has_constrained_single_active_deployment(
         for item in inspector.get_indexes("calibration_runs")
     }
     assert "ix_calibration_runs_previous_active_run_id" in indexes
-    assert "uq_calibration_runs_single_active" in indexes
-    assert indexes["uq_calibration_runs_single_active"]["unique"] is True
+    assert "uq_calibration_runs_active_scope" in indexes
+    assert indexes["uq_calibration_runs_active_scope"]["unique"] is True
+    assert indexes["uq_calibration_runs_active_scope"]["column_names"] == [
+        "deployment_scope"
+    ]
     predicate = str(
-        indexes["uq_calibration_runs_single_active"]
+        indexes["uq_calibration_runs_active_scope"]
         .get("dialect_options", {})
         .get("postgresql_where", "")
     )
