@@ -143,14 +143,14 @@ class CalibrationJobService:
 
     def _prepare_run(self, claim: ClaimedJob) -> PreparedRun:
         with self.session_factory.begin() as session:
-            job = self.repository.get_job_for_update(session, claim.job_id)
-            self.repository._require_job_owner(job, claim.worker_id)
-            if job.deployment_scope != claim.deployment_scope:
-                raise RuntimeError("calibration job scope changed after claim")
             self.repository.acquire_scope_lock(
                 session,
                 scope=claim.deployment_scope,
             )
+            job = self.repository.get_job_for_update(session, claim.job_id)
+            self.repository._require_job_owner(job, claim.worker_id)
+            if job.deployment_scope != claim.deployment_scope:
+                raise RuntimeError("calibration job scope changed after claim")
 
             existing_for_job = self.repository.get_run_by_job(session, claim.job_id)
             if existing_for_job is not None:
@@ -307,11 +307,13 @@ class CalibrationJobService:
     @staticmethod
     def _prepared_existing(run: CalibrationRunModel) -> PreparedRun:
         if run.status == "failed":
-            return PreparedRun(
-                run_id=run.calibration_run_id,
-                candidate=None,
-                staged=None,
-            )
+            if run.failure_code == "calibration_data_rejected":
+                return PreparedRun(
+                    run_id=run.calibration_run_id,
+                    candidate=None,
+                    staged=None,
+                )
+            raise RuntimeError("existing calibration run is failed")
         if run.artifact_locator is None or run.artifact_sha256 is None:
             raise RuntimeError("existing calibration dataset is not recoverable")
         path = Path(run.artifact_locator)

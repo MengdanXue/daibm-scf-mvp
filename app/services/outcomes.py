@@ -192,6 +192,13 @@ class OutcomeService:
             facts, application, lineage = self._validate_submission_snapshot(
                 session, facility, payload
             )
+            # Eligible-set writers and activation use one lock order. The
+            # facility row is unrelated to calibration ownership; no
+            # calibration path acquires it after the scope lock.
+            self.repository.acquire_scope_lock(
+                session,
+                scope=application.assessment_scope,
+            )
             now = self._now()
             outcome = self.repository.add_outcome(
                 session,
@@ -956,6 +963,9 @@ class OutcomeService:
         provenances: tuple[str, ...],
         now: datetime,
     ) -> None:
+        # The caller timestamp is diagnostic/backward-compatible only. Lease
+        # fencing must sample time after both advisory and row locks are held.
+        del now
         scope, integrity, decision = self._deployment_decision(
             run_id,
             candidate,
@@ -967,7 +977,8 @@ class OutcomeService:
             self.repository._require_job_owner(job, worker_id)
             if job.deployment_scope != scope:
                 raise RuntimeError("calibration job and run scopes differ")
-            if job.leased_until is None or job.leased_until <= now:
+            fenced_now = self._now()
+            if job.leased_until is None or job.leased_until <= fenced_now:
                 raise RuntimeError("calibration job lease expired")
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
@@ -1002,7 +1013,7 @@ class OutcomeService:
                 job_id=job_id,
                 worker_id=worker_id,
                 result_run_id=run_id,
-                now=now,
+                now=fenced_now,
             )
 
     def _deployment_decision(
@@ -1414,26 +1425,6 @@ class OutcomeService:
                             fold_assignment_sha256 = value
                 except (OSError, TypeError, json.JSONDecodeError):
                     fold_assignment_sha256 = None
-            if integrity != "verified" and run.deployment_status != "active":
-                staged = StagedCalibrationArtifact(
-                    path=artifact_path,
-                    staged_path=(
-                        artifact_path.parent
-                        / f".pending-{run.artifact_sha256}.json"
-                    ),
-                    sha256=run.artifact_sha256,
-                )
-                completed_at = self._mark_publication_failed(
-                    run.calibration_run_id,
-                )
-                self._discard_failed_publication(staged)
-                run.status = "failed"
-                run.artifact_locator = None
-                run.artifact_sha256 = None
-                run.metrics_after = None
-                run.failure_code = "artifact_write_failed"
-                run.completed_at = completed_at
-                integrity = "not_applicable"
         evidence: dict[str, Any] = {}
         if session is not None:
             event = session.scalar(

@@ -24,6 +24,7 @@ from app.services.calibration_jobs import CalibrationJobService
 from app.services.identity import IdentityService
 from app.services.outcome_calibration import publish_candidate_artifact
 from app.services.outcomes import OutcomeService
+from app.schemas_outcome import ActualOutcomeCreate
 
 
 NOW = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
@@ -838,6 +839,11 @@ def test_terminal_publication_failure_settles_job_and_run_together(
                 CalibrationRunModel.trigger_job_id == job.job_id
             )
         )
+        failure_event = session.scalar(
+            select(LedgerEventModel)
+            .where(LedgerEventModel.event_type == "CALIBRATION_CANDIDATE_FAILED")
+            .order_by(LedgerEventModel.id.desc())
+        )
     assert (job.status, job.failure_code, job.attempt_count) == (
         "failed",
         "calibration_infrastructure_failure",
@@ -848,6 +854,7 @@ def test_terminal_publication_failure_settles_job_and_run_together(
         "activation_failed",
         "artifact_write_failed",
     )
+    assert failure_event.entity_id == run.calibration_run_id
 
 
 def test_expired_third_attempt_makes_its_prepared_run_non_deployable(
@@ -899,6 +906,303 @@ def test_expired_third_attempt_makes_its_prepared_run_non_deployable(
     )
 
 
+def test_activation_rechecks_fresh_time_after_waiting_for_scope_lock(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    current_time = [NOW + timedelta(minutes=4)]
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        clock=lambda: current_time[0],
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        clock=lambda: NOW,
+    )
+    claim = worker._claim("worker-a")
+    assert claim is not None
+    prepared = worker._prepare_run(claim)
+    worker._renew(claim)
+    publish_candidate_artifact(prepared.staged)
+    candidate = prepared.candidate or worker._reload_candidate(prepared.run_id)
+    provenances = worker._run_provenances(prepared.run_id)
+
+    blocker = session_factory()
+    blocker.begin()
+    worker.repository.acquire_scope_lock(blocker, scope=claim.deployment_scope)
+    started = Event()
+    errors: list[Exception] = []
+
+    def activate() -> None:
+        started.set()
+        try:
+            outcome_service._complete_claimed_deployment(
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                run_id=prepared.run_id,
+                candidate=candidate,
+                provenances=provenances,
+                now=current_time[0],
+            )
+        except Exception as error:
+            errors.append(error)
+
+    thread = Thread(target=activate)
+    thread.start()
+    assert started.wait(timeout=2)
+    assert thread.is_alive()
+    current_time[0] = NOW + timedelta(minutes=6)
+    blocker.commit()
+    thread.join(timeout=3)
+    blocker.close()
+
+    assert not thread.is_alive()
+    assert errors and "lease expired" in str(errors[0])
+    job = _jobs(session_factory)[0]
+    with session_factory() as session:
+        run = session.get(CalibrationRunModel, prepared.run_id)
+    assert job.status == "running"
+    assert run.deployment_status == "not_deployed"
+
+
+def test_prepare_obeys_scope_then_job_lock_order_without_deadlock(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    entered_scope_lock = Event()
+
+    class SignallingRepository(OutcomeRepository):
+        def acquire_scope_lock(self, session, *, scope):
+            entered_scope_lock.set()
+            return super().acquire_scope_lock(session, scope=scope)
+
+    repository = SignallingRepository()
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        repository=repository,
+        clock=lambda: NOW,
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        repository=repository,
+        clock=lambda: NOW,
+    )
+    claim = worker._claim("worker-a")
+    assert claim is not None
+
+    blocker = session_factory()
+    blocker.begin()
+    repository.acquire_scope_lock(blocker, scope=claim.deployment_scope)
+    entered_scope_lock.clear()
+    errors: list[Exception] = []
+
+    def prepare() -> None:
+        try:
+            worker._prepare_run(claim)
+        except Exception as error:
+            errors.append(error)
+
+    thread = Thread(target=prepare)
+    thread.start()
+    assert entered_scope_lock.wait(timeout=2)
+    blocker.execute(text("SET LOCAL lock_timeout = '400ms'"))
+    locked_job = repository.get_job_for_update(blocker, claim.job_id)
+    assert locked_job is not None
+    blocker.commit()
+    thread.join(timeout=5)
+    blocker.close()
+
+    assert not thread.is_alive()
+    assert errors == []
+
+
+def test_outcome_submit_cannot_enter_after_snapshot_compare_before_activation_commit(
+    session_factory,
+    tmp_path,
+):
+    controlled_ids, _, auditor = _seed_jobs(
+        session_factory,
+        controlled_count=21,
+    )
+    spare_outcome_id = controlled_ids[-1]
+    with session_factory.begin() as session:
+        spare = session.get(ActualOutcomeModel, spare_outcome_id)
+        spare_facility_id = spare.facility_id
+        application = session.get(FinancingRequestModel, spare.request_id)
+        application.risk_engine_version = "transparent_logistic_baseline_v0.1"
+        session.execute(
+            text("DELETE FROM calibration_jobs WHERE trigger_outcome_id = :outcome_id"),
+            {"outcome_id": spare_outcome_id},
+        )
+        session.execute(text("ALTER TABLE actual_outcomes DISABLE TRIGGER ALL"))
+        session.execute(
+            text("DELETE FROM actual_outcomes WHERE outcome_id = :outcome_id"),
+            {"outcome_id": spare_outcome_id},
+        )
+        session.execute(text("ALTER TABLE actual_outcomes ENABLE TRIGGER ALL"))
+
+    snapshot_checked = Event()
+    allow_activation = Event()
+
+    class BlockingSnapshotRepository(OutcomeRepository):
+        def run_membership_matches_eligible_snapshot(
+            self, session, run_id, *, scope
+        ):
+            result = super().run_membership_matches_eligible_snapshot(
+                session,
+                run_id,
+                scope=scope,
+            )
+            snapshot_checked.set()
+            assert allow_activation.wait(timeout=5)
+            return result
+
+    repository = BlockingSnapshotRepository()
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        repository=repository,
+        clock=lambda: NOW + timedelta(minutes=1),
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        repository=repository,
+        clock=lambda: NOW + timedelta(minutes=1),
+    )
+    claim = worker._claim("worker-a")
+    assert claim is not None
+    prepared = worker._prepare_run(claim)
+    worker._renew(claim)
+    publish_candidate_artifact(prepared.staged)
+    candidate = prepared.candidate or worker._reload_candidate(prepared.run_id)
+    provenances = worker._run_provenances(prepared.run_id)
+
+    activation_errors: list[Exception] = []
+
+    def activate() -> None:
+        try:
+            outcome_service._complete_claimed_deployment(
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                run_id=prepared.run_id,
+                candidate=candidate,
+                provenances=provenances,
+                now=NOW + timedelta(minutes=1),
+            )
+        except Exception as error:
+            activation_errors.append(error)
+
+    activation = Thread(target=activate)
+    activation.start()
+    assert snapshot_checked.wait(timeout=3)
+
+    submit_done = Event()
+    submit_errors: list[Exception] = []
+
+    def submit() -> None:
+        try:
+            outcome_service.submit(
+                spare_facility_id,
+                ActualOutcomeCreate(
+                    idempotency_key=uuid.uuid4(),
+                    observed_at=NOW + timedelta(minutes=10),
+                    evidence_sha256="9" * 64,
+                    provenance="CONTROLLED_DEMO",
+                ),
+                auditor,
+            )
+        except Exception as error:
+            submit_errors.append(error)
+        finally:
+            submit_done.set()
+
+    submission = Thread(target=submit)
+    submission.start()
+    assert not submit_done.wait(timeout=0.4), submit_errors
+    allow_activation.set()
+    activation.join(timeout=5)
+    submission.join(timeout=5)
+
+    assert activation_errors == []
+    assert submit_errors == []
+    assert submit_done.is_set()
+
+
+def test_missing_artifact_read_does_not_bypass_worker_retry_contract(
+    session_factory,
+    tmp_path,
+):
+    controlled_ids, _, auditor = _seed_jobs(session_factory, controlled_count=20)
+    correction_id = uuid.uuid4()
+    jobs = _jobs(session_factory)
+    with session_factory.begin() as session:
+        session.add(
+            OutcomeCorrectionModel(
+                correction_id=correction_id,
+                outcome_id=controlled_ids[0],
+                action="REINSTATE",
+                reason_code="EVIDENCE_VERIFIED",
+                comment="correction-triggered calibration",
+                evidence_sha256="7" * 64,
+                auditor_user_id=auditor.user_id,
+                idempotency_key=uuid.uuid4(),
+                request_sha256="8" * 64,
+                recorded_at=NOW + timedelta(minutes=1),
+            )
+        )
+        job = session.get(CalibrationJobModel, jobs[0].job_id)
+        job.trigger_type = "correction_reinstate"
+        job.trigger_outcome_id = None
+        job.trigger_correction_id = correction_id
+
+    def unavailable(_staged):
+        raise OSError("artifact store unavailable")
+
+    outcome_service = OutcomeService(
+        session_factory, artifact_root=tmp_path, clock=lambda: NOW
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        artifact_publisher=unavailable,
+        clock=lambda: NOW,
+    )
+    assert worker.process_next("worker-a") is True
+    job = _jobs(session_factory)[0]
+    with session_factory() as session:
+        run = session.scalar(
+            select(CalibrationRunModel).where(
+                CalibrationRunModel.trigger_job_id == job.job_id
+            )
+        )
+        run_id = run.calibration_run_id
+        pending = tmp_path / f".pending-{run.artifact_sha256}.json"
+    pending.unlink()
+
+    observed = outcome_service.get_run(run_id, auditor)
+    assert observed["status"] == "eligible_candidate"
+    assert observed["artifact_integrity"] in {"missing", "unavailable"}
+    assert _jobs(session_factory)[0].status == "queued"
+
+    assert worker.process_next("worker-b") is True
+    assert _jobs(session_factory)[0].status == "queued"
+    assert worker.process_next("worker-c") is True
+    terminal = _jobs(session_factory)[0]
+    with session_factory() as session:
+        run = session.get(CalibrationRunModel, run_id)
+    assert terminal.status == "failed"
+    assert terminal.attempt_count == 3
+    assert run.status == "failed"
+    assert terminal.result_run_id is None
+
+
 def test_database_allows_distinct_runs_for_same_dataset_hash(migrated_engine):
     with migrated_engine.connect() as connection:
         unique_constraints = set(
@@ -913,7 +1217,7 @@ def test_database_allows_distinct_runs_for_same_dataset_hash(migrated_engine):
     assert "calibration_runs_dataset_sha256_key" not in unique_constraints
 
 
-def test_correction_triggered_missing_artifact_fails_safely_with_run_ledger_entity(
+def test_correction_triggered_missing_artifact_read_is_safe_and_side_effect_free(
     session_factory,
     tmp_path,
 ):
@@ -966,15 +1270,16 @@ def test_correction_triggered_missing_artifact_fails_safely_with_run_ledger_enti
 
     result = outcome_service.get_run(run_id, auditor)
 
-    assert result["status"] == "failed"
-    assert result["failure_code"] == "artifact_write_failed"
+    assert result["status"] == "eligible_candidate"
+    assert result["failure_code"] is None
+    assert result["artifact_integrity"] in {"missing", "unavailable"}
     with session_factory() as session:
         event = session.scalar(
             select(LedgerEventModel)
             .where(LedgerEventModel.event_type == "CALIBRATION_CANDIDATE_FAILED")
             .order_by(LedgerEventModel.id.desc())
         )
-    assert event.entity_id == run_id
+    assert event is None
 
 
 def test_database_rollback_discards_uncommitted_staged_artifact(

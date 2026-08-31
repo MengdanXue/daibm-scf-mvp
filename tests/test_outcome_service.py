@@ -1011,7 +1011,7 @@ def test_startup_reconciliation_rejects_v3_db_metrics_that_contradict_artifact(
     assert reconciled.activation_reason == "artifact_unverified"
 
 
-def test_seeded_unrecoverable_artifact_is_durably_failed_once(
+def test_concurrent_unrecoverable_artifact_reads_are_side_effect_free(
     session_factory, tmp_path, monkeypatch
 ):
     facility_id, auditor = _seed_closed_facility(session_factory)
@@ -1034,14 +1034,18 @@ def test_seeded_unrecoverable_artifact_is_durably_failed_once(
             executor.map(lambda _index: service.get_run(run_id, auditor), range(2))
         )
 
-    assert {item["status"] for item in results} == {"failed"}
+    assert {item["status"] for item in results} == {"eligible_candidate"}
+    assert {item["artifact_integrity"] for item in results} == {"missing"}
     with session_factory() as session:
+        stored = session.get(CalibrationRunModel, run_id)
         count = session.scalar(
             select(func.count()).select_from(LedgerEventModel).where(
                 LedgerEventModel.event_type == "CALIBRATION_CANDIDATE_FAILED"
             )
         )
-    assert count == 1
+    assert stored.status == "eligible_candidate"
+    assert stored.failure_code is None
+    assert count == 0
 
 
 def test_seeded_artifact_lineage_mismatch_rejects_deployment(
