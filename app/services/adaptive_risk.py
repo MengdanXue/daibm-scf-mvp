@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -121,8 +122,37 @@ def evaluate_activation_gate(
         return ActivationDecision(False, "insufficient_positive_support", scope)
     if candidate.negative_count < 5:
         return ActivationDecision(False, "insufficient_negative_support", scope)
+    if (
+        candidate.positive_count + candidate.negative_count
+        != candidate.sample_count
+        or candidate.distinct_score_count > candidate.sample_count
+    ):
+        return ActivationDecision(False, "count_evidence_mismatch", scope)
+    if scope not in {"controlled_demo", "external_verified"}:
+        return ActivationDecision(False, "unsupported_deployment_scope", scope)
     if artifact_integrity != "verified":
         return ActivationDecision(False, "artifact_unverified", scope)
+    if candidate.distinct_score_count < 2:
+        return ActivationDecision(False, "insufficient_distinct_scores", scope)
+    schema = candidate.artifact.get("artifact_schema")
+    if schema == "daibm.platt-calibration.v2":
+        return ActivationDecision(False, "legacy_artifact_not_activatable", scope)
+    if schema != "daibm.platt-calibration.v3":
+        return ActivationDecision(False, "unsupported_artifact_schema", scope)
+    deployment = candidate.artifact.get("deployment")
+    if not isinstance(deployment, dict) or deployment.get("scope") != scope:
+        return ActivationDecision(False, "deployment_scope_mismatch", scope)
+    metric_values = (
+        candidate.metrics_before.get("brier_score"),
+        candidate.metrics_before.get("log_loss"),
+        candidate.metrics_after.get("brier_score"),
+        candidate.metrics_after.get("log_loss"),
+    )
+    if not all(
+        isinstance(value, (int, float)) and math.isfinite(float(value))
+        for value in metric_values
+    ):
+        return ActivationDecision(False, "metrics_nonfinite", scope)
     if candidate.metrics_after["brier_score"] > candidate.metrics_before["brier_score"]:
         return ActivationDecision(False, "brier_regression", scope)
     if candidate.metrics_after["log_loss"] > candidate.metrics_before["log_loss"]:
@@ -138,6 +168,131 @@ def is_strictly_newer_candidate(
     return candidate_sample_count > active_sample_count
 
 
+def _canonical_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _require_uuid(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("identifier is not a string")
+    parsed = uuid.UUID(value)
+    if str(parsed) != value.lower():
+        raise ValueError("identifier is not canonical")
+    return value
+
+
+def _require_metric_block(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"brier_score", "log_loss"}:
+        raise ValueError("calibration metric lineage is incomplete")
+    if not all(
+        isinstance(item, (int, float))
+        and math.isfinite(float(item))
+        and float(item) >= 0.0
+        for item in value.values()
+    ):
+        raise ValueError("calibration metrics are invalid")
+
+
+def _validate_v3_lineage(
+    artifact: dict[str, object],
+    artifact_bytes: bytes,
+    *,
+    deployment_scope: str,
+    expected_dataset_sha256: str,
+) -> None:
+    if _canonical_bytes(artifact) != artifact_bytes:
+        raise ValueError("v3 calibration artifact is not canonical")
+    deployment = artifact.get("deployment")
+    if not isinstance(deployment, dict) or deployment.get("scope") != deployment_scope:
+        raise ValueError("calibration artifact deployment scope mismatch")
+    dataset = artifact.get("dataset")
+    if not isinstance(dataset, dict) or dataset.get("sha256") != expected_dataset_sha256:
+        raise ValueError("calibration artifact dataset lineage mismatch")
+    outcome_ids = dataset.get("outcome_ids")
+    if not isinstance(outcome_ids, list) or not outcome_ids:
+        raise ValueError("calibration outcome lineage is missing")
+    canonical_outcome_ids = [_require_uuid(value) for value in outcome_ids]
+    if canonical_outcome_ids != sorted(canonical_outcome_ids) or len(
+        set(canonical_outcome_ids)
+    ) != len(canonical_outcome_ids):
+        raise ValueError("calibration outcome lineage is not canonical")
+    sample_count = dataset.get("sample_count")
+    positive_count = dataset.get("positive_count")
+    negative_count = dataset.get("negative_count")
+    if (
+        type(sample_count) is not int
+        or type(positive_count) is not int
+        or type(negative_count) is not int
+        or sample_count != len(canonical_outcome_ids)
+        or positive_count + negative_count != sample_count
+    ):
+        raise ValueError("calibration count lineage is inconsistent")
+    distinct_score_count = dataset.get("distinct_score_count")
+    if (
+        type(distinct_score_count) is not int
+        or distinct_score_count < 1
+        or distinct_score_count > sample_count
+    ):
+        raise ValueError("calibration distinct-score lineage is invalid")
+    correction_heads = dataset.get("correction_heads")
+    if not isinstance(correction_heads, dict) or set(correction_heads) != set(
+        canonical_outcome_ids
+    ):
+        raise ValueError("calibration correction-head lineage is incomplete")
+    for correction_head in correction_heads.values():
+        if correction_head is not None:
+            _require_uuid(correction_head)
+
+    validation = artifact.get("validation")
+    if (
+        not isinstance(validation, dict)
+        or validation.get("method") != "deterministic_stratified_5_fold_oof"
+    ):
+        raise ValueError("calibration validation method is invalid")
+    assignments = validation.get("fold_assignments")
+    if not isinstance(assignments, dict) or set(assignments) != set(
+        canonical_outcome_ids
+    ):
+        raise ValueError("calibration fold assignments are incomplete")
+    if not all(type(fold) is int and 0 <= fold < 5 for fold in assignments.values()):
+        raise ValueError("calibration fold assignments are invalid")
+    expected_fold_hash = hashlib.sha256(_canonical_bytes(assignments)).hexdigest()
+    if validation.get("fold_assignment_sha256") != expected_fold_hash:
+        raise ValueError("calibration fold assignment hash mismatch")
+    if set(assignments.values()) != set(range(5)):
+        raise ValueError("calibration fold assignment is incomplete")
+    folds = validation.get("folds")
+    if not isinstance(folds, list) or len(folds) != 5:
+        raise ValueError("calibration fold evidence is incomplete")
+    all_ids = set(canonical_outcome_ids)
+    for fold_number, fold in enumerate(folds):
+        if not isinstance(fold, dict) or fold.get("fold") != fold_number:
+            raise ValueError("calibration fold evidence is not canonical")
+        held_out = fold.get("held_out_outcome_ids")
+        training = fold.get("training_outcome_ids")
+        if not isinstance(held_out, list) or not isinstance(training, list):
+            raise ValueError("calibration fold evidence is malformed")
+        expected_held_out = {
+            outcome_id
+            for outcome_id, assigned_fold in assignments.items()
+            if assigned_fold == fold_number
+        }
+        if (
+            set(held_out) != expected_held_out
+            or set(training) != all_ids - expected_held_out
+            or set(held_out) & set(training)
+        ):
+            raise ValueError("calibration fold evidence is inconsistent")
+    _require_metric_block(validation.get("metrics_before"))
+    _require_metric_block(validation.get("metrics_after"))
+
+
 def load_verified_calibration(
     path: Path,
     *,
@@ -151,7 +306,20 @@ def load_verified_calibration(
         if hashlib.sha256(artifact_bytes).hexdigest() != expected_sha256:
             raise ValueError("calibration artifact hash mismatch")
         artifact = json.loads(artifact_bytes)
-        if artifact.get("artifact_schema") != "daibm.platt-calibration.v2":
+        if not isinstance(artifact, dict):
+            raise ValueError("calibration artifact root must be an object")
+        schema = artifact.get("artifact_schema")
+        if schema == "daibm.platt-calibration.v2":
+            if deployment_scope != "controlled_demo":
+                raise ValueError("legacy v2 calibration is controlled-demo only")
+        elif schema == "daibm.platt-calibration.v3":
+            _validate_v3_lineage(
+                artifact,
+                artifact_bytes,
+                deployment_scope=deployment_scope,
+                expected_dataset_sha256=expected_dataset_sha256,
+            )
+        else:
             raise ValueError("calibration artifact schema is not deployable")
         coefficients = artifact["coefficients"]
         configuration = artifact["configuration"]
