@@ -532,7 +532,7 @@ class FacilityService:
             )
             if replay is not None:
                 return replay
-            self._require_role(user, Role.RISK_MANAGER)
+            self._require_role(user, Role.FINANCIER)
             facility = self._load_for_command(session, normalized_id, user)
             replay = self._replay(
                 session, command.idempotency_key, user, semantic
@@ -936,7 +936,20 @@ class FacilityService:
                 return [FacilityAction.INITIATE_DISBURSEMENT.value]
             if status == FacilityStatus.DISBURSED:
                 return [FacilityAction.CONFIRM_DISBURSEMENT.value]
-            if status in {FacilityStatus.ACTIVE, FacilityStatus.OVERDUE} and any(
+            if status == FacilityStatus.ACTIVE:
+                actions = [FacilityAction.MARK_OVERDUE.value]
+                if any(
+                    item.status == PaymentStatus.SUBMITTED.value
+                    for item in payments
+                ):
+                    actions.extend(
+                        [
+                            FacilityAction.CONFIRM_PAYMENT.value,
+                            FacilityAction.REJECT_PAYMENT.value,
+                        ]
+                    )
+                return actions
+            if status == FacilityStatus.OVERDUE and any(
                 item.status == PaymentStatus.SUBMITTED.value for item in payments
             ):
                 return [
@@ -948,8 +961,6 @@ class FacilityService:
             FacilityStatus.OVERDUE,
         }:
             return [FacilityAction.SUBMIT_PAYMENT.value]
-        if user.role == Role.RISK_MANAGER.value and status == FacilityStatus.ACTIVE:
-            return [FacilityAction.MARK_OVERDUE.value]
         if user.role == Role.AUDITOR.value and status == FacilityStatus.REPAID:
             return [FacilityAction.CLOSE.value]
         return []

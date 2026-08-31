@@ -428,7 +428,7 @@ def test_creation_requires_financier_and_approved_audited_application(
         service.create(_create_request(request_id), users["financier.demo"])
 
 
-def test_mark_overdue_requires_risk_manager_and_a_past_due_installment(
+def test_mark_overdue_requires_financier_and_a_past_due_installment(
     facility_context,
 ):
     service, users, request_id = facility_context
@@ -450,13 +450,13 @@ def test_mark_overdue_requires_risk_manager_and_a_past_due_installment(
             facility["facility_id"],
             facility["installments"][0]["installment_id"],
             _command(facility["version"]),
-            users["financier.demo"],
+            users["risk.demo"],
         )
     overdue = service.mark_overdue(
         facility["facility_id"],
         facility["installments"][0]["installment_id"],
         _command(facility["version"]),
-        users["risk.demo"],
+        users["financier.demo"],
     )
     assert overdue["status"] == "overdue"
     assert overdue["installments"][0]["status"] == "overdue"

@@ -251,6 +251,7 @@ def test_five_roles_enforce_and_complete_all_action_resources(
     )
     assert confirmed.status_code == 200
     active = confirmed.json()
+    assert "mark_overdue" in active["allowed_actions"]
 
     _login(facility_client, "supplier.demo")
     submitted = facility_client.post(
@@ -265,12 +266,14 @@ def test_five_roles_enforce_and_complete_all_action_resources(
     assert submitted.status_code == 200
     payment = submitted.json()["payments"][0]
 
-    _login(facility_client, "risk.demo")
+    _login(facility_client, "financier.demo")
     overdue = facility_client.post(
         f"/api/v1/facilities/{facility_id}/mark-overdue",
         json={
             **_command(submitted.json()["version"]),
             "installment_id": active["installments"][0]["installment_id"],
+            "days_past_due": 1,
+            "evidence_sha256": "a" * 64,
         },
     )
     assert overdue.status_code == 200
