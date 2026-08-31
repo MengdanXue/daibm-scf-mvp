@@ -484,13 +484,17 @@ def test_database_rejects_active_legacy_mixed_scope(migrated_engine):
 
 
 _INVALID_JOB_CASES = (
+    "queued_at_retry_limit",
     "queued_with_started_at",
+    "running_with_zero_attempts",
     "running_without_started_at",
     "running_with_blank_lease_owner",
     "running_with_expired_initial_lease",
+    "completed_with_zero_attempts",
     "completed_without_result",
     "completed_without_started_at",
     "completed_before_started_at",
+    "failed_with_zero_attempts",
     "failed_without_failure_code",
     "failed_with_blank_failure_code",
     "failed_without_started_at",
@@ -546,20 +550,28 @@ def test_database_rejects_incomplete_calibration_job_states(
         },
     }
     values = states[status]
-    if case == "queued_with_started_at":
+    if case == "queued_at_retry_limit":
+        values["attempt_count"] = 3
+    elif case == "queued_with_started_at":
         values["started_at"] = now
+    elif case == "running_with_zero_attempts":
+        values["attempt_count"] = 0
     elif case == "running_without_started_at":
         values["started_at"] = None
     elif case == "running_with_blank_lease_owner":
         values["lease_owner"] = ""
     elif case == "running_with_expired_initial_lease":
         values["leased_until"] = now - timedelta(seconds=1)
+    elif case == "completed_with_zero_attempts":
+        values["attempt_count"] = 0
     elif case == "completed_without_result":
         values["result_run_id"] = None
     elif case == "completed_without_started_at":
         values["started_at"] = None
     elif case == "completed_before_started_at":
         values["completed_at"] = now - timedelta(seconds=1)
+    elif case == "failed_with_zero_attempts":
+        values["attempt_count"] = 0
     elif case == "failed_without_failure_code":
         values["failure_code"] = None
     elif case == "failed_with_blank_failure_code":
