@@ -139,6 +139,7 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 created_at=NOW,
                 updated_at=NOW,
                 applicant_id="E0001",
+                assessment_scope="controlled_demo",
                 amount=Decimal("1000.00"),
                 term_days=30,
                 features={},
@@ -161,6 +162,8 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 currency="CNY",
                 status="closed",
                 version=7,
+                current_schedule_version=1,
+                closure_reason="repaid",
                 created_by_user_id=financier_id,
                 created_at=NOW,
                 updated_at=NOW,
@@ -181,9 +184,6 @@ def _login(client: TestClient, username: str) -> None:
 def _payload(key: uuid.UUID | None = None) -> dict:
     return {
         "idempotency_key": str(key or uuid.uuid4()),
-        "defaulted": False,
-        "days_past_due": 0,
-        "loss_amount": "0.00",
         "observed_at": "2026-08-24T12:00:00Z",
         "evidence_sha256": "a" * 64,
         "provenance": "CONTROLLED_DEMO",
@@ -320,7 +320,9 @@ def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_clie
         "transparent_logistic_baseline_v0.1"
     )
     assert body["outcome"]["model_version_id"] is None
-    assert body["calibration_run"]["artifact_integrity"] == "verified"
+    assert body["outcome"]["defaulted"] is False
+    assert body["outcome"]["loss_amount"] == "0.00"
+    assert body["calibration_job"]["status"] == "queued"
 
 
 def test_outcome_routes_are_auditor_only(outcome_client, session_factory):
@@ -334,7 +336,7 @@ def test_outcome_routes_are_auditor_only(outcome_client, session_factory):
     ).status_code == 403
 
 
-def test_auditor_submits_and_queries_outcome_and_candidate_run(
+def test_auditor_submits_and_queries_derived_outcome_and_queued_job(
     outcome_client,
     session_factory,
 ):
@@ -350,22 +352,16 @@ def test_auditor_submits_and_queries_outcome_and_candidate_run(
     assert created.status_code == 201
     body = created.json()
     assert body["outcome"]["facility_id"] == str(facility_id)
-    assert body["calibration_run"]["status"] == "exploratory_candidate"
-    assert body["calibration_run"]["deployment_status"] == "rejected"
-    assert body["calibration_run"]["activation_reason"] == "training_not_eligible"
+    assert body["outcome"]["effective_training_eligible"] is True
+    assert body["calibration_job"]["status"] == "queued"
+    assert body["calibration_job"]["deployment_scope"] == "controlled_demo"
     assert "artifact_locator" not in created.text
     outcome_id = body["outcome"]["outcome_id"]
-    run_id = body["calibration_run"]["calibration_run_id"]
     assert outcome_client.get("/api/v1/outcomes").json() == [body["outcome"]]
     assert outcome_client.get(f"/api/v1/outcomes/{outcome_id}").json() == body[
         "outcome"
     ]
-    assert outcome_client.get("/api/v1/calibration-runs").json() == [
-        body["calibration_run"]
-    ]
-    assert outcome_client.get(f"/api/v1/calibration-runs/{run_id}").json() == body[
-        "calibration_run"
-    ]
+    assert outcome_client.get("/api/v1/calibration-runs").json() == []
     assert (
         outcome_client.get("/api/v1/calibration-deployments/active").status_code
         == 404
@@ -396,7 +392,7 @@ def test_outcome_api_maps_validation_conflict_and_not_found_without_path_leaks(
         f"/api/v1/facilities/{facility_id}/actual-outcome", json=created_payload
     ).status_code == 201
     conflict = _payload(uuid.UUID(created_payload["idempotency_key"]))
-    conflict["days_past_due"] = 1
+    conflict["evidence_sha256"] = "b" * 64
     response = outcome_client.post(
         f"/api/v1/facilities/{facility_id}/actual-outcome", json=conflict
     )
@@ -408,3 +404,63 @@ def test_outcome_api_maps_validation_conflict_and_not_found_without_path_leaks(
         outcome_client.get(f"/api/v1/calibration-runs/{uuid.uuid4()}").status_code
         == 404
     )
+
+
+def test_api_rejects_client_facts_and_exposes_preview_and_corrections(
+    outcome_client, session_factory
+):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    preview = outcome_client.get(
+        f"/api/v1/facilities/{facility_id}/actual-outcome-preview"
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["loss_amount"] == "0.00"
+    assert "artifact" not in preview.text
+
+    unsafe = {**_payload(), "defaulted": False}
+    assert outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=unsafe
+    ).status_code == 422
+    created = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
+    )
+    assert created.status_code == 201, created.text
+    outcome_id = created.json()["outcome"]["outcome_id"]
+    correction = {
+        "idempotency_key": str(uuid.uuid4()),
+        "action": "EXCLUDE",
+        "reason_code": "inconsistent_lifecycle",
+        "comment": "  Verified governance discrepancy.  ",
+        "evidence_sha256": "b" * 64,
+    }
+    response = outcome_client.post(
+        f"/api/v1/outcomes/{outcome_id}/corrections", json=correction
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["effective_training_eligible"] is False
+    assert response.json()["calibration_job"]["trigger_type"] == "correction_exclude"
+    history = outcome_client.get(f"/api/v1/outcomes/{outcome_id}/corrections")
+    assert history.status_code == 200
+    assert history.json()[0]["reason_code"] == "INCONSISTENT_LIFECYCLE"
+    assert "artifact_locator" not in response.text
+
+
+def test_correction_routes_are_auditor_only(outcome_client, session_factory):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    outcome_id = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
+    ).json()["outcome"]["outcome_id"]
+    _login(outcome_client, "financier.demo")
+    assert outcome_client.get(
+        f"/api/v1/outcomes/{outcome_id}/corrections"
+    ).status_code == 403
+    assert outcome_client.post(
+        f"/api/v1/outcomes/{outcome_id}/corrections",
+        json={
+            "idempotency_key": str(uuid.uuid4()), "action": "EXCLUDE",
+            "reason_code": "INCONSISTENT_LIFECYCLE", "comment": "Verified",
+            "evidence_sha256": "b" * 64,
+        },
+    ).status_code == 403

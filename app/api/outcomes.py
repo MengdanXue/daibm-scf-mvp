@@ -9,7 +9,16 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import require_roles
 from app.identity import AuthenticatedUser
-from app.schemas_outcome import ActualOutcomeCreate, CalibrationRollbackRequest
+from app.schemas_outcome import (
+    ActualOutcomeCreate,
+    ActualOutcomePreviewResponse,
+    ActualOutcomeResponse,
+    CalibrationRollbackRequest,
+    CorrectionSubmissionResponse,
+    OutcomeCorrectionCreate,
+    OutcomeCorrectionResponse,
+    OutcomeSubmissionResponse,
+)
 from app.services.outcomes import (
     ForbiddenOutcome,
     OutcomeConflict,
@@ -22,26 +31,6 @@ CurrentAuditor = Annotated[
     AuthenticatedUser,
     Depends(require_roles("auditor")),
 ]
-
-
-class ActualOutcomeResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    outcome_id: str
-    facility_id: str
-    request_id: str
-    risk_assessment_id: str
-    model_version_id: str | None
-    risk_engine_version: str
-    defaulted: bool
-    days_past_due: int
-    loss_amount: str
-    observed_at: str
-    evidence_sha256: str
-    provenance: str
-    original_risk_score: float
-    risk_input_sha256: str
-    recorded_at: str
 
 
 class CalibrationRunResponse(BaseModel):
@@ -69,13 +58,6 @@ class CalibrationRunResponse(BaseModel):
     previous_active_run_id: str | None
     started_at: str
     completed_at: str
-
-
-class OutcomeSubmissionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    outcome: ActualOutcomeResponse
-    calibration_run: CalibrationRunResponse
 
 
 def _execute(operation: Callable[[], Any]) -> Any:
@@ -125,6 +107,20 @@ def submit_actual_outcome(
     )
 
 
+@router.get(
+    "/api/v1/facilities/{facility_id}/actual-outcome-preview",
+    response_model=ActualOutcomePreviewResponse,
+)
+def preview_actual_outcome(
+    facility_id: str,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.outcome_service.preview(facility_id, user)
+    )
+
+
 @router.get("/api/v1/outcomes", response_model=list[ActualOutcomeResponse])
 def list_actual_outcomes(
     user: CurrentAuditor,
@@ -145,6 +141,38 @@ def get_actual_outcome(
 ):
     return _execute(
         lambda: request.app.state.outcome_service.get_outcome(outcome_id, user)
+    )
+
+
+@router.get(
+    "/api/v1/outcomes/{outcome_id}/corrections",
+    response_model=list[OutcomeCorrectionResponse],
+)
+def list_outcome_corrections(
+    outcome_id: str,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.outcome_service.list_corrections(outcome_id, user)
+    )
+
+
+@router.post(
+    "/api/v1/outcomes/{outcome_id}/corrections",
+    response_model=CorrectionSubmissionResponse,
+    status_code=201,
+)
+def create_outcome_correction(
+    outcome_id: str,
+    payload: OutcomeCorrectionCreate,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.outcome_service.create_correction(
+            outcome_id, payload, user
+        )
     )
 
 

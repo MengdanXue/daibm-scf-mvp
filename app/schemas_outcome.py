@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -12,9 +11,6 @@ class ActualOutcomeCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     idempotency_key: UUID
-    defaulted: bool
-    days_past_due: int = Field(ge=0)
-    loss_amount: Decimal = Field(ge=Decimal("0.00"), max_digits=14, decimal_places=2)
     observed_at: datetime
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     provenance: Literal["CONTROLLED_DEMO", "EXTERNAL_VERIFIED"]
@@ -27,10 +23,140 @@ class ActualOutcomeCreate(BaseModel):
         return value
 
 
+class OutcomeCorrectionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: UUID
+    action: Literal["EXCLUDE", "REINSTATE"]
+    reason_code: str = Field(min_length=3, max_length=64)
+    comment: str = Field(min_length=1, max_length=500)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("reason_code", mode="before")
+    @classmethod
+    def normalize_reason_code(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().upper()
+        return value
+
+    @field_validator("reason_code")
+    @classmethod
+    def validate_reason_code(cls, value: str) -> str:
+        if not value[0].isalpha() or not all(
+            character.isupper() or character.isdigit() or character == "_"
+            for character in value
+        ):
+            raise ValueError("reason_code must use uppercase governed-code syntax")
+        return value
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("comment must not be blank")
+        return value
+
+
+class CalibrationJobResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: UUID
+    deployment_scope: Literal["controlled_demo", "external_verified"]
+    trigger_type: Literal[
+        "outcome_submitted", "correction_exclude", "correction_reinstate"
+    ]
+    trigger_outcome_id: UUID | None
+    trigger_correction_id: UUID | None
+    status: Literal["queued", "running", "completed", "failed"]
+    attempt_count: int = Field(ge=0, le=3)
+    failure_code: str | None
+    result_run_id: UUID | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class ActualOutcomeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome_id: UUID
+    facility_id: UUID
+    request_id: UUID
+    risk_assessment_id: UUID
+    model_version_id: UUID | None
+    risk_engine_version: str
+    defaulted: bool
+    days_past_due: int = Field(ge=0)
+    loss_amount: str = Field(pattern=r"^\d+\.\d{2}$")
+    observed_at: datetime
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provenance: Literal["CONTROLLED_DEMO", "EXTERNAL_VERIFIED"]
+    original_risk_score: float = Field(ge=0, le=1)
+    risk_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    recorded_at: datetime
+    effective_training_eligible: bool
+
+
+class OutcomeCorrectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    correction_id: UUID
+    outcome_id: UUID
+    action: Literal["EXCLUDE", "REINSTATE"]
+    reason_code: str
+    comment: str
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    auditor_user_id: UUID
+    idempotency_key: UUID
+    recorded_at: datetime
+    effective_training_eligible: bool
+
+
+class OutcomeSubmissionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: ActualOutcomeResponse
+    calibration_job: CalibrationJobResponse
+
+
+class CorrectionSubmissionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    correction: OutcomeCorrectionResponse
+    effective_training_eligible: bool
+    invalidated_run_ids: list[UUID]
+    calibration_job: CalibrationJobResponse
+
+
+class ActualOutcomePreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    facility_id: UUID
+    defaulted: bool
+    days_past_due: int = Field(ge=0)
+    loss_amount: str = Field(pattern=r"^\d+\.\d{2}$")
+    closure_reason: Literal["repaid", "settled_after_default", "written_off"]
+    closed_at: datetime
+    expected_provenance: Literal["CONTROLLED_DEMO", "EXTERNAL_VERIFIED"]
+    deployment_scope: Literal["controlled_demo", "external_verified"]
+
+
 class CalibrationRollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_active_run_id: UUID
 
 
-__all__ = ["ActualOutcomeCreate", "CalibrationRollbackRequest"]
+__all__ = [
+    "ActualOutcomeCreate",
+    "ActualOutcomePreviewResponse",
+    "ActualOutcomeResponse",
+    "CalibrationJobResponse",
+    "CalibrationRollbackRequest",
+    "CorrectionSubmissionResponse",
+    "OutcomeCorrectionCreate",
+    "OutcomeCorrectionResponse",
+    "OutcomeSubmissionResponse",
+]
