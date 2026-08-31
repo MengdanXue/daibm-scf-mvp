@@ -20,7 +20,10 @@ from app.models_governance import (
 )
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.repositories.outcomes import OutcomeRepository
-from app.services.calibration_jobs import CalibrationJobService
+from app.services.calibration_jobs import (
+    CalibrationJobService,
+    DeterministicCalibrationRejection,
+)
 from app.services.identity import IdentityService
 from app.services.outcome_calibration import publish_candidate_artifact
 from app.services.outcomes import OutcomeService
@@ -1418,6 +1421,233 @@ def test_job_cannot_complete_after_candidate_becomes_non_deployable(
     job = _jobs(session_factory)[0]
     assert job.status == "running"
     assert job.result_run_id is None
+
+
+def test_process_level_deterministic_exception_after_lease_expiry_is_deferred(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=1)
+    current_time = [NOW]
+
+    def expire_then_reject(*_args, **_kwargs):
+        current_time[0] = NOW + timedelta(minutes=2)
+        raise DeterministicCalibrationRejection
+
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        trainer=expire_then_reject,
+        clock=lambda: current_time[0],
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        clock=lambda: current_time[0],
+        lease_duration=timedelta(minutes=1),
+    )
+
+    assert worker.process_next("worker-a") is False
+
+    job = _jobs(session_factory)[0]
+    assert (job.status, job.attempt_count, job.failure_code) == (
+        "queued",
+        0,
+        None,
+    )
+
+
+def test_process_level_empty_eligible_dataset_after_lease_expiry_is_deferred(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=1)
+    with session_factory.begin() as session:
+        session.execute(
+            text(
+                "UPDATE calibration_jobs "
+                "SET deployment_scope = 'external_verified'"
+            )
+        )
+    current_time = [NOW]
+
+    def expire_empty_training(observations, **_kwargs):
+        assert observations == ()
+        current_time[0] = NOW + timedelta(minutes=2)
+        raise ValueError("empty governed dataset")
+
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        trainer=expire_empty_training,
+        clock=lambda: current_time[0],
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        clock=lambda: current_time[0],
+        lease_duration=timedelta(minutes=1),
+    )
+
+    assert worker.process_next("worker-a") is False
+
+    job = _jobs(session_factory, "external_verified")[0]
+    assert (job.status, job.attempt_count, job.failure_code) == (
+        "queued",
+        0,
+        None,
+    )
+
+
+def test_process_level_activation_expiry_restores_attempt_after_catch(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    jobs = _jobs(session_factory)
+    first_job_id = jobs[0].job_id
+    with session_factory.begin() as session:
+        session.execute(
+            text("DELETE FROM calibration_jobs WHERE job_id <> :job_id"),
+            {"job_id": first_job_id},
+        )
+
+    current_time = [NOW]
+    published = Event()
+    allow_publisher = Event()
+    activation_waiting = Event()
+
+    class SignallingRepository(OutcomeRepository):
+        def acquire_scope_lock(self, session, *, scope):
+            activation_waiting.set()
+            return super().acquire_scope_lock(session, scope=scope)
+
+    repository = SignallingRepository()
+
+    def pausing_publish(staged):
+        artifact = publish_candidate_artifact(staged)
+        published.set()
+        assert allow_publisher.wait(timeout=5)
+        return artifact
+
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        repository=repository,
+        clock=lambda: current_time[0],
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        repository=repository,
+        artifact_publisher=pausing_publish,
+        clock=lambda: current_time[0],
+        lease_duration=timedelta(minutes=1),
+    )
+    results: list[bool] = []
+    thread = Thread(target=lambda: results.append(worker.process_next("worker-a")))
+    thread.start()
+    assert published.wait(timeout=5)
+
+    blocker = session_factory()
+    blocker.begin()
+    repository.acquire_scope_lock(blocker, scope="controlled_demo")
+    activation_waiting.clear()
+    allow_publisher.set()
+    assert activation_waiting.wait(timeout=3)
+    current_time[0] = NOW + timedelta(minutes=2)
+    blocker.commit()
+    thread.join(timeout=5)
+    blocker.close()
+
+    assert not thread.is_alive()
+    assert results == [False]
+    job = _jobs(session_factory)[0]
+    assert (job.status, job.attempt_count, job.result_run_id) == (
+        "queued",
+        0,
+        None,
+    )
+
+
+def test_infrastructure_settlement_scope_contention_is_deferred_without_attempt(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    jobs = _jobs(session_factory)
+    first_job_id = jobs[0].job_id
+    with session_factory.begin() as session:
+        session.execute(
+            text("DELETE FROM calibration_jobs WHERE job_id <> :job_id"),
+            {"job_id": first_job_id},
+        )
+
+    publisher_entered = Event()
+    allow_failure = Event()
+
+    def fail_after_barrier(_staged):
+        publisher_entered.set()
+        assert allow_failure.wait(timeout=5)
+        raise OSError("artifact store unavailable")
+
+    outcome_service = OutcomeService(
+        session_factory, artifact_root=tmp_path, clock=lambda: NOW
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        artifact_publisher=fail_after_barrier,
+        clock=lambda: NOW,
+    )
+    results: list[bool] = []
+    thread = Thread(target=lambda: results.append(worker.process_next("worker-a")))
+    thread.start()
+    assert publisher_entered.wait(timeout=5)
+
+    blocker = session_factory()
+    blocker.begin()
+    worker.repository.acquire_scope_lock(blocker, scope="controlled_demo")
+    allow_failure.set()
+    thread.join(timeout=2)
+
+    was_blocked = thread.is_alive()
+    blocker.commit()
+    thread.join(timeout=5)
+    blocker.close()
+
+    assert was_blocked is False
+    assert results == [False]
+    job = _jobs(session_factory)[0]
+    assert (job.status, job.attempt_count) == ("queued", 0)
+
+
+def test_contended_oldest_scope_does_not_starve_later_external_job(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20, external_count=20)
+    outcome_service = OutcomeService(
+        session_factory, artifact_root=tmp_path, clock=lambda: NOW
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        clock=lambda: NOW,
+    )
+    blocker = session_factory()
+    blocker.begin()
+    worker.repository.acquire_scope_lock(blocker, scope="controlled_demo")
+
+    assert worker.process_next("worker-a") is True
+
+    controlled = _jobs(session_factory, "controlled_demo")
+    external = _jobs(session_factory, "external_verified")
+    blocker.commit()
+    blocker.close()
+    assert all(job.status == "queued" and job.attempt_count == 0 for job in controlled)
+    assert external[0].status == "completed"
+    assert external[0].attempt_count == 1
 
 
 def test_database_allows_distinct_runs_for_same_dataset_hash(migrated_engine):

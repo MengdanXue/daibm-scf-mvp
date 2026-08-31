@@ -56,6 +56,7 @@ class OutcomeRepository:
         worker_id: str,
         now: datetime,
         lease_until: datetime,
+        exclude_job_ids: tuple[uuid.UUID, ...] = (),
     ) -> CalibrationJobModel | None:
         if not worker_id.strip():
             raise ValueError("worker_id must not be blank")
@@ -93,18 +94,23 @@ class OutcomeRepository:
             exhausted.failure_code = "calibration_lease_exhausted"
             exhausted.result_run_id = None
             session.flush()
+        claim_conditions = [
+            or_(
+                CalibrationJobModel.status == "queued",
+                and_(
+                    CalibrationJobModel.status == "running",
+                    CalibrationJobModel.leased_until <= now,
+                ),
+            ),
+            CalibrationJobModel.attempt_count < 3,
+        ]
+        if exclude_job_ids:
+            claim_conditions.append(
+                CalibrationJobModel.job_id.not_in(exclude_job_ids)
+            )
         job = session.scalar(
             select(CalibrationJobModel)
-            .where(
-                or_(
-                    CalibrationJobModel.status == "queued",
-                    and_(
-                        CalibrationJobModel.status == "running",
-                        CalibrationJobModel.leased_until <= now,
-                    ),
-                ),
-                CalibrationJobModel.attempt_count < 3,
-            )
+            .where(*claim_conditions)
             .order_by(CalibrationJobModel.created_at, CalibrationJobModel.job_id)
             .with_for_update(skip_locked=True)
             .limit(1)

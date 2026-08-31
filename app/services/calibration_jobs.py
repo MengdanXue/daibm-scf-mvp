@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -25,6 +26,7 @@ from app.services.outcomes import OutcomeService
 
 
 ArtifactPublisher = Callable[[StagedCalibrationArtifact], CalibrationArtifact]
+FailureSettlement = Literal["contended", "stale", "lost", "retry", "terminal"]
 
 
 class DeterministicCalibrationRejection(Exception):
@@ -33,6 +35,10 @@ class DeterministicCalibrationRejection(Exception):
 
 class CalibrationClaimDeferred(Exception):
     """A scope-contended/expired claim returned without consuming an attempt."""
+
+    def __init__(self, reason: Literal["contended", "stale"]) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -77,44 +83,75 @@ class CalibrationJobService:
         self.idle_interval = idle_interval
 
     def process_next(self, worker_id: str) -> bool:
-        claim = self._claim(worker_id)
-        if claim is None:
-            return False
-        prepared: PreparedRun | None = None
-        try:
-            prepared = self._prepare_run(claim)
-            if prepared.staged is None:
-                self._complete(claim, prepared.run_id)
-                return True
-            self._renew(claim)
-            self.artifact_publisher(prepared.staged)
-            candidate = prepared.candidate or self._reload_candidate(prepared.run_id)
-            provenances = self._run_provenances(prepared.run_id)
-            self.outcome_service._complete_claimed_deployment(
-                job_id=claim.job_id,
-                worker_id=claim.worker_id,
-                run_id=prepared.run_id,
-                candidate=candidate,
-                provenances=provenances,
-                now=self._now(),
+        excluded_job_ids: set[uuid.UUID] = set()
+        while True:
+            claim = self._claim(
+                worker_id,
+                exclude_job_ids=tuple(excluded_job_ids),
             )
-        except DeterministicCalibrationRejection:
-            self._fail(claim, "calibration_data_rejected", retryable=False)
-        except CalibrationClaimDeferred:
-            return False
-        except Exception:
-            terminal = self._settle_infrastructure_failure(
-                claim,
-                prepared,
-            )
-            if (
-                terminal
-                and prepared is not None
-                and prepared.staged is not None
-                and prepared.owned_by_job
-            ):
-                self.outcome_service._discard_failed_publication(prepared.staged)
-        return True
+            if claim is None:
+                return False
+            prepared: PreparedRun | None = None
+            try:
+                prepared = self._prepare_run(claim)
+                if prepared.staged is None:
+                    self._complete(claim, prepared.run_id)
+                    return True
+                self._renew(claim)
+                self.artifact_publisher(prepared.staged)
+                candidate = prepared.candidate or self._reload_candidate(
+                    prepared.run_id
+                )
+                provenances = self._run_provenances(prepared.run_id)
+                self.outcome_service._complete_claimed_deployment(
+                    job_id=claim.job_id,
+                    worker_id=claim.worker_id,
+                    run_id=prepared.run_id,
+                    candidate=candidate,
+                    provenances=provenances,
+                    now=self._now(),
+                )
+            except DeterministicCalibrationRejection:
+                settlement = self._settle_failure(
+                    claim,
+                    prepared=None,
+                    failure_code="calibration_data_rejected",
+                    retryable=False,
+                )
+                if settlement == "contended":
+                    excluded_job_ids.add(claim.job_id)
+                    continue
+                if settlement == "stale":
+                    return False
+                if settlement == "lost":
+                    return True
+            except CalibrationClaimDeferred as error:
+                if error.reason == "contended":
+                    excluded_job_ids.add(claim.job_id)
+                    continue
+                return False
+            except Exception:
+                settlement = self._settle_infrastructure_failure(
+                    claim,
+                    prepared,
+                )
+                if settlement == "contended":
+                    excluded_job_ids.add(claim.job_id)
+                    continue
+                if settlement == "stale":
+                    return False
+                if settlement == "lost":
+                    return True
+                if (
+                    settlement == "terminal"
+                    and prepared is not None
+                    and prepared.staged is not None
+                    and prepared.owned_by_job
+                ):
+                    self.outcome_service._discard_failed_publication(
+                        prepared.staged
+                    )
+            return True
 
     async def run(self, stop_event: asyncio.Event) -> None:
         worker_id = f"calibration-{uuid.uuid4()}"
@@ -136,7 +173,12 @@ class CalibrationJobService:
             except TimeoutError:
                 pass
 
-    def _claim(self, worker_id: str) -> ClaimedJob | None:
+    def _claim(
+        self,
+        worker_id: str,
+        *,
+        exclude_job_ids: tuple[uuid.UUID, ...] = (),
+    ) -> ClaimedJob | None:
         now = self._now()
         with self.session_factory.begin() as session:
             job = self.repository.claim_next_job(
@@ -144,6 +186,7 @@ class CalibrationJobService:
                 worker_id=worker_id,
                 now=now,
                 lease_until=now + self.lease_duration,
+                exclude_job_ids=exclude_job_ids,
             )
             if job is None:
                 return None
@@ -172,7 +215,7 @@ class CalibrationJobService:
                         worker_id=claim.worker_id,
                     )
                 session.commit()
-                raise CalibrationClaimDeferred
+                raise CalibrationClaimDeferred("contended")
             job = self.repository.get_job_for_update(session, claim.job_id)
             self.repository._require_job_owner(job, claim.worker_id)
             if job.deployment_scope != claim.deployment_scope:
@@ -185,7 +228,7 @@ class CalibrationJobService:
                     worker_id=claim.worker_id,
                 )
                 session.commit()
-                raise CalibrationClaimDeferred
+                raise CalibrationClaimDeferred("stale")
             self.repository.renew_job_lease(
                 session,
                 job_id=claim.job_id,
@@ -514,7 +557,7 @@ class CalibrationJobService:
                         worker_id=claim.worker_id,
                     )
                 session.commit()
-                raise CalibrationClaimDeferred
+                raise CalibrationClaimDeferred("contended")
             job = self.repository.get_job_for_update(session, claim.job_id)
             self.repository._require_job_owner(job, claim.worker_id)
             fenced_now = self._now()
@@ -525,7 +568,7 @@ class CalibrationJobService:
                     worker_id=claim.worker_id,
                 )
                 session.commit()
-                raise CalibrationClaimDeferred
+                raise CalibrationClaimDeferred("stale")
             run = self.repository.get_run_for_update(session, run_id)
             if (
                 run is None
@@ -555,42 +598,48 @@ class CalibrationJobService:
                 lease_until=now + self.lease_duration,
             )
 
-    def _fail(
-        self,
-        claim: ClaimedJob,
-        failure_code: str,
-        *,
-        retryable: bool,
-    ) -> bool:
-        with self.session_factory.begin() as session:
-            job = self.repository.fail_or_retry_job(
-                session,
-                job_id=claim.job_id,
-                worker_id=claim.worker_id,
-                now=self._now(),
-                failure_code=failure_code,
-                retryable=retryable,
-            )
-            return job.status == "failed"
-
-    def _settle_infrastructure_failure(
+    def _settle_failure(
         self,
         claim: ClaimedJob,
         prepared: PreparedRun | None,
-    ) -> bool:
+        failure_code: str,
+        *,
+        retryable: bool,
+    ) -> FailureSettlement:
         with self.session_factory.begin() as session:
-            self.repository.acquire_scope_lock(
+            acquired = self.repository.try_acquire_scope_lock(
                 session,
                 scope=claim.deployment_scope,
             )
+            if not acquired:
+                job = self.repository.get_job_for_update(session, claim.job_id)
+                if (
+                    job is not None
+                    and job.status == "running"
+                    and job.lease_owner == claim.worker_id
+                ):
+                    self.repository.release_claim_without_attempt(
+                        session,
+                        job_id=claim.job_id,
+                        worker_id=claim.worker_id,
+                    )
+                return "contended"
             job = self.repository.get_job_for_update(session, claim.job_id)
             if (
                 job is None
                 or job.status != "running"
                 or job.lease_owner != claim.worker_id
             ):
-                return False
-            terminal = job.attempt_count >= 3
+                return "lost"
+            fenced_now = self._now()
+            if job.leased_until is None or job.leased_until <= fenced_now:
+                self.repository.release_claim_without_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    worker_id=claim.worker_id,
+                )
+                return "stale"
+            terminal = not retryable or job.attempt_count >= 3
             if (
                 terminal
                 and prepared is not None
@@ -606,7 +655,7 @@ class CalibrationJobService:
                     run.failure_code = "artifact_write_failed"
                     run.deployment_status = "activation_failed"
                     run.activation_reason = "artifact_publication_failed"
-                    run.completed_at = self._now()
+                    run.completed_at = fenced_now
                     self.outcome_service.ledger_repository.append_many(
                         session,
                         run.calibration_run_id,
@@ -623,15 +672,27 @@ class CalibrationJobService:
                             "activation_reason": run.activation_reason,
                         })],
                     )
-            settled = self.repository.fail_or_retry_job(
+            job = self.repository.fail_or_retry_job(
                 session,
                 job_id=claim.job_id,
                 worker_id=claim.worker_id,
-                now=self._now(),
-                failure_code="calibration_infrastructure_failure",
-                retryable=True,
+                now=fenced_now,
+                failure_code=failure_code,
+                retryable=retryable,
             )
-            return settled.status == "failed"
+            return "terminal" if job.status == "failed" else "retry"
+
+    def _settle_infrastructure_failure(
+        self,
+        claim: ClaimedJob,
+        prepared: PreparedRun | None,
+    ) -> FailureSettlement:
+        return self._settle_failure(
+            claim,
+            prepared,
+            "calibration_infrastructure_failure",
+            retryable=True,
+        )
 
     def _now(self) -> datetime:
         value = self.clock()
