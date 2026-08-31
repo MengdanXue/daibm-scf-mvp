@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from threading import Barrier
 
 import pytest
@@ -39,6 +41,7 @@ from app.services.identity import IdentityService
 from app.services.outcome_calibration import (
     CalibrationCandidate,
     CalibrationObservation,
+    CalibrationTrainingConfig,
     build_calibration_candidate,
     write_candidate_artifact,
 )
@@ -832,9 +835,19 @@ def test_startup_reconciliation_finishes_direct_seeded_pending_run(
     assert count == 1
 
 
-def _seed_pending_v3_run(session_factory, tmp_path):
+def _seed_pending_v3_run(
+    session_factory,
+    tmp_path,
+    *,
+    training_config: CalibrationTrainingConfig | None = None,
+):
     facility_id, auditor = _seed_closed_facility(session_factory)
-    service = OutcomeService(session_factory, artifact_root=tmp_path, clock=lambda: NOW)
+    service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        clock=lambda: NOW,
+        training_config=training_config,
+    )
     first_outcome_id = uuid.UUID(
         service.submit(facility_id, _submission(), auditor)["outcome"]["outcome_id"]
     )
@@ -901,7 +914,10 @@ def _seed_pending_v3_run(session_factory, tmp_path):
             )
             for row in outcomes
         )
-    candidate = build_calibration_candidate(observations)
+    candidate = build_calibration_candidate(
+        observations,
+        config=service.training_config,
+    )
     published = write_candidate_artifact(tmp_path, candidate)
     run_id = uuid.uuid4()
     with session_factory.begin() as session:
@@ -913,7 +929,7 @@ def _seed_pending_v3_run(session_factory, tmp_path):
             negative_count=candidate.negative_count,
             metrics_before=dict(candidate.metrics_before),
             metrics_after=dict(candidate.metrics_after),
-            configuration=dict(candidate.artifact["configuration"]),
+            configuration=service._configuration(),
             status=candidate.status, artifact_locator=str(published.path),
             artifact_sha256=published.sha256,
             artifact_schema="daibm.platt-calibration.v3", failure_code=None,
@@ -945,6 +961,35 @@ def test_startup_reconciliation_activates_an_eligible_verified_v3_run(
         reconciled = session.get(CalibrationRunModel, run_id)
     assert reconciled.deployment_status == "active"
     assert reconciled.activation_reason == "gate_passed"
+
+
+def test_high_precision_config_build_load_gate_persist_recover_round_trip(
+    session_factory,
+    tmp_path,
+):
+    config = CalibrationTrainingConfig(
+        learning_rate=math.nextafter(0.05, 1.0),
+        l2_penalty=math.nextafter(0.001, 1.0),
+        probability_epsilon=math.nextafter(1e-6, 1.0),
+    )
+    service, run_id = _seed_pending_v3_run(
+        session_factory,
+        tmp_path,
+        training_config=config,
+    )
+
+    service.reconcile_deployments()
+
+    with session_factory() as session:
+        reconciled = session.get(CalibrationRunModel, run_id)
+        artifact = json.loads(
+            Path(reconciled.artifact_locator).read_text(encoding="utf-8")
+        )
+    assert reconciled.configuration == artifact["configuration"]
+    assert (
+        reconciled.deployment_status,
+        reconciled.activation_reason,
+    ) == ("active", "gate_passed")
 
 
 def test_startup_reconciliation_rejects_v3_db_metrics_that_contradict_artifact(

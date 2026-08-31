@@ -14,6 +14,15 @@ from pathlib import Path
 import numpy as np
 
 
+def canonical_calibration_float(value: object) -> float:
+    """Return the platform-independent 15-significant-digit numeric boundary."""
+
+    if type(value) not in (int, float) or not math.isfinite(float(value)):
+        raise ValueError("calibration number must be finite")
+    canonical = float(format(float(value), ".15g"))
+    return 0.0 if canonical == 0.0 else canonical
+
+
 @dataclass(frozen=True)
 class CalibrationObservation:
     outcome_id: str
@@ -39,14 +48,48 @@ class CalibrationTrainingConfig:
     probability_epsilon: float = 1e-6
 
     def __post_init__(self) -> None:
-        if self.epochs < 1:
+        if type(self.epochs) is not int or self.epochs < 1:
             raise ValueError("epochs must be positive")
-        if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
+        try:
+            learning_rate = canonical_calibration_float(self.learning_rate)
+        except ValueError as error:
+            raise ValueError("learning rate must be positive and finite") from error
+        if learning_rate <= 0:
             raise ValueError("learning rate must be positive and finite")
-        if not math.isfinite(self.l2_penalty) or self.l2_penalty < 0:
+        try:
+            l2_penalty = canonical_calibration_float(self.l2_penalty)
+        except ValueError as error:
+            raise ValueError("L2 penalty must be non-negative and finite") from error
+        if l2_penalty < 0:
             raise ValueError("L2 penalty must be non-negative and finite")
-        if not 0 < self.probability_epsilon < 0.5:
+        try:
+            probability_epsilon = canonical_calibration_float(
+                self.probability_epsilon
+            )
+        except ValueError as error:
+            raise ValueError(
+                "probability epsilon must be between zero and 0.5"
+            ) from error
+        if not 0 < probability_epsilon < 0.5:
             raise ValueError("probability epsilon must be between zero and 0.5")
+        object.__setattr__(self, "learning_rate", learning_rate)
+        object.__setattr__(self, "l2_penalty", l2_penalty)
+        object.__setattr__(self, "probability_epsilon", probability_epsilon)
+
+
+def canonical_training_configuration(
+    config: CalibrationTrainingConfig,
+) -> dict[str, float | int]:
+    """Return the one canonical configuration persisted in artifacts and runs."""
+
+    return {
+        "epochs": config.epochs,
+        "l2_penalty": canonical_calibration_float(config.l2_penalty),
+        "learning_rate": canonical_calibration_float(config.learning_rate),
+        "probability_epsilon": canonical_calibration_float(
+            config.probability_epsilon
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -104,17 +147,10 @@ def _canonical_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _serialized_float(value: float) -> float:
-    """Canonical artifact number: IEEE value rounded to 15 significant digits."""
-
-    if not math.isfinite(value):
-        raise ValueError("serialized calibration number must be finite")
-    serialized = float(format(value, ".15g"))
-    return 0.0 if serialized == 0.0 else serialized
-
-
 def _serialized_metrics(metrics: dict[str, float]) -> dict[str, float]:
-    return {key: _serialized_float(value) for key, value in metrics.items()}
+    return {
+        key: canonical_calibration_float(value) for key, value in metrics.items()
+    }
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
@@ -291,7 +327,12 @@ def _fit_platt(
     scores: np.ndarray,
     labels: np.ndarray,
     config: CalibrationTrainingConfig,
+    *,
+    training_outcome_ids: tuple[str, ...] = (),
 ) -> tuple[float, float]:
+    # Outcome identities are an audit seam only; fitting remains numeric and
+    # deterministic. Production callers provide the exact training partition.
+    del training_outcome_ids
     if len(scores) != len(labels) or len(scores) == 0:
         raise ValueError("calibration fit requires equal non-empty vectors")
     if set(labels.tolist()) != {0.0, 1.0}:
@@ -387,7 +428,14 @@ def build_calibration_candidate(
         if set(labels[training_mask].tolist()) != {0.0, 1.0}:
             raise ValueError("every OOF training partition requires both classes")
         fold_slope, fold_intercept = _fit_platt(
-            raw_scores[training_mask], labels[training_mask], active_config
+            raw_scores[training_mask],
+            labels[training_mask],
+            active_config,
+            training_outcome_ids=tuple(
+                row.outcome_id
+                for index, row in enumerate(ordered)
+                if training_mask[index]
+            ),
         )
         oof_probabilities[held_out_mask] = _apply_coefficients(
             raw_scores[held_out_mask],
@@ -418,7 +466,12 @@ def build_calibration_candidate(
 
     before = summary.metrics_before
     after = _metrics(labels, oof_probabilities, active_config.probability_epsilon)
-    slope, intercept = _fit_platt(raw_scores, labels, active_config)
+    slope, intercept = _fit_platt(
+        raw_scores,
+        labels,
+        active_config,
+        training_outcome_ids=tuple(row.outcome_id for row in ordered),
+    )
     final_probabilities = _apply_coefficients(
         raw_scores,
         slope,
@@ -431,8 +484,8 @@ def build_calibration_candidate(
     serialized_before = _serialized_metrics(before)
     serialized_after = _serialized_metrics(after)
     serialized_final_metrics = _serialized_metrics(final_metrics)
-    serialized_slope = _serialized_float(slope)
-    serialized_intercept = _serialized_float(intercept)
+    serialized_slope = canonical_calibration_float(slope)
+    serialized_intercept = canonical_calibration_float(intercept)
     distinct_score_count = len(set(raw_scores.tolist()))
     limitations = ["activation_gate_required"]
     if distinct_score_count < 2:
@@ -445,14 +498,7 @@ def build_calibration_candidate(
             "intercept": serialized_intercept,
             "slope": serialized_slope,
         },
-        "configuration": {
-            "epochs": active_config.epochs,
-            "l2_penalty": _serialized_float(active_config.l2_penalty),
-            "learning_rate": _serialized_float(active_config.learning_rate),
-            "probability_epsilon": _serialized_float(
-                active_config.probability_epsilon
-            ),
-        },
+        "configuration": canonical_training_configuration(active_config),
         "dataset": {
             "correction_heads": {
                 item.outcome_id: item.correction_head_id for item in ordered
@@ -621,6 +667,8 @@ __all__ = [
     "CalibrationDatasetSummary",
     "CalibrationObservation",
     "CalibrationTrainingConfig",
+    "canonical_calibration_float",
+    "canonical_training_configuration",
     "StagedCalibrationArtifact",
     "assign_stratified_folds",
     "build_calibration_candidate",

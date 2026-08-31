@@ -47,6 +47,7 @@ from app.services.outcome_calibration import (
     CalibrationTrainingConfig,
     StagedCalibrationArtifact,
     build_calibration_candidate,
+    canonical_training_configuration,
     discard_staged_artifact,
     publish_candidate_artifact,
     recover_candidate_artifact,
@@ -1128,12 +1129,7 @@ class OutcomeService:
             pass
 
     def _configuration(self) -> dict[str, float | int]:
-        return {
-            "epochs": self.training_config.epochs,
-            "l2_penalty": self.training_config.l2_penalty,
-            "learning_rate": self.training_config.learning_rate,
-            "probability_epsilon": self.training_config.probability_epsilon,
-        }
+        return canonical_training_configuration(self.training_config)
 
     @staticmethod
     def _fallback_summary(

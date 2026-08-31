@@ -320,6 +320,7 @@ def test_verified_v3_artifact_accepts_canonical_oof_lineage(tmp_path):
         "invalid_brier",
         "boolean_metric",
         "uppercase_uuid",
+        "noncanonical_float",
     ),
 )
 def test_v3_loader_rejects_canonical_rehashed_noncanonical_evidence(
@@ -339,11 +340,13 @@ def test_v3_loader_rejects_canonical_rehashed_noncanonical_evidence(
         artifact["validation"]["metrics_after"]["brier_score"] = 1.1
     elif mutation == "boolean_metric":
         artifact["validation"]["metrics_after"]["brier_score"] = True
-    else:
+    elif mutation == "uppercase_uuid":
         first_id = artifact["dataset"]["outcome_ids"][0]
         artifact["dataset"]["correction_heads"][first_id] = (
             "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
         )
+    else:
+        artifact["configuration"]["learning_rate"] = 0.05000000000000001
     artifact_bytes = json.dumps(
         artifact,
         ensure_ascii=False,

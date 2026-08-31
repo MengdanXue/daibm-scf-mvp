@@ -96,15 +96,16 @@ def test_candidate_is_deterministic_and_reports_oof_metrics():
 
 
 def test_serialized_numeric_policy_is_stable_and_metric_snapshots_do_not_alias():
-    candidate = build_calibration_candidate(
-        _varied_observations(),
-        config=CalibrationTrainingConfig(
-            learning_rate=0.12345678901234567,
-            l2_penalty=0.0012345678901234567,
-            probability_epsilon=0.0000012345678901234567,
-        ),
+    config = CalibrationTrainingConfig(
+        learning_rate=0.12345678901234567,
+        l2_penalty=0.0012345678901234567,
+        probability_epsilon=0.0000012345678901234567,
     )
+    candidate = build_calibration_candidate(_varied_observations(), config=config)
 
+    assert config.learning_rate == 0.123456789012346
+    assert config.l2_penalty == 0.00123456789012346
+    assert config.probability_epsilon == 0.00000123456789012346
     assert candidate.artifact["configuration"] == {
         "epochs": 800,
         "learning_rate": 0.123456789012346,
@@ -120,17 +121,38 @@ def test_serialized_numeric_policy_is_stable_and_metric_snapshots_do_not_alias()
     assert candidate.artifact["validation"]["metrics_before"] == artifact_before
 
 
+def test_training_config_rejects_epsilon_that_canonicalizes_to_half():
+    with pytest.raises(ValueError, match="probability epsilon"):
+        CalibrationTrainingConfig(
+            probability_epsilon=math.nextafter(0.5, 0.0),
+        )
+
+
 def test_oof_fit_inputs_exclude_every_held_out_observation(monkeypatch):
     observations = tuple(
         replace(row, original_score=0.2 + (index // 2) * 0.05)
         for index, row in enumerate(_varied_observations())
     )
     assignments = assign_stratified_folds(observations)
-    calls: list[tuple[tuple[float, ...], tuple[float, ...]]] = []
+    calls: list[
+        tuple[tuple[str, ...], tuple[float, ...], tuple[float, ...]]
+    ] = []
     real_fit = calibration_module._fit_platt
 
-    def recording_fit(scores, labels, config):
-        calls.append((tuple(scores.tolist()), tuple(labels.tolist())))
+    def recording_fit(
+        scores,
+        labels,
+        config,
+        *,
+        training_outcome_ids=(),
+    ):
+        calls.append(
+            (
+                tuple(training_outcome_ids),
+                tuple(scores.tolist()),
+                tuple(labels.tolist()),
+            )
+        )
         return real_fit(scores, labels, config)
 
     monkeypatch.setattr(calibration_module, "_fit_platt", recording_fit)
@@ -138,17 +160,31 @@ def test_oof_fit_inputs_exclude_every_held_out_observation(monkeypatch):
     candidate = build_calibration_candidate(observations)
 
     assert len(calls) == 6
-    for fold, (training_scores, training_labels) in enumerate(calls[:5]):
-        expected_training = [
-            row.original_score
-            for row in observations
+    ordered = tuple(sorted(observations, key=lambda row: row.outcome_id))
+    held_out_coverage: list[str] = []
+    for fold, (training_ids, _training_scores, training_labels) in enumerate(
+        calls[:5]
+    ):
+        expected_training_ids = tuple(
+            row.outcome_id
+            for row in ordered
             if assignments[row.outcome_id] != fold
-        ]
-        assert Counter(training_scores) == Counter(expected_training)
+        )
+        expected_held_out_ids = {
+            row.outcome_id
+            for row in ordered
+            if assignments[row.outcome_id] == fold
+        }
+        assert training_ids == expected_training_ids
+        assert set(training_ids).isdisjoint(expected_held_out_ids)
+        assert set(training_ids) | expected_held_out_ids == {
+            row.outcome_id for row in ordered
+        }
         assert set(training_labels) == {0.0, 1.0}
-    assert Counter(calls[-1][0]) == Counter(
-        row.original_score for row in observations
-    )
+        held_out_coverage.extend(expected_held_out_ids)
+    assert Counter(held_out_coverage) == Counter(row.outcome_id for row in ordered)
+    assert calls[-1][0] == tuple(row.outcome_id for row in ordered)
+    assert set(calls[-1][2]) == {0.0, 1.0}
     held_out_ids = [
         outcome_id
         for fold_evidence in candidate.artifact["validation"]["folds"]

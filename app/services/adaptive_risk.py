@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from app.repositories.outcomes import OutcomeRepository
-from app.services.outcome_calibration import CalibrationCandidate
+from app.services.outcome_calibration import (
+    CalibrationCandidate,
+    canonical_calibration_float,
+)
 
 
 @dataclass(frozen=True)
@@ -237,15 +240,19 @@ def _require_exact_fields(value: object, expected: set[str], name: str) -> dict:
 def _require_metric_block(value: object) -> None:
     if not isinstance(value, dict) or set(value) != {"brier_score", "log_loss"}:
         raise ValueError("calibration metric lineage is incomplete")
-    if not all(
-        type(item) in (int, float)
-        and math.isfinite(float(item))
-        and float(item) >= 0.0
-        for item in value.values()
-    ):
+    if not all(_is_canonical_float(item) and item >= 0.0 for item in value.values()):
         raise ValueError("calibration metrics are invalid")
     if float(value["brier_score"]) > 1.0:
         raise ValueError("calibration Brier score is invalid")
+
+
+def _is_canonical_float(value: object) -> bool:
+    if type(value) is not float:
+        return False
+    try:
+        return value == canonical_calibration_float(value)
+    except ValueError:
+        return False
 
 
 def _validate_v3_lineage(
@@ -285,10 +292,7 @@ def _validate_v3_lineage(
     coefficients = _require_exact_fields(
         artifact.get("coefficients"), {"intercept", "slope"}, "coefficient"
     )
-    if not all(
-        type(value) in (int, float) and math.isfinite(float(value))
-        for value in coefficients.values()
-    ):
+    if not all(_is_canonical_float(value) for value in coefficients.values()):
         raise ValueError("calibration coefficients are invalid")
     configuration = _require_exact_fields(
         artifact.get("configuration"),
@@ -299,8 +303,7 @@ def _validate_v3_lineage(
         type(configuration["epochs"]) is not int
         or configuration["epochs"] < 1
         or not all(
-            type(configuration[field]) in (int, float)
-            and math.isfinite(float(configuration[field]))
+            _is_canonical_float(configuration[field])
             for field in ("l2_penalty", "learning_rate", "probability_epsilon")
         )
         or float(configuration["l2_penalty"]) < 0.0
