@@ -443,7 +443,19 @@ class OutcomeService:
             run = self.repository.get_run(session, self._uuid(run_id))
             if run is None:
                 raise OutcomeNotFound(str(run_id))
-            return self._serialize_run(run)
+            return self._serialize_run(run, session=session)
+
+    def get_job(
+        self,
+        job_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        self._require_auditor(user)
+        with self.session_factory() as session:
+            job = self.repository.get_job(session, self._uuid(job_id))
+            if job is None:
+                raise OutcomeNotFound(str(job_id))
+            return self._serialize_job(job)
 
     def list_runs(
         self,
@@ -456,7 +468,7 @@ class OutcomeService:
         self._page(limit, offset)
         with self.session_factory() as session:
             return [
-                self._serialize_run(item)
+                self._serialize_run(item, session=session)
                 for item in self.repository.list_runs(
                     session, limit=limit, offset=offset
                 )
@@ -508,7 +520,7 @@ class OutcomeService:
             run = self.repository.get_active_run(session)
             if run is None:
                 raise OutcomeNotFound("active calibration deployment")
-            return self._serialize_run(run)
+            return self._serialize_run(run, session=session)
 
     def rollback(
         self,
@@ -566,7 +578,7 @@ class OutcomeService:
                     )
                 ],
             )
-            return self._serialize_run(restored)
+            return self._serialize_run(restored, session=session)
 
     def _validate_submission_snapshot(
         self,
@@ -1273,7 +1285,13 @@ class OutcomeService:
             ),
         }
 
-    def _serialize_run(self, run: CalibrationRunModel) -> dict[str, Any]:
+    def _serialize_run(
+        self,
+        run: CalibrationRunModel,
+        *,
+        session: Session | None = None,
+    ) -> dict[str, Any]:
+        fold_assignment_sha256: str | None = None
         if run.artifact_locator is None or run.artifact_sha256 is None:
             integrity = "not_applicable"
         else:
@@ -1284,6 +1302,16 @@ class OutcomeService:
                 )
             except OSError:
                 integrity = "unavailable"
+            if integrity == "verified" and run.artifact_schema == "daibm.platt-calibration.v3":
+                try:
+                    artifact = json.loads(artifact_path.read_bytes())
+                    validation = artifact.get("validation")
+                    if isinstance(validation, dict):
+                        value = validation.get("fold_assignment_sha256")
+                        if isinstance(value, str):
+                            fold_assignment_sha256 = value
+                except (OSError, TypeError, json.JSONDecodeError):
+                    fold_assignment_sha256 = None
             if integrity != "verified" and run.deployment_status != "active":
                 staged = StagedCalibrationArtifact(
                     path=artifact_path,
@@ -1305,19 +1333,53 @@ class OutcomeService:
                 run.failure_code = "artifact_write_failed"
                 run.completed_at = completed_at
                 integrity = "not_applicable"
+        evidence: dict[str, Any] = {}
+        if session is not None:
+            event = session.scalar(
+                select(LedgerEventModel)
+                .where(
+                    LedgerEventModel.entity_id == run.calibration_run_id,
+                    LedgerEventModel.event_type.in_(
+                        (
+                            "CALIBRATION_CANDIDATE_TRAINED",
+                            "CALIBRATION_CANDIDATE_FAILED",
+                        )
+                    ),
+                )
+                .order_by(LedgerEventModel.id.desc())
+                .limit(1)
+            )
+            if event is not None and isinstance(event.payload, dict):
+                evidence = event.payload
+        eligible_count = evidence.get("eligible_count", run.sample_count)
+        excluded_count = evidence.get("excluded_count", 0)
+        if fold_assignment_sha256 is None:
+            value = evidence.get("fold_assignment_sha256")
+            if isinstance(value, str):
+                fold_assignment_sha256 = value
         return {
             "calibration_run_id": str(run.calibration_run_id),
-            "trigger_outcome_id": str(run.trigger_outcome_id),
+            "trigger_outcome_id": (
+                str(run.trigger_outcome_id)
+                if run.trigger_outcome_id is not None
+                else None
+            ),
             "dataset_sha256": run.dataset_sha256,
             "sample_count": run.sample_count,
             "positive_count": run.positive_count,
             "negative_count": run.negative_count,
             "metrics_before": run.metrics_before,
             "metrics_after": run.metrics_after,
+            "oof_metrics_before": run.metrics_before,
+            "oof_metrics_after": run.metrics_after,
             "configuration": run.configuration,
             "status": run.status,
             "artifact_sha256": run.artifact_sha256,
+            "artifact_schema": run.artifact_schema,
             "artifact_integrity": integrity,
+            "fold_assignment_sha256": fold_assignment_sha256,
+            "eligible_count": int(eligible_count),
+            "excluded_count": int(excluded_count),
             "failure_code": run.failure_code,
             "deployment_status": run.deployment_status,
             "deployment_scope": run.deployment_scope,

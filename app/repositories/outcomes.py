@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models_facility import FinancingFacilityModel
@@ -17,10 +17,7 @@ from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 
 class OutcomeRepository:
     CALIBRATION_LOCK_KEY = 0x43414C494252
-    SCOPE_LOCK_KEYS = {
-        "controlled_demo": 0x43414C494201,
-        "external_verified": 0x43414C494202,
-    }
+    DEPLOYABLE_SCOPES = {"controlled_demo", "external_verified"}
 
     def acquire_training_lock(self, session: Session) -> None:
         session.execute(
@@ -29,14 +26,140 @@ class OutcomeRepository:
         )
 
     def acquire_scope_lock(self, session: Session, *, scope: str) -> None:
-        try:
-            lock_key = self.SCOPE_LOCK_KEYS[scope]
-        except KeyError as error:
-            raise ValueError("scope must be a deployable calibration scope") from error
+        if scope not in self.DEPLOYABLE_SCOPES:
+            raise ValueError("scope must be a deployable calibration scope")
         session.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_key)"),
-            {"lock_key": lock_key},
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:scope_key, 0))"
+            ),
+            {"scope_key": f"calibration:{scope}"},
         )
+
+    def claim_next_job(
+        self,
+        session: Session,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_until: datetime,
+    ) -> CalibrationJobModel | None:
+        if not worker_id.strip():
+            raise ValueError("worker_id must not be blank")
+        if (
+            now.tzinfo is None
+            or now.utcoffset() is None
+            or lease_until.tzinfo is None
+            or lease_until.utcoffset() is None
+            or lease_until <= now
+        ):
+            raise ValueError("job lease timestamps must be aware and increasing")
+        job = session.scalar(
+            select(CalibrationJobModel)
+            .where(
+                or_(
+                    CalibrationJobModel.status == "queued",
+                    and_(
+                        CalibrationJobModel.status == "running",
+                        CalibrationJobModel.leased_until <= now,
+                    ),
+                ),
+                CalibrationJobModel.attempt_count < 3,
+            )
+            .order_by(CalibrationJobModel.created_at, CalibrationJobModel.job_id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if job is None:
+            return None
+        job.status = "running"
+        job.attempt_count += 1
+        job.lease_owner = worker_id
+        job.leased_until = lease_until
+        job.started_at = now
+        job.completed_at = None
+        job.failure_code = None
+        job.result_run_id = None
+        session.flush()
+        return job
+
+    def complete_job(
+        self,
+        session: Session,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        result_run_id: uuid.UUID,
+        now: datetime,
+    ) -> CalibrationJobModel:
+        job = self.get_job_for_update(session, job_id)
+        self._require_job_owner(job, worker_id)
+        job.status = "completed"
+        job.lease_owner = None
+        job.leased_until = None
+        job.failure_code = None
+        job.result_run_id = result_run_id
+        job.completed_at = now
+        session.flush()
+        return job
+
+    def fail_or_retry_job(
+        self,
+        session: Session,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        now: datetime,
+        failure_code: str,
+        retryable: bool = True,
+    ) -> CalibrationJobModel:
+        if not failure_code or not failure_code.replace("_", "a").isalnum():
+            raise ValueError("failure_code must use stable lowercase code syntax")
+        job = self.get_job_for_update(session, job_id)
+        self._require_job_owner(job, worker_id)
+        job.lease_owner = None
+        job.leased_until = None
+        job.result_run_id = None
+        if retryable and job.attempt_count < 3:
+            job.status = "queued"
+            job.started_at = None
+            job.completed_at = None
+            job.failure_code = None
+        else:
+            job.status = "failed"
+            job.completed_at = now
+            job.failure_code = failure_code
+        session.flush()
+        return job
+
+    def get_job(
+        self,
+        session: Session,
+        job_id: uuid.UUID,
+    ) -> CalibrationJobModel | None:
+        return session.get(CalibrationJobModel, job_id)
+
+    def get_job_for_update(
+        self,
+        session: Session,
+        job_id: uuid.UUID,
+    ) -> CalibrationJobModel | None:
+        return session.scalar(
+            select(CalibrationJobModel)
+            .where(CalibrationJobModel.job_id == job_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    @staticmethod
+    def _require_job_owner(
+        job: CalibrationJobModel | None,
+        worker_id: str,
+    ) -> None:
+        if job is None:
+            raise RuntimeError("claimed calibration job is missing")
+        if job.status != "running" or job.lease_owner != worker_id:
+            raise RuntimeError("calibration job lease ownership changed")
 
     def get_facility_for_update(
         self,
@@ -165,6 +288,83 @@ class OutcomeRepository:
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
+        )
+
+    def list_eligible_outcomes_with_heads(
+        self,
+        session: Session,
+        *,
+        scope: str,
+    ) -> list[tuple[ActualOutcomeModel, uuid.UUID | None]]:
+        provenance = self._provenance_for_scope(scope)
+        latest_id = (
+            select(OutcomeCorrectionModel.correction_id)
+            .where(
+                OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id
+            )
+            .order_by(
+                OutcomeCorrectionModel.recorded_at.desc(),
+                OutcomeCorrectionModel.correction_id.desc(),
+            )
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        latest_action = (
+            select(OutcomeCorrectionModel.action)
+            .where(
+                OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id
+            )
+            .order_by(
+                OutcomeCorrectionModel.recorded_at.desc(),
+                OutcomeCorrectionModel.correction_id.desc(),
+            )
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        return [
+            (outcome, correction_head_id)
+            for outcome, correction_head_id in session.execute(
+                select(ActualOutcomeModel, latest_id.label("correction_head_id"))
+                .where(
+                    ActualOutcomeModel.provenance == provenance,
+                    or_(latest_action.is_(None), latest_action == "REINSTATE"),
+                )
+                .order_by(ActualOutcomeModel.outcome_id)
+            )
+        ]
+
+    def count_excluded_outcomes(
+        self,
+        session: Session,
+        *,
+        scope: str,
+    ) -> int:
+        provenance = self._provenance_for_scope(scope)
+        latest_action = (
+            select(OutcomeCorrectionModel.action)
+            .where(
+                OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id
+            )
+            .order_by(
+                OutcomeCorrectionModel.recorded_at.desc(),
+                OutcomeCorrectionModel.correction_id.desc(),
+            )
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(ActualOutcomeModel)
+                .where(
+                    ActualOutcomeModel.provenance == provenance,
+                    latest_action == "EXCLUDE",
+                )
+            )
+            or 0
         )
 
     def run_membership_is_eligible(
@@ -305,6 +505,43 @@ class OutcomeRepository:
         run_id: uuid.UUID,
     ) -> CalibrationRunModel | None:
         return session.get(CalibrationRunModel, run_id)
+
+    def get_run_by_job(
+        self,
+        session: Session,
+        job_id: uuid.UUID,
+    ) -> CalibrationRunModel | None:
+        return session.scalar(
+            select(CalibrationRunModel).where(
+                CalibrationRunModel.trigger_job_id == job_id
+            )
+        )
+
+    def get_run_by_dataset(
+        self,
+        session: Session,
+        dataset_sha256: str,
+    ) -> CalibrationRunModel | None:
+        return session.scalar(
+            select(CalibrationRunModel).where(
+                CalibrationRunModel.dataset_sha256 == dataset_sha256
+            )
+        )
+
+    def list_run_membership(
+        self,
+        session: Session,
+        run_id: uuid.UUID,
+    ) -> list[CalibrationRunObservationModel]:
+        return list(
+            session.scalars(
+                select(CalibrationRunObservationModel)
+                .where(
+                    CalibrationRunObservationModel.calibration_run_id == run_id
+                )
+                .order_by(CalibrationRunObservationModel.outcome_id)
+            )
+        )
 
     def get_run_for_update(
         self,
@@ -474,6 +711,14 @@ class OutcomeRepository:
         session.add(run)
         session.flush()
         return run
+
+    @staticmethod
+    def add_run_observations(
+        session: Session,
+        observations: list[CalibrationRunObservationModel],
+    ) -> None:
+        session.add_all(observations)
+        session.flush()
 
     @staticmethod
     def _provenance_for_scope(scope: str) -> str:

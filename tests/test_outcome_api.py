@@ -36,6 +36,7 @@ def outcome_client(migrated_engine, session_factory, tmp_path):
             required=True,
         ),
         calibration_artifact_dir=tmp_path,
+        calibration_worker_enabled=False,
     )
     with TestClient(application) as client:
         yield client
@@ -474,3 +475,42 @@ def test_correction_routes_are_auditor_only(outcome_client, session_factory):
             "evidence_sha256": "b" * 64,
         },
     ).status_code == 403
+
+
+def test_calibration_job_endpoint_is_auditor_only_and_omits_worker_secrets(
+    outcome_client,
+    session_factory,
+):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    created = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome",
+        json=_payload(),
+    )
+    assert created.status_code == 201, created.text
+    expected = created.json()["calibration_job"]
+    job_id = expected["job_id"]
+
+    response = outcome_client.get(f"/api/v1/calibration-jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+    serialized = response.text.lower()
+    for forbidden in (
+        "lease_owner",
+        "leased_until",
+        "artifact_locator",
+        "staged",
+        "filesystem",
+        "exception",
+    ):
+        assert forbidden not in serialized
+
+    outcome_client.cookies.clear()
+    assert outcome_client.get(f"/api/v1/calibration-jobs/{job_id}").status_code == 401
+    _login(outcome_client, "financier.demo")
+    assert outcome_client.get(f"/api/v1/calibration-jobs/{job_id}").status_code == 403
+    _login(outcome_client, "auditor.demo")
+    missing = outcome_client.get(f"/api/v1/calibration-jobs/{uuid.uuid4()}")
+    assert missing.status_code == 404
+    assert "artifact" not in missing.text.lower()

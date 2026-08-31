@@ -13,6 +13,7 @@ from app.schemas_outcome import (
     ActualOutcomeCreate,
     ActualOutcomePreviewResponse,
     ActualOutcomeResponse,
+    CalibrationJobResponse,
     CalibrationRollbackRequest,
     CorrectionSubmissionResponse,
     OutcomeCorrectionCreate,
@@ -37,17 +38,23 @@ class CalibrationRunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     calibration_run_id: str
-    trigger_outcome_id: str
+    trigger_outcome_id: str | None
     dataset_sha256: str
     sample_count: int
     positive_count: int
     negative_count: int
     metrics_before: dict[str, float] | None
     metrics_after: dict[str, float] | None
+    oof_metrics_before: dict[str, float] | None
+    oof_metrics_after: dict[str, float] | None
     configuration: dict[str, float | int]
     status: str
     artifact_sha256: str | None
+    artifact_schema: str | None
     artifact_integrity: str
+    fold_assignment_sha256: str | None
+    eligible_count: int
+    excluded_count: int
     failure_code: str | None
     deployment_status: str
     deployment_scope: str
@@ -201,6 +208,18 @@ def get_calibration_run(
     request: Request,
 ):
     return _execute(lambda: request.app.state.outcome_service.get_run(run_id, user))
+
+
+@router.get(
+    "/api/v1/calibration-jobs/{job_id}",
+    response_model=CalibrationJobResponse,
+)
+def get_calibration_job(
+    job_id: str,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(lambda: request.app.state.outcome_service.get_job(job_id, user))
 
 
 @router.get(
