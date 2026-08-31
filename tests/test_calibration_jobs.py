@@ -976,9 +976,9 @@ def test_prepare_obeys_scope_then_job_lock_order_without_deadlock(
     entered_scope_lock = Event()
 
     class SignallingRepository(OutcomeRepository):
-        def acquire_scope_lock(self, session, *, scope):
+        def try_acquire_scope_lock(self, session, *, scope):
             entered_scope_lock.set()
-            return super().acquire_scope_lock(session, scope=scope)
+            return super().try_acquire_scope_lock(session, scope=scope)
 
     repository = SignallingRepository()
     outcome_service = OutcomeService(
@@ -1011,15 +1011,15 @@ def test_prepare_obeys_scope_then_job_lock_order_without_deadlock(
     thread = Thread(target=prepare)
     thread.start()
     assert entered_scope_lock.wait(timeout=2)
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert errors[0].__class__.__name__ == "CalibrationClaimDeferred"
     blocker.execute(text("SET LOCAL lock_timeout = '400ms'"))
     locked_job = repository.get_job_for_update(blocker, claim.job_id)
     assert locked_job is not None
     blocker.commit()
-    thread.join(timeout=5)
     blocker.close()
-
-    assert not thread.is_alive()
-    assert errors == []
 
 
 def test_outcome_submit_cannot_enter_after_snapshot_compare_before_activation_commit(
@@ -1201,6 +1201,223 @@ def test_missing_artifact_read_does_not_bypass_worker_retry_contract(
     assert terminal.attempt_count == 3
     assert run.status == "failed"
     assert terminal.result_run_id is None
+
+
+def test_scope_contention_requeues_without_consuming_three_attempts(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    entered_scope = Event()
+    current_time = [NOW]
+
+    class SignallingRepository(OutcomeRepository):
+        def try_acquire_scope_lock(self, session, *, scope):
+            entered_scope.set()
+            return super().try_acquire_scope_lock(session, scope=scope)
+
+    repository = SignallingRepository()
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        repository=repository,
+        clock=lambda: current_time[0],
+    )
+    worker = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        repository=repository,
+        clock=lambda: current_time[0],
+        lease_duration=timedelta(minutes=1),
+    )
+    blocker = session_factory()
+    blocker.begin()
+    repository.acquire_scope_lock(blocker, scope="controlled_demo")
+    entered_scope.clear()
+    results: list[bool] = []
+
+    thread = Thread(target=lambda: results.append(worker.process_next("worker-a")))
+    thread.start()
+    assert entered_scope.wait(timeout=2)
+    current_time[0] = NOW + timedelta(minutes=2)
+    thread.join(timeout=2)
+
+    assert worker.process_next("worker-b") is False
+    assert worker.process_next("worker-c") is False
+    blocker.commit()
+    blocker.close()
+
+    assert not thread.is_alive()
+    assert results == [False]
+    job = _jobs(session_factory)[0]
+    with session_factory() as session:
+        run_count = session.scalar(select(func.count()).select_from(CalibrationRunModel))
+    assert (job.status, job.attempt_count, job.lease_owner) == ("queued", 0, None)
+    assert run_count == 0
+
+
+def test_expired_deterministic_result_cannot_complete_until_fresh_claim(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=4)
+    current_time = [NOW]
+    entered_complete = Event()
+    allow_complete = Event()
+
+    def reject_data(*_args, **_kwargs):
+        raise ValueError("not enough governed class support")
+
+    outcome_service = OutcomeService(
+        session_factory,
+        artifact_root=tmp_path,
+        trainer=reject_data,
+        clock=lambda: current_time[0],
+    )
+
+    class PausingWorker(CalibrationJobService):
+        def _complete(self, claim, run_id):
+            entered_complete.set()
+            assert allow_complete.wait(timeout=5)
+            return super()._complete(claim, run_id)
+
+    worker = PausingWorker(
+        session_factory,
+        outcome_service=outcome_service,
+        clock=lambda: current_time[0],
+        lease_duration=timedelta(minutes=1),
+    )
+    results: list[bool] = []
+    thread = Thread(target=lambda: results.append(worker.process_next("worker-a")))
+    thread.start()
+    assert entered_complete.wait(timeout=3)
+    current_time[0] = NOW + timedelta(minutes=2)
+    allow_complete.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert results == [False]
+    first = _jobs(session_factory)[0]
+    assert (first.status, first.attempt_count, first.result_run_id) == (
+        "queued",
+        0,
+        None,
+    )
+
+    assert worker.process_next("worker-b") is True
+    completed = _jobs(session_factory)[0]
+    assert (completed.status, completed.attempt_count) == ("completed", 1)
+
+
+def test_shared_pending_run_failure_isolated_to_reusing_job(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    outcome_service = OutcomeService(
+        session_factory, artifact_root=tmp_path, clock=lambda: NOW
+    )
+    owner = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        clock=lambda: NOW,
+    )
+    owner_claim = owner._claim("worker-a")
+    assert owner_claim is not None
+    owner_prepared = owner._prepare_run(owner_claim)
+    with session_factory.begin() as session:
+        owner.repository.fail_or_retry_job(
+            session,
+            job_id=owner_claim.job_id,
+            worker_id=owner_claim.worker_id,
+            now=NOW,
+            failure_code="calibration_infrastructure_failure",
+        )
+
+    owner_blocker = session_factory()
+    owner_blocker.begin()
+    owner.repository.get_job_for_update(owner_blocker, owner_claim.job_id)
+
+    def unavailable(_staged):
+        raise OSError("artifact store unavailable to reusing job")
+
+    reuser = CalibrationJobService(
+        session_factory,
+        outcome_service=outcome_service,
+        artifact_publisher=unavailable,
+        clock=lambda: NOW,
+    )
+    assert reuser.process_next("worker-b1") is True
+    assert reuser.process_next("worker-b2") is True
+    assert reuser.process_next("worker-b3") is True
+    owner_blocker.commit()
+    owner_blocker.close()
+
+    jobs = _jobs(session_factory)
+    owner_job = next(job for job in jobs if job.job_id == owner_claim.job_id)
+    reusing_job = next(job for job in jobs if job.job_id != owner_claim.job_id)
+    with session_factory() as session:
+        shared = session.get(CalibrationRunModel, owner_prepared.run_id)
+        run_count = session.scalar(select(func.count()).select_from(CalibrationRunModel))
+    assert (reusing_job.status, reusing_job.attempt_count) == ("failed", 3)
+    assert owner_job.status == "queued"
+    assert shared.status == "eligible_candidate"
+    assert shared.deployment_status == "not_deployed"
+    assert run_count == 1
+
+    assert owner.process_next("worker-a2") is True
+    final_owner = next(
+        job for job in _jobs(session_factory) if job.job_id == owner_claim.job_id
+    )
+    with session_factory() as session:
+        shared = session.get(CalibrationRunModel, owner_prepared.run_id)
+    assert final_owner.status == "completed"
+    assert final_owner.result_run_id == owner_prepared.run_id
+    assert shared.deployment_status == "active"
+
+
+def test_job_cannot_complete_after_candidate_becomes_non_deployable(
+    session_factory,
+    tmp_path,
+):
+    _seed_jobs(session_factory, controlled_count=20)
+    outcome_service = OutcomeService(
+        session_factory, artifact_root=tmp_path, clock=lambda: NOW
+    )
+    worker = CalibrationJobService(
+        session_factory, outcome_service=outcome_service, clock=lambda: NOW
+    )
+    claim = worker._claim("worker-a")
+    assert claim is not None
+    prepared = worker._prepare_run(claim)
+    worker._renew(claim)
+    publish_candidate_artifact(prepared.staged)
+    candidate = prepared.candidate or worker._reload_candidate(prepared.run_id)
+    provenances = worker._run_provenances(prepared.run_id)
+
+    with session_factory.begin() as session:
+        run = session.get(CalibrationRunModel, prepared.run_id)
+        run.status = "failed"
+        run.artifact_locator = None
+        run.artifact_sha256 = None
+        run.metrics_after = None
+        run.failure_code = "artifact_write_failed"
+        run.deployment_status = "activation_failed"
+        run.activation_reason = "artifact_publication_failed"
+
+    with pytest.raises(RuntimeError, match="no longer deployable"):
+        outcome_service._complete_claimed_deployment(
+            job_id=claim.job_id,
+            worker_id=claim.worker_id,
+            run_id=prepared.run_id,
+            candidate=candidate,
+            provenances=provenances,
+            now=NOW,
+        )
+
+    job = _jobs(session_factory)[0]
+    assert job.status == "running"
+    assert job.result_run_id is None
 
 
 def test_database_allows_distinct_runs_for_same_dataset_hash(migrated_engine):

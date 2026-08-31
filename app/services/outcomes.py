@@ -927,6 +927,14 @@ class OutcomeService:
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
+            if (
+                run.status not in ("exploratory_candidate", "eligible_candidate")
+                or run.failure_code is not None
+                or run.artifact_locator is None
+                or run.artifact_sha256 is None
+                or run.deployment_status not in ("not_deployed", "active")
+            ):
+                raise RuntimeError("calibration run is no longer deployable")
             if not self.repository.run_membership_matches_eligible_snapshot(
                 session,
                 run_id,
@@ -983,6 +991,14 @@ class OutcomeService:
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
+            if (
+                run.status not in ("exploratory_candidate", "eligible_candidate")
+                or run.failure_code is not None
+                or run.artifact_locator is None
+                or run.artifact_sha256 is None
+                or run.deployment_status not in ("not_deployed", "active")
+            ):
+                raise RuntimeError("calibration run is no longer deployable")
             if not self.repository.run_membership_matches_eligible_snapshot(
                 session,
                 run_id,

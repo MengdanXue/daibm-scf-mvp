@@ -36,6 +36,19 @@ class OutcomeRepository:
             {"scope_key": f"calibration:{scope}"},
         )
 
+    def try_acquire_scope_lock(self, session: Session, *, scope: str) -> bool:
+        if scope not in self.DEPLOYABLE_SCOPES:
+            raise ValueError("scope must be a deployable calibration scope")
+        return bool(
+            session.scalar(
+                text(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtextextended(:scope_key, 0))"
+                ),
+                {"scope_key": f"calibration:{scope}"},
+            )
+        )
+
     def claim_next_job(
         self,
         session: Session,
@@ -145,6 +158,28 @@ class OutcomeRepository:
         if job.leased_until is None or job.leased_until <= now:
             raise RuntimeError("calibration job lease expired")
         job.leased_until = lease_until
+        session.flush()
+        return job
+
+    def release_claim_without_attempt(
+        self,
+        session: Session,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+    ) -> CalibrationJobModel:
+        job = self.get_job_for_update(session, job_id)
+        self._require_job_owner(job, worker_id)
+        if job.attempt_count < 1:
+            raise RuntimeError("claimed calibration job has no attempt to release")
+        job.status = "queued"
+        job.attempt_count -= 1
+        job.lease_owner = None
+        job.leased_until = None
+        job.started_at = None
+        job.completed_at = None
+        job.failure_code = None
+        job.result_run_id = None
         session.flush()
         return job
 

@@ -31,6 +31,10 @@ class DeterministicCalibrationRejection(Exception):
     """A stable data rejection that must not consume infrastructure retries."""
 
 
+class CalibrationClaimDeferred(Exception):
+    """A scope-contended/expired claim returned without consuming an attempt."""
+
+
 @dataclass(frozen=True)
 class ClaimedJob:
     job_id: uuid.UUID
@@ -43,6 +47,7 @@ class PreparedRun:
     run_id: uuid.UUID
     candidate: CalibrationCandidate | None
     staged: StagedCalibrationArtifact | None
+    owned_by_job: bool
 
 
 class CalibrationJobService:
@@ -95,12 +100,19 @@ class CalibrationJobService:
             )
         except DeterministicCalibrationRejection:
             self._fail(claim, "calibration_data_rejected", retryable=False)
+        except CalibrationClaimDeferred:
+            return False
         except Exception:
             terminal = self._settle_infrastructure_failure(
                 claim,
                 prepared,
             )
-            if terminal and prepared is not None and prepared.staged is not None:
+            if (
+                terminal
+                and prepared is not None
+                and prepared.staged is not None
+                and prepared.owned_by_job
+            ):
                 self.outcome_service._discard_failed_publication(prepared.staged)
         return True
 
@@ -143,18 +155,51 @@ class CalibrationJobService:
 
     def _prepare_run(self, claim: ClaimedJob) -> PreparedRun:
         with self.session_factory.begin() as session:
-            self.repository.acquire_scope_lock(
+            acquired = self.repository.try_acquire_scope_lock(
                 session,
                 scope=claim.deployment_scope,
             )
+            if not acquired:
+                job = self.repository.get_job_for_update(session, claim.job_id)
+                if (
+                    job is not None
+                    and job.status == "running"
+                    and job.lease_owner == claim.worker_id
+                ):
+                    self.repository.release_claim_without_attempt(
+                        session,
+                        job_id=claim.job_id,
+                        worker_id=claim.worker_id,
+                    )
+                session.commit()
+                raise CalibrationClaimDeferred
             job = self.repository.get_job_for_update(session, claim.job_id)
             self.repository._require_job_owner(job, claim.worker_id)
             if job.deployment_scope != claim.deployment_scope:
                 raise RuntimeError("calibration job scope changed after claim")
+            fenced_now = self._now()
+            if job.leased_until is None or job.leased_until <= fenced_now:
+                self.repository.release_claim_without_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    worker_id=claim.worker_id,
+                )
+                session.commit()
+                raise CalibrationClaimDeferred
+            self.repository.renew_job_lease(
+                session,
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                now=fenced_now,
+                lease_until=fenced_now + self.lease_duration,
+            )
 
             existing_for_job = self.repository.get_run_by_job(session, claim.job_id)
             if existing_for_job is not None:
-                return self._prepared_existing(existing_for_job)
+                return self._prepared_existing(
+                    existing_for_job,
+                    job_id=claim.job_id,
+                )
 
             rows = self.repository.list_eligible_outcomes_with_heads(
                 session,
@@ -192,7 +237,7 @@ class CalibrationJobService:
                 scope=claim.deployment_scope,
             )
             if duplicate is not None:
-                return self._prepared_existing(duplicate)
+                return self._prepared_existing(duplicate, job_id=claim.job_id)
 
             staged = self.outcome_service.artifact_writer(
                 self.outcome_service.artifact_root,
@@ -299,19 +344,25 @@ class CalibrationJobService:
                 run_id=run.calibration_run_id,
                 candidate=candidate,
                 staged=staged,
+                owned_by_job=True,
             )
         except Exception:
             discard_staged_artifact(staged)
             raise
 
     @staticmethod
-    def _prepared_existing(run: CalibrationRunModel) -> PreparedRun:
+    def _prepared_existing(
+        run: CalibrationRunModel,
+        *,
+        job_id: uuid.UUID,
+    ) -> PreparedRun:
         if run.status == "failed":
             if run.failure_code == "calibration_data_rejected":
                 return PreparedRun(
                     run_id=run.calibration_run_id,
                     candidate=None,
                     staged=None,
+                    owned_by_job=run.trigger_job_id == job_id,
                 )
             raise RuntimeError("existing calibration run is failed")
         if run.artifact_locator is None or run.artifact_sha256 is None:
@@ -326,6 +377,7 @@ class CalibrationJobService:
                 staged_path=pending_path if pending_path.is_file() else None,
                 sha256=run.artifact_sha256,
             ),
+            owned_by_job=run.trigger_job_id == job_id,
         )
 
     def _persist_data_rejection(
@@ -416,6 +468,7 @@ class CalibrationJobService:
             run_id=run.calibration_run_id,
             candidate=None,
             staged=None,
+            owned_by_job=True,
         )
 
     def _reload_candidate(self, run_id: uuid.UUID) -> CalibrationCandidate:
@@ -444,12 +497,51 @@ class CalibrationJobService:
 
     def _complete(self, claim: ClaimedJob, run_id: uuid.UUID) -> None:
         with self.session_factory.begin() as session:
+            acquired = self.repository.try_acquire_scope_lock(
+                session,
+                scope=claim.deployment_scope,
+            )
+            if not acquired:
+                job = self.repository.get_job_for_update(session, claim.job_id)
+                if (
+                    job is not None
+                    and job.status == "running"
+                    and job.lease_owner == claim.worker_id
+                ):
+                    self.repository.release_claim_without_attempt(
+                        session,
+                        job_id=claim.job_id,
+                        worker_id=claim.worker_id,
+                    )
+                session.commit()
+                raise CalibrationClaimDeferred
+            job = self.repository.get_job_for_update(session, claim.job_id)
+            self.repository._require_job_owner(job, claim.worker_id)
+            fenced_now = self._now()
+            if job.leased_until is None or job.leased_until <= fenced_now:
+                self.repository.release_claim_without_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    worker_id=claim.worker_id,
+                )
+                session.commit()
+                raise CalibrationClaimDeferred
+            run = self.repository.get_run_for_update(session, run_id)
+            if (
+                run is None
+                or run.trigger_job_id != claim.job_id
+                or run.status != "failed"
+                or run.failure_code != "calibration_data_rejected"
+            ):
+                raise RuntimeError(
+                    "deterministic calibration result is not owned by the job"
+                )
             self.repository.complete_job(
                 session,
                 job_id=claim.job_id,
                 worker_id=claim.worker_id,
                 result_run_id=run_id,
-                now=self._now(),
+                now=fenced_now,
             )
 
     def _renew(self, claim: ClaimedJob) -> None:
@@ -499,7 +591,12 @@ class CalibrationJobService:
             ):
                 return False
             terminal = job.attempt_count >= 3
-            if terminal and prepared is not None and prepared.staged is not None:
+            if (
+                terminal
+                and prepared is not None
+                and prepared.staged is not None
+                and prepared.owned_by_job
+            ):
                 run = self.repository.get_run_for_update(session, prepared.run_id)
                 if run is not None and run.deployment_status != "active":
                     run.status = "failed"
