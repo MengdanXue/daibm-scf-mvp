@@ -638,6 +638,17 @@ class WorkflowService:
                 application.core_enterprise_organization_id
                 == user.organization_id
             )
+        # Financier and risk-manager visibility is by lifecycle stage, not by
+        # organisation, and that is a modelling decision rather than an
+        # oversight. An application records the supplier and the core
+        # enterprise but never which financier handles it, so these two roles
+        # have no organisation to be scoped by. A second funding organisation
+        # would therefore see the same pipeline as the first. Narrowing it
+        # requires an assignment concept the schema does not have; the
+        # FinancingFacility aggregate, which does record its creating
+        # financier, is scoped by organisation instead. The boundary is
+        # recorded in docs/thesis-traceability.md and pinned by
+        # test_financier_visibility_is_by_stage_not_by_organisation.
         if role == Role.FINANCIER:
             return application.status not in {
                 Status.DRAFT.value,
