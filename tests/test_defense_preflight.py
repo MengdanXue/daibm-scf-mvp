@@ -266,8 +266,8 @@ def _run_reset(
             (
                 "@echo off",
                 (
-                    f'echo CF=[%COMPOSE_FILE%] PROJECT=[%COMPOSE_PROJECT_NAME%] '
-                    f'HOST=[%DOCKER_HOST%] ARGS=%*>>"%DOCKER_LOG%"'
+                    'echo CF=[%COMPOSE_FILE%] PROJECT=[%COMPOSE_PROJECT_NAME%] '
+                    'HOST=[%DOCKER_HOST%] ARGS=%*>>"%DOCKER_LOG%"'
                 ),
                 f'if "%3"=="info" exit /b {context_exit}',
                 f"exit /b {compose_exit}",

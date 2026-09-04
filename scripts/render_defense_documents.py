@@ -10,7 +10,6 @@ from pathlib import Path
 
 from pypdf import PdfReader
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -23,7 +22,6 @@ from reportlab.platypus import (
     FrameBreak,
     PageTemplate,
     Paragraph,
-    Spacer,
 )
 
 

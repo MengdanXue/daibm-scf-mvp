@@ -84,7 +84,7 @@ def test_ledger_repository_appends_and_verifies_jsonb_chain(session_factory):
 
     with session_factory() as session:
         verification = ledger_repository.verify(session)
-        events = ledger_repository.list(session, limit=10)
+        events = ledger_repository.list_recent(session, limit=10)
 
     assert verification == {
         "valid": True,
