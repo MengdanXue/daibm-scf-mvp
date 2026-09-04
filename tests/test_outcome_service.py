@@ -280,6 +280,7 @@ def test_twentieth_supported_outcome_automatically_activates_verified_calibratio
         confirmed=True,
         comment="Verified after calibration activation",
         user=core,
+        confirmed_payable_amount=Decimal("1500000.00"),
     )
     assessed = workflow.assess_risk(
         draft["request_id"],

@@ -15,13 +15,19 @@ from app.api.auth import router as auth_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
 from app.api.workflow import router as workflow_router
-from app.config import FabricGatewaySettings, PostgresSettings, ResearchSettings
+from app.config import (
+    FabricGatewaySettings,
+    PostgresSettings,
+    ResearchSettings,
+    ZkpProverSettings,
+)
 from app.database import Database
 from app.schemas import FinancingRequestCreate, IntegrityRecoveryRequest
 from app.service import FinancingService
 from app.services.identity import IdentityService
 from app.services.facility import FacilityService
 from app.services.workflow import WorkflowService
+from app.services.invoice_proof import HttpInvoiceLimitProver
 from app.services.research_inference import ResearchInferenceService
 from app.services.research_decision import ResearchDecisionService
 from app.services.research_scenario import ResearchScenarioService
@@ -62,7 +68,10 @@ def create_app(
     )
     integrity_service = IntegrityService(active_database.session_factory)
     identity_service = IdentityService(active_database.session_factory)
-    workflow_service = WorkflowService(active_database.session_factory)
+    workflow_service = WorkflowService(
+        active_database.session_factory,
+        invoice_prover=HttpInvoiceLimitProver(ZkpProverSettings.from_env()),
+    )
     facility_service = FacilityService(active_database.session_factory)
     anchor_dispatch_service = AnchorDispatchService(
         active_database.session_factory,

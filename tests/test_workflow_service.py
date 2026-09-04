@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -77,6 +79,7 @@ def test_five_roles_complete_one_application_with_traceable_versions(
         confirmed=True,
         comment="Trade documents confirmed",
         user=users["core_enterprise"],
+        confirmed_payable_amount=Decimal("1500000.00"),
     )
     assessed = service.assess_risk(
         draft["request_id"], confirmed["version"], users["financier"]
@@ -178,6 +181,7 @@ def test_invalid_active_calibration_falls_back_with_persisted_audit_lineage(
         confirmed=True,
         comment="Verified",
         user=users["core_enterprise"],
+        confirmed_payable_amount=Decimal("1500000.00"),
     )
 
     assessed = service.assess_risk(

@@ -86,6 +86,10 @@ def _exercise_primary(page) -> str:
     page.locator("#workflowComment").fill(
         "Подтверждено в демонстрационном процессе"
     )
+    # Acknowledge a ceiling above the invoice so the invoice-limit proof
+    # demonstrates a strict bound rather than the degenerate equal case.
+    ceiling = page.locator("#workflowPayableCeiling")
+    ceiling.fill(f"{float(ceiling.input_value()) * 1.25:.2f}")
     page.locator('[data-workflow-action="confirm"]').click()
     page.locator('#workflowDetail [data-status="trade_confirmed"]').wait_for()
     logout(page)

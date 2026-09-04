@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -19,7 +20,7 @@ from app.domain.workflow import (
 )
 from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
-from app.models import FinancingRequestModel
+from app.models import FinancingRequestModel, LedgerEventModel
 from app.models_outcome import CalibrationRunModel
 from app.models_workflow import WorkflowActionModel
 from app.repositories.identity import IdentityRepository
@@ -29,6 +30,11 @@ from app.risk import assess
 from app.schemas import FinancingRequestCreate
 from app.schemas_workflow import ApplicationDraftCreate
 from app.services.adaptive_risk import AdaptiveRiskInferenceService
+from app.services.invoice_proof import (
+    InvoiceLimitProver,
+    ProofRejected,
+    ProverUnavailable,
+)
 
 
 class ApplicationNotFound(Exception):
@@ -47,6 +53,10 @@ class DuplicateInvoiceClaim(Exception):
     pass
 
 
+class PayableCeilingViolation(Exception):
+    pass
+
+
 DECISION_CONTROLS = {
     "approved": "standard_monitoring",
     "manual_review": "request_documents_and_enhanced_validation",
@@ -62,6 +72,7 @@ class WorkflowService:
         identity_repository: IdentityRepository | None = None,
         ledger_repository: LedgerRepository | None = None,
         adaptive_risk_service: AdaptiveRiskInferenceService | None = None,
+        invoice_prover: InvoiceLimitProver | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.workflow_repository = workflow_repository or WorkflowRepository()
@@ -70,6 +81,9 @@ class WorkflowService:
         self.adaptive_risk_service = (
             adaptive_risk_service or AdaptiveRiskInferenceService()
         )
+        # Proving is optional by design: without the sidecar the confirmation
+        # still commits and the event records why no proof accompanies it.
+        self.invoice_prover = invoice_prover
 
     def create_draft(
         self,
@@ -249,16 +263,90 @@ class WorkflowService:
         confirmed: bool,
         comment: str,
         user: AuthenticatedUser,
+        confirmed_payable_amount: Decimal | None = None,
     ) -> dict[str, Any]:
-        return self._simple_transition(
-            request_id,
-            version,
-            user,
-            required_role=Role.CORE_ENTERPRISE,
-            action=Action.CONFIRM_TRADE if confirmed else Action.RETURN_TRADE,
-            event_type="TRADE_CONFIRMED" if confirmed else "TRADE_RETURNED",
-            comment=comment,
-        )
+        if not confirmed:
+            return self._simple_transition(
+                request_id,
+                version,
+                user,
+                required_role=Role.CORE_ENTERPRISE,
+                action=Action.RETURN_TRADE,
+                event_type="TRADE_RETURNED",
+                comment=comment,
+            )
+        # Authorisation precedes validation: a caller who may not confirm a
+        # trade must not learn anything from how its arguments are shaped.
+        self._require_role(user, Role.CORE_ENTERPRISE)
+        if confirmed_payable_amount is None:
+            raise PayableCeilingViolation(
+                "Confirming a trade requires the payable ceiling that the "
+                "core enterprise acknowledges for this supplier"
+            )
+
+        normalized_id = self._normalize_id(request_id)
+        ceiling = Decimal(confirmed_payable_amount).quantize(Decimal("0.01"))
+        with self.session_factory.begin() as session:
+            application = self._load_for_action(session, normalized_id, user)
+            self._check_version(application, version)
+            current = Status(application.status)
+            target = next_status(
+                current, Action.CONFIRM_TRADE, Role(user.role)
+            )
+            amount = Decimal(application.amount)
+            if ceiling < amount:
+                raise PayableCeilingViolation(
+                    "The acknowledged payable ceiling is below the invoice "
+                    "amount, so the trade cannot be confirmed"
+                )
+            application.confirmed_payable_amount = ceiling
+            payload: dict[str, Any] = {
+                "confirmed_payable_amount": format(ceiling, ".2f"),
+            }
+            payload.update(self._invoice_limit_evidence(amount, ceiling))
+            self._advance(
+                session,
+                application,
+                user,
+                action_type=Action.CONFIRM_TRADE.value,
+                event_type="TRADE_CONFIRMED",
+                from_status=current,
+                to_status=target,
+                comment=comment,
+                payload=payload,
+            )
+        return self.get(normalized_id, user)
+
+    def _invoice_limit_evidence(
+        self,
+        amount: Decimal,
+        ceiling: Decimal,
+    ) -> dict[str, Any]:
+        """Prove the invoice stays within the ceiling, or say why it did not.
+
+        The Python comparison above is authoritative; the proof exists so a
+        financier can be shown the invoice never exceeded the acknowledged
+        payable without being shown the invoice amount itself. A missing
+        sidecar therefore degrades the evidence, never the decision.
+        """
+
+        if self.invoice_prover is None:
+            return {"proof_fallback_code": "prover_not_configured"}
+        try:
+            proof = self.invoice_prover.prove(
+                invoice_amount_minor=int(amount.scaleb(2)),
+                payable_limit_minor=int(ceiling.scaleb(2)),
+            )
+        except ProofRejected:
+            # The prover disagrees with a comparison this method already made,
+            # so the safe reading is that the two sides disagree about the
+            # statement rather than that the invoice is within the ceiling.
+            raise PayableCeilingViolation(
+                "The invoice-limit statement could not be proven"
+            ) from None
+        except ProverUnavailable:
+            return {"proof_fallback_code": "prover_unavailable"}
+        return proof.ledger_payload()
 
     def assess_risk(
         self,
@@ -687,6 +775,11 @@ class WorkflowService:
             "updated_at": canonical_timestamp(application.updated_at),
             "applicant_id": application.applicant_id,
             "amount": float(application.amount),
+            "confirmed_payable_amount": (
+                format(Decimal(application.confirmed_payable_amount), ".2f")
+                if application.confirmed_payable_amount is not None
+                else None
+            ),
             "term_days": application.term_days,
             "features": application.features,
             "risk_score": application.risk_score,
@@ -720,6 +813,9 @@ class WorkflowService:
                 if application.trade_evidence_sha256
                 and application.invoice_claim_sha256
                 else None
+            ),
+            "invoice_limit_evidence": self._invoice_limit_evidence_view(
+                session, application
             ),
             "risk_evidence": (
                 {
@@ -763,6 +859,43 @@ class WorkflowService:
             getattr(diagnostics, "constraint_name", None)
             == "uq_financing_requests_invoice_claim_sha256"
         )
+
+    @staticmethod
+    def _invoice_limit_evidence_view(
+        session: Session,
+        application: FinancingRequestModel,
+    ) -> dict[str, Any] | None:
+        """Surface the proof recorded with the trade confirmation.
+
+        The proof lives in the audit ledger rather than on the application
+        row, because the ledger hash chain is what makes it evidence. This
+        reads it back for display without duplicating it into a column.
+        """
+
+        if application.confirmed_payable_amount is None:
+            return None
+        event = session.scalar(
+            select(LedgerEventModel)
+            .where(
+                LedgerEventModel.entity_id == application.request_id,
+                LedgerEventModel.event_type == "TRADE_CONFIRMED",
+            )
+            .order_by(LedgerEventModel.id.desc())
+            .limit(1)
+        )
+        payload = event.payload if event is not None else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        return {
+            "confirmed_payable_amount": format(
+                Decimal(application.confirmed_payable_amount), ".2f"
+            ),
+            "statement": "invoice_amount <= confirmed_payable_amount",
+            "circuit_version": payload.get("circuit_version"),
+            "proof_sha256": payload.get("proof_sha256"),
+            "payable_commitment": payload.get("payable_commitment"),
+            "fallback_code": payload.get("proof_fallback_code"),
+        }
 
     @staticmethod
     def _risk_band(score: float) -> str:
