@@ -22,6 +22,7 @@ from app.services.workflow import (
     ApplicationNotFound,
     DuplicateInvoiceClaim,
     ForbiddenWorkflow,
+    PayableCeilingViolation,
     StaleApplication,
 )
 
@@ -65,6 +66,14 @@ def _execute(operation: Callable[[], Any]):
             detail={
                 "code": "duplicate_invoice_claim",
                 "message": "This invoice is already used by an application",
+            },
+        ) from error
+    except PayableCeilingViolation as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "payable_ceiling_violation",
+                "message": str(error),
             },
         ) from error
     except InvalidTransition as error:
@@ -180,6 +189,7 @@ def confirm_trade(
             confirmed=payload.confirmed,
             comment=payload.comment,
             user=user,
+            confirmed_payable_amount=payload.confirmed_payable_amount,
         )
     )
 

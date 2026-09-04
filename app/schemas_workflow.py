@@ -69,6 +69,21 @@ class VersionRequest(BaseModel):
 class TradeConfirmationRequest(VersionRequest):
     confirmed: bool
     comment: str = Field(min_length=1, max_length=500)
+    # The ceiling the core enterprise acknowledges it owes this supplier. It
+    # is the public bound of the invoice-limit proof, so it is required to
+    # confirm a trade and meaningless when returning one.
+    confirmed_payable_amount: Decimal | None = Field(
+        default=None, gt=0, le=20_000_000
+    )
+
+    @field_validator("confirmed_payable_amount")
+    @classmethod
+    def ceiling_has_at_most_two_decimal_places(
+        cls, value: Decimal | None
+    ) -> Decimal | None:
+        if value is not None and value != value.quantize(Decimal("0.01")):
+            raise ValueError("value must have at most two decimal places")
+        return value
 
 
 class FinancingDecisionRequest(VersionRequest):

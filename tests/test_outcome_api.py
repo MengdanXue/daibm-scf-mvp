@@ -224,6 +224,7 @@ def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_clie
             "version": submitted["version"],
             "confirmed": True,
             "comment": "Verified",
+            "confirmed_payable_amount": "1500000.00",
         },
     ).json()
 
