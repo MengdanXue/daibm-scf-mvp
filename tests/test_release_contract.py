@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -377,8 +378,16 @@ def test_ci_runs_research_suite_in_a_separate_pinned_environment():
     workflow = _read(".github/workflows/ci.yml")
     application_job, research_job = workflow.split("  research-tests:", 1)
 
-    assert workflow.count("actions/checkout@v5") == 2
-    assert workflow.count("actions/setup-python@v6") == 2
+    # Assert the property rather than a job count. Counting actions was a
+    # proxy for "every action is pinned" that had to be revised whenever a
+    # job was added, and it was duplicated in tests/test_defense_documents.py,
+    # so the two copies could disagree. This holds however many jobs exist;
+    # the job inventory is asserted in that other module, once.
+    uses = re.findall(r"uses:\s*(\S+)", workflow)
+    assert uses
+    for action in uses:
+        assert re.search(r"@(v\d+|[0-9a-f]{40})$", action), action
+
     assert "requirements-dev.txt" in application_job
     assert "tests --ignore=tests/research" in application_job
     assert "cache-dependency-path: requirements-research.txt" in research_job
