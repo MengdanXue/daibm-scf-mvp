@@ -256,9 +256,13 @@ def test_ci_and_defense_guides_expose_supported_runtime_and_fallback_contracts()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     demo = (ROOT / "docs/demo-script.md").read_text(encoding="utf-8")
 
-    assert workflow.count("actions/checkout@v5") == 3
-    assert workflow.count("actions/setup-python@v6") == 2
+    assert workflow.count("actions/checkout@v5") == 4
+    assert workflow.count("actions/setup-python@v6") == 3
     assert workflow.count("actions/setup-node@v6") == 1
+    # Static analysis is a release gate, not advice: a job that lints without
+    # failing the build is indistinguishable from no job at all.
+    assert "python -m ruff check ." in workflow
+    assert "python -m mypy" in workflow
     assert "tests/test_defense_documents.py" in workflow
     assert "tests/test_defense_preflight.py" in workflow
     # The optional Fabric and zero-knowledge components ship with their own

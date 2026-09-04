@@ -27,7 +27,7 @@ class FinancingRequestRepository:
     ) -> FinancingRequestModel | None:
         return session.get(FinancingRequestModel, request_id)
 
-    def list(
+    def list_recent(
         self,
         session: Session,
         limit: int = 50,

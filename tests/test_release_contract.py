@@ -309,14 +309,14 @@ def test_release_documentation_exposes_reproducibility_and_true_boundaries():
     design = _read("docs/mvp-design.md")
     demo = _read("docs/demo-script.md")
 
-    for command in (
+    for cli_command in (
         "python -m research.cli generate",
         "python -m research.cli train-xgboost",
         "python -m research.cli train-tgnn",
         "python -m research.cli promote",
         "python -m research.cli verify",
     ):
-        assert command in readme
+        assert cli_command in readme
     assert "GCN" in design and "BiLSTM" in design and "ONNX Runtime" in design
     assert "Исследовательское ядро" in demo
     assert "科研核心" in demo

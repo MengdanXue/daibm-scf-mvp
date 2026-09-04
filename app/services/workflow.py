@@ -26,7 +26,7 @@ from app.models_workflow import WorkflowActionModel
 from app.repositories.identity import IdentityRepository
 from app.repositories.ledger import LedgerRepository
 from app.repositories.workflow import WorkflowRepository
-from app.risk import assess
+from app.risk import DECISION_CONTROLS, assess, band_for_score
 from app.schemas import FinancingRequestCreate
 from app.schemas_workflow import ApplicationDraftCreate
 from app.services.adaptive_risk import AdaptiveRiskInferenceService
@@ -55,13 +55,6 @@ class DuplicateInvoiceClaim(Exception):
 
 class PayableCeilingViolation(Exception):
     pass
-
-
-DECISION_CONTROLS = {
-    "approved": "standard_monitoring",
-    "manual_review": "request_documents_and_enhanced_validation",
-    "rejected": "suspend_auto_approval_and_enhanced_validation",
-}
 
 
 class WorkflowService:
@@ -395,7 +388,7 @@ class WorkflowService:
                 payload={
                     "score": adaptive_result.final_score,
                     "raw_score": adaptive_result.raw_score,
-                    "band": self._risk_band(adaptive_result.final_score),
+                    "band": band_for_score(adaptive_result.final_score),
                     "model": "transparent_logistic_baseline_v0.1",
                     "calibration_run_id": adaptive_result.calibration_run_id,
                     "deployment_scope": adaptive_result.deployment_scope,
@@ -897,6 +890,3 @@ class WorkflowService:
             "fallback_code": payload.get("proof_fallback_code"),
         }
 
-    @staticmethod
-    def _risk_band(score: float) -> str:
-        return "high" if score >= 0.72 else "medium" if score >= 0.45 else "low"

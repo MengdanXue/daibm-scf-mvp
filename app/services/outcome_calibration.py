@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 import tempfile
@@ -9,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from app.canonical import canonical_bytes
 
 
 @dataclass(frozen=True)
@@ -75,21 +76,31 @@ class StagedCalibrationArtifact:
 
 @dataclass(frozen=True)
 class CalibrationDatasetSummary:
+    """A dataset summary whose pre-calibration metrics are known.
+
+    Splitting this from the metric-less fallback keeps ``metrics_before``
+    non-optional everywhere it is read. It was previously widened to
+    ``| None`` purely to let ``OutcomeService._fallback_summary`` reuse the
+    type, which made every read a latent AttributeError -- inside a block
+    that swallows exceptions into a generic "training failed" code.
+    """
+
     dataset_sha256: str
     sample_count: int
     positive_count: int
     negative_count: int
-    metrics_before: dict[str, float] | None
+    metrics_before: dict[str, float]
 
 
-def _canonical_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+@dataclass(frozen=True)
+class UnmeasuredCalibrationDataset:
+    """A dataset counted but never scored, recorded when training failed."""
+
+    dataset_sha256: str
+    sample_count: int
+    positive_count: int
+    negative_count: int
+    metrics_before: None = None
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
@@ -155,7 +166,7 @@ def _prepare_dataset(
     positive_count = int(labels.sum())
     summary = CalibrationDatasetSummary(
         dataset_sha256=hashlib.sha256(
-            _canonical_bytes([_observation_payload(item) for item in ordered])
+            canonical_bytes([_observation_payload(item) for item in ordered])
         ).hexdigest(),
         sample_count=sample_count,
         positive_count=positive_count,
@@ -256,7 +267,7 @@ def build_calibration_candidate(
         ),
         "training_input": "logit(original_risk_score)",
     }
-    artifact_bytes = _canonical_bytes(artifact)
+    artifact_bytes = canonical_bytes(artifact)
     return CalibrationCandidate(
         dataset_sha256=dataset_sha256,
         sample_count=sample_count,
