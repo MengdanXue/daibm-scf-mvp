@@ -55,3 +55,50 @@ jobs:
 
       - name: Run research tests
         run: python -m pytest tests/research -q
+
+  advanced-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            advanced/fabric/chaincode/package-lock.json
+            advanced/zkp/package-lock.json
+
+      - name: Install and test the audit anchor chaincode
+        working-directory: advanced/fabric/chaincode
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Install zero-knowledge proof dependencies
+        working-directory: advanced/zkp
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify published proof artifact hashes
+        working-directory: advanced/zkp
+        run: npm run verify:artifacts
+
+      - name: Run invoice-limit Groth16 proof tests
+        working-directory: advanced/zkp
+        run: npm test
+
+      # The gateway suite includes a container integration test that asserts the
+      # entrypoint drops privileges to the unprivileged node user. It therefore
+      # needs the pinned runtime image with the package mounted at /work, which
+      # is the same reproducible convention used by scripts/build-zkp-artifacts.ps1.
+      - name: Run gateway tests in the pinned Node image
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/advanced/gateway:/work" \
+            -w /work \
+            node:24-bookworm-slim \
+            sh -lc "npm ci --no-audit --no-fund && npm test"

@@ -256,10 +256,17 @@ def test_ci_and_defense_guides_expose_supported_runtime_and_fallback_contracts()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     demo = (ROOT / "docs/demo-script.md").read_text(encoding="utf-8")
 
-    assert workflow.count("actions/checkout@v5") == 2
+    assert workflow.count("actions/checkout@v5") == 3
     assert workflow.count("actions/setup-python@v6") == 2
+    assert workflow.count("actions/setup-node@v6") == 1
     assert "tests/test_defense_documents.py" in workflow
     assert "tests/test_defense_preflight.py" in workflow
+    # The optional Fabric and zero-knowledge components ship with their own
+    # suites; the defense claim that they are real depends on CI running them.
+    assert "advanced/fabric/chaincode" in workflow
+    assert "advanced/zkp" in workflow
+    assert "npm run verify:artifacts" in workflow
+    assert "node:24-bookworm-slim" in workflow
     for filename in (
         "docs/defense-one-page.pdf",
         "docs/research-brief-en.pdf",
