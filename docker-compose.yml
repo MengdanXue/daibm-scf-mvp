@@ -29,6 +29,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
       RESEARCH_ARTIFACT_DIR: /app/artifacts/reference
       RESEARCH_CORE_REQUIRED: "true"
+      ZKP_PROVER_URL: ${ZKP_PROVER_URL:-http://zkp-prover:8091}
+      ZKP_PROOF_REQUIRED: "${ZKP_PROOF_REQUIRED:-false}"
     depends_on:
       postgres:
         condition: service_healthy

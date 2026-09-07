@@ -11,15 +11,14 @@ from app.ledger import canonical_timestamp
 from app.models import FinancingRequestModel
 from app.repositories import FinancingRequestRepository, LedgerRepository
 from app.repositories.ledger import LedgerEventSpec
-from app.risk import RiskResult, assess
+from app.risk import BAND_DECISIONS, DECISION_CONTROLS, RiskResult, assess
 from app.schemas import FinancingRequestCreate
 
 __all__ = ["FinancingService"]
 
 DECISIONS = {
-    "low": ("approved", "standard_monitoring"),
-    "medium": ("manual_review", "request_documents_and_enhanced_validation"),
-    "high": ("rejected", "suspend_auto_approval_and_enhanced_validation"),
+    band: (decision, DECISION_CONTROLS[decision])
+    for band, decision in BAND_DECISIONS.items()
 }
 
 CENT = Decimal("0.01")
@@ -94,12 +93,12 @@ class FinancingService:
         with self.session_factory() as session:
             return [
                 self._request_to_dict(model)
-                for model in self.financing_repository.list(session, limit)
+                for model in self.financing_repository.list_recent(session, limit)
             ]
 
     def list_ledger(self, limit: int = 100) -> list[dict[str, Any]]:
         with self.session_factory() as session:
-            return self.ledger_repository.list(session, limit)
+            return self.ledger_repository.list_recent(session, limit)
 
     def verify_ledger(self) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -124,7 +123,7 @@ class FinancingService:
             if self.financing_repository.exists_any(session):
                 return [
                     self._request_to_dict(model)
-                    for model in self.financing_repository.list(session, 50)
+                    for model in self.financing_repository.list_recent(session, 50)
                 ]
 
         with self.session_factory.begin() as session:
