@@ -22,6 +22,8 @@ RED 测试先用同一组 JSON vectors 验证：`invoice_limit@1`、`tgnn@2.1` �
 - Python/JavaScript syntax checks：通过。
 - Fabric chaincode 和完整 PostgreSQL 迁移测试由 CI 执行；CI 结果以远端 workflow 为准。
 
+远端 workflow `application-ci` run `34142767620` 已全部成功：application-tests（含真实 PostgreSQL）、research-tests、advanced-tests、static-analysis 均为 `success`。
+
 ## 追溯边界
 
 之前 Fabric 验收报告中记录的 `circuitVersion` 缺失是**历史现场快照**，不回写原 anchor。修复后，新建事件可把 `invoice_limit@1` 保留在 outbox envelope 和链上 anchor；历史 anchor 仍保持原字节内容。原证明 hash、event hash 和 Fabric 幂等语义不变。
