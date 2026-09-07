@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import hashlib
 import json
 import math
@@ -28,8 +30,9 @@ from app.services.adaptive_risk import (
     resolve_deployment_scope,
 )
 from app.services.outcome_calibration import (
-    CalibrationCandidate,
     CalibrationDatasetSummary,
+    UnmeasuredCalibrationDataset,
+    CalibrationCandidate,
     CalibrationObservation,
     CalibrationTrainingConfig,
     StagedCalibrationArtifact,
@@ -40,6 +43,9 @@ from app.services.outcome_calibration import (
     stage_candidate_artifact,
     summarize_calibration_observations,
 )
+
+
+_logger = logging.getLogger(__name__)
 
 
 class OutcomeError(Exception):
@@ -222,7 +228,9 @@ class OutcomeService:
                 )
                 provenances = tuple(item.provenance for item in observations)
                 deployment_scope = resolve_deployment_scope(provenances)
-                summary = self._fallback_summary(observations)
+                summary: CalibrationDatasetSummary | UnmeasuredCalibrationDataset = (
+                    self._fallback_summary(observations)
+                )
                 candidate: CalibrationCandidate | None = None
                 failure_code: str | None = None
                 try:
@@ -234,6 +242,13 @@ class OutcomeService:
                         observations, config=self.training_config
                     )
                 except Exception:
+                    # A calibration run is recorded either way, so without
+                    # this the only trace of a defect in the trainer is a
+                    # run row reading "failed" with no cause attached.
+                    _logger.exception(
+                        "Calibration candidate training failed for outcome %s",
+                        outcome.outcome_id,
+                    )
                     failure_code = "candidate_training_failed"
                 if candidate is not None:
                     try:
@@ -241,6 +256,11 @@ class OutcomeService:
                             self.artifact_root, candidate
                         )
                     except Exception:
+                        _logger.exception(
+                            "Staging the calibration artifact failed "
+                            "under %s",
+                            self.artifact_root,
+                        )
                         failure_code = "artifact_write_failed"
                         staged = None
 
@@ -312,6 +332,10 @@ class OutcomeService:
             try:
                 publish_candidate_artifact(staged)
             except Exception:
+                _logger.exception(
+                    "Publishing the calibration artifact failed for run %s",
+                    run_id,
+                )
                 assert outcome_id is not None and run_id is not None
                 self._mark_publication_failed(outcome_id, run_id)
                 self._discard_failed_publication(staged)
@@ -325,11 +349,11 @@ class OutcomeService:
 
         assert outcome_id is not None and run_id is not None
         with self.session_factory() as session:
-            outcome = self.repository.get_outcome(session, outcome_id)
-            run = self.repository.get_run(session, run_id)
-            if outcome is None or run is None:
+            committed_outcome = self.repository.get_outcome(session, outcome_id)
+            committed_run = self.repository.get_run(session, run_id)
+            if committed_outcome is None or committed_run is None:
                 raise RuntimeError("Committed outcome calibration result is missing")
-            return self._result(session, outcome, run)
+            return self._result(session, committed_outcome, committed_run)
 
     def get_outcome(
         self,
@@ -728,18 +752,17 @@ class OutcomeService:
     @staticmethod
     def _fallback_summary(
         observations: tuple[CalibrationObservation, ...],
-    ) -> CalibrationDatasetSummary:
+    ) -> UnmeasuredCalibrationDataset:
         ordered = tuple(sorted(observations, key=lambda item: item.outcome_id))
         payload = [asdict(item) for item in ordered]
         positive_count = sum(int(item.defaulted) for item in ordered)
-        return CalibrationDatasetSummary(
+        return UnmeasuredCalibrationDataset(
             dataset_sha256=hashlib.sha256(
                 canonical_json(payload).encode("utf-8")
             ).hexdigest(),
             sample_count=len(ordered),
             positive_count=positive_count,
             negative_count=len(ordered) - positive_count,
-            metrics_before=None,
         )
 
     @staticmethod

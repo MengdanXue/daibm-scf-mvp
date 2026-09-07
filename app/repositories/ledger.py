@@ -78,7 +78,7 @@ class LedgerRepository:
             previous_hash = event.event_hash
         return appended
 
-    def list(
+    def list_recent(
         self,
         session: Session,
         limit: int = 100,

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime, timezone
-from typing import Any
+
+from app.canonical import canonical_json
 
 __all__ = [
     "GENESIS_HASH",
@@ -13,15 +13,6 @@ __all__ = [
 ]
 
 GENESIS_HASH = "GENESIS"
-
-
-def canonical_json(payload: dict[str, Any]) -> str:
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
 
 
 def canonical_timestamp(value: datetime) -> str:

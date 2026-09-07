@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -204,7 +205,8 @@ def test_actual_outcome_feedback_boundary_documents_governed_activation():
 
     for document in (demo, defense, brief):
         assert "Platt" in document
-        assert "not_promoted" in document or "never promoted" in document
+        assert "gated automatic activation" in document
+        assert "never promoted" not in document
     for document in (defense, brief):
         assert "does not retrain the TGNN" in document
         assert "does not trigger on drift" in document
@@ -309,14 +311,14 @@ def test_release_documentation_exposes_reproducibility_and_true_boundaries():
     design = _read("docs/mvp-design.md")
     demo = _read("docs/demo-script.md")
 
-    for command in (
+    for cli_command in (
         "python -m research.cli generate",
         "python -m research.cli train-xgboost",
         "python -m research.cli train-tgnn",
         "python -m research.cli promote",
         "python -m research.cli verify",
     ):
-        assert command in readme
+        assert cli_command in readme
     assert "GCN" in design and "BiLSTM" in design and "ONNX Runtime" in design
     assert "Исследовательское ядро" in demo
     assert "科研核心" in demo
@@ -377,8 +379,16 @@ def test_ci_runs_research_suite_in_a_separate_pinned_environment():
     workflow = _read(".github/workflows/ci.yml")
     application_job, research_job = workflow.split("  research-tests:", 1)
 
-    assert workflow.count("actions/checkout@v5") == 2
-    assert workflow.count("actions/setup-python@v6") == 2
+    # Assert the property rather than a job count. Counting actions was a
+    # proxy for "every action is pinned" that had to be revised whenever a
+    # job was added, and it was duplicated in tests/test_defense_documents.py,
+    # so the two copies could disagree. This holds however many jobs exist;
+    # the job inventory is asserted in that other module, once.
+    uses = re.findall(r"uses:\s*(\S+)", workflow)
+    assert uses
+    for action in uses:
+        assert re.search(r"@(v\d+|[0-9a-f]{40})$", action), action
+
     assert "requirements-dev.txt" in application_job
     assert "tests --ignore=tests/research" in application_job
     assert "cache-dependency-path: requirements-research.txt" in research_job

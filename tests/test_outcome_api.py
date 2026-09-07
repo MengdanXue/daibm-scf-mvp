@@ -224,6 +224,7 @@ def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_clie
             "version": submitted["version"],
             "confirmed": True,
             "comment": "Verified",
+            "confirmed_payable_amount": "1500000.00",
         },
     ).json()
 
@@ -248,7 +249,7 @@ def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_clie
     ).json()
 
     _login(outcome_client, "auditor.demo")
-    audited = outcome_client.post(
+    outcome_client.post(
         f"/api/v1/applications/{request_id}/audit-review",
         json={"version": controlled["version"], "comment": "Audit complete"},
     ).json()

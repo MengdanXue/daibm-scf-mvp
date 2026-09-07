@@ -70,6 +70,7 @@ def test_five_authenticated_roles_complete_the_versioned_api_journey(
             "version": submitted.json()["version"],
             "confirmed": True,
             "comment": "Contract and invoice confirmed",
+            "confirmed_payable_amount": "1500000.00",
         },
     )
     assert confirmed.status_code == 200

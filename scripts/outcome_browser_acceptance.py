@@ -7,13 +7,12 @@ from playwright.sync_api import Route, sync_playwright
 
 try:
     from scripts.browser_acceptance import (
-        BASE_URL,
         _exercise_primary,
         login,
         logout,
     )
 except ModuleNotFoundError:  # Direct `python scripts\...py` execution.
-    from browser_acceptance import BASE_URL, _exercise_primary, login, logout
+    from browser_acceptance import _exercise_primary, login, logout
 
 
 SCREENSHOT = Path("output/outcome-feedback-acceptance.png").resolve()
