@@ -1,6 +1,6 @@
 # 生命周期、纠正链与校准范围收口验收
 
-状态：已完成本轮实现、原卷迁移、历史纠正、浏览器验收和 CI 收口。最新提交 `7c3f7cd`；私有草稿 PR：[PR 5](https://github.com/MengdanXue/daibm-scf-mvp/pull/5)。
+状态：已完成本轮实现、原卷迁移、历史纠正、浏览器验收和 CI 收口。最终 head `7ad180b`（代码修复 `7c3f7cd`）；私有草稿 PR：[PR 5](https://github.com/MengdanXue/daibm-scf-mvp/pull/5)。
 
 工作树：`D:/毕业论文/daibm-scf-mvp/.worktrees/lifecycle-corrections-scope`；分支：`integration/lifecycle-scope-20260907`。保留既有工作树和历史提交，未改主检出目录、未直接合并 main。
 
@@ -72,7 +72,7 @@ Task 3 提交 `433de4b`：已知失败复现 14/14、生命周期/服务/API/out
 
 为补齐本地研究环境，已安装 `xgboost 3.4.1`、`onnx 1.22.0`、`onnxscript 0.7.1`；并修正 sklearn 1.9 的曲线绘图兼容性。研究测试 63 项通过；完整 pytest 回归已跑到 100% 无失败（本机需临时加入 `tests` 包和 `PYTHONPATH`，以避开已安装的同名第三方包）。
 
-最新 head `7c3f7cd` 的两个 Actions run 均通过：
+最终 head `7ad180b` 的两个 Actions run 均通过：
 
 - [34136196925](https://github.com/MengdanXue/daibm-scf-mvp/actions/runs/34136196925)
 - [34136201331](https://github.com/MengdanXue/daibm-scf-mvp/actions/runs/34136201331)
