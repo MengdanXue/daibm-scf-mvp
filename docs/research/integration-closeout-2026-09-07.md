@@ -1,8 +1,8 @@
 # 生命周期、纠正链与校准范围收口验收
 
-状态：进行中；本文只将已执行的检查标为通过。最终提交、完整回归、浏览器验收、原卷升级重建与最终 Actions 尚待补齐。
+状态：已完成本轮实现、原卷迁移、历史纠正、浏览器验收和 CI 收口。最新提交 `7c3f7cd`；私有草稿 PR：[PR 5](https://github.com/MengdanXue/daibm-scf-mvp/pull/5)。
 
-工作树：`D:/毕业论文/daibm-scf-mvp/.worktrees/lifecycle-corrections-scope`；分支：`integration/lifecycle-scope-20260907`；私有草稿 PR：[PR 5](https://github.com/MengdanXue/daibm-scf-mvp/pull/5)。本轮起点 `61ea85019f470f38f0ec0cf53fa8fbe7b20cd5bb`。保留既有工作树、历史提交及未提交实现，未改主检出目录、未直接合并 main。
+工作树：`D:/毕业论文/daibm-scf-mvp/.worktrees/lifecycle-corrections-scope`；分支：`integration/lifecycle-scope-20260907`。保留既有工作树和历史提交，未改主检出目录、未直接合并 main。
 
 ## 已批准的生命周期语义
 
@@ -31,7 +31,7 @@
 
 ## 原持久卷现场与备份
 
-本轮实测 Docker Desktop 4.88.1 / Engine 29.7.2 已可用，旧 engine pipe 阻塞已解除。两个原容器均为早前停止状态；先只读备份，再正常启动原 PostgreSQL。原应用尚未启动。未 reset、重装、清卷、注销 WSL 或删除 VHD。
+本轮实测 Docker Desktop 4.88.1 / Engine 29.7.2 已可用，旧 engine pipe 阻塞已解除。先只读备份，再用最新代码重建原 PostgreSQL 与应用容器并完成正式迁移。未 reset、重装、清卷、注销 WSL 或删除 VHD；保留备份、克隆卷和原卷。
 
 原卷：`daibm-scf-mvp_postgres-data`、`daibm-scf-mvp_calibration-artifacts`。备份位置为工作树内 `.superpowers/sdd/2026-09-07-integration-closeout/volume-backups-20260907/`，不提交含数据的备份到 Git。保留该目录。
 
@@ -42,7 +42,7 @@
 
 另保存原库 custom-format logical dump、schema-only dump、逐表原字段摘要及 15 个 artifact 文件摘要。冷备已恢复到独立克隆卷，PostgreSQL 17.11 完成普通 WAL 恢复。克隆与原库升级前 22 张表逐行摘要全部一致，证明备份可恢复。
 
-实际原库为 `20260824_0009`：23 笔融资（21 已关闭、2 已放款）、42 条已确认付款、20 条 outcome、20 次校准、602 条 ledger、483 条 anchor outbox。23 笔本金守恒检查通过。所有 20 个历史 outcome 原始风险分数均为 `0.5595`，只有一个不同值，不能将旧拟合数字视为风险区分能力提升。
+实际原库为 `20260824_0009`：23 笔融资（21 已关闭、2 已放款）、42 条已确认付款、20 条 outcome、20 次校准、602 条 ledger、483 条 anchor outbox。23 笔本金守恒检查通过。20 个历史 outcome 的原始风险分数全部为 `0.5595`，不能将旧拟合数字视为风险区分能力提升。
 
 ## 升级副本及原样本预演
 
@@ -58,18 +58,25 @@
 
 每条原 outcome 声称违约、60 天逾期、损失 120000.00；对应融资本金 1200000.00 已全部现金收回，余额为零，没有 governed default/write-off 事件。遗留 `closure_reason=NULL` 未被擅自回填。
 
-在 **原数据副本** 上通过 `auditor.demo` 的公开 API 追加 5 个 `HISTORICAL_FACTS_CONFLICT / EXCLUDE`。20 条 outcome 原行全部不变；原 ledger、anchor、付款、计划及动作行全部保留。训练资格降为 15 条，旧 controlled_demo active 校准因 `outcome_excluded` 失效。5 个异步 job 均 completed；去重后的候选因 `temporal_insufficient_partition_sizes` 被拒绝，15 条全为负类。15 个 artifact 文件摘要全部保持原值。
+在 **原数据副本** 上通过 `auditor.demo` 的公开 API 追加 5 个 `HISTORICAL_FACTS_CONFLICT / EXCLUDE`。20 条 outcome 原行全部不变；原 ledger、anchor、付款、计划及动作行全部保留。训练资格降为 15 条，旧 `controlled_demo` active 校准因 `outcome_excluded` 失效。5 个异步 job 均 completed；去重后的候选因 `temporal_insufficient_partition_sizes` 被拒绝，15 条全为负类。15 个 artifact 文件摘要全部保持原值。
 
-这些是实际原数据克隆的预演，不是新造 demo 样本。**正式原卷迁移、5 条纠正、容器重建及最终摘要对照仍待执行。**
+正式原卷已按 `0009→0010→0011→0012→0013` 迁移。`original-after-migration.json` 与克隆迁移快照在 22 张表的计数和摘要上完全一致；纠正后快照为 20 outcomes、5 corrections、25 calibration runs、613 ledger、494 anchors，新增行均为预期治理血缘。纠正后实际 outcome 内容摘要仍与迁移后相同。
+
+认证调用 `POST /api/demo/reset` 返回 HTTP 410、错误码 `demo_reset_retired`。调用前后快照除登录产生的 `user_sessions` 加一外，其余表计数和摘要完全一致，证明退役 reset 不会清空历史。
 
 ## 本轮新增验证
 
 Task 3 提交 `433de4b`：已知失败复现 14/14、生命周期/服务/API/outcome/job 定向回归 149/149、迁移/治理/集成 50/50、补充回归 6/6；Ruff 和 mypy（63 个源文件）通过。Task 3 独立复审代理两次因账户额度限制失败，未形成独立 verdict。
 
-应用 reset 退役和 outcome UI/job 轮询提交为 `32e8735`、`6b3b830`。相关 API、认证、服务、schema、UI/release 合约测试 73 项通过；Ruff 通过。`scripts/outcome_browser_acceptance.py --help` 现在只显示帮助，不连接服务；浏览器流程已使用隔离的 8017 运行并完成登录、建案、支付、关闭和 actual-outcome POST，但旧验收脚本仍按即时 calibration run 断言，最终在候选状态断言失败。该失败已记录，不能宣称浏览器全流程通过。
+应用 reset 退役和 outcome UI/job 轮询提交为 `32e8735`、`6b3b830`。相关 API、认证、服务、schema、UI/release 合约测试 73 项通过；Ruff 通过。浏览器验收在隔离服务 `8017` 完成登录、建案、支付、关闭、503 重试、幂等键、异步 calibration job 轮询、RU/ZH 和移动视图；脚本通过且无页面错误，输出截图为 `output/outcome-feedback-acceptance.png`。
 
-最新分支已推送到私有 PR 5，Actions run `34129903036` 和 `34129898901` 在记录时仍为 in_progress，不能代替本地或持久卷验收。
+为补齐本地研究环境，已安装 `xgboost 3.4.1`、`onnx 1.22.0`、`onnxscript 0.7.1`；并修正 sklearn 1.9 的曲线绘图兼容性。研究测试 63 项通过；完整 pytest 回归已跑到 100% 无失败（本机需临时加入 `tests` 包和 `PYTHONPATH`，以避开已安装的同名第三方包）。
 
-## 最终验证待补记录
+最新 head `7c3f7cd` 的两个 Actions run 均通过：
 
-Task 3 实施/复审、Task 4 双语浏览器、Task 5 reset 退役/策略共享/真实性能门禁审计、完整回归与最终 Actions 的准确命令、数量、结果和最终提交将在执行后补入；当前不作全绿或全部完成声明。
+- [34136196925](https://github.com/MengdanXue/daibm-scf-mvp/actions/runs/34136196925)
+- [34136201331](https://github.com/MengdanXue/daibm-scf-mvp/actions/runs/34136201331)
+
+## 仍然适用的边界
+
+历史 outcome 的原始分数没有区分度；被纠正样本不参与训练，当前原数据不足以产生可晋升的新候选。没有接入真实外部数据或真实银行转账，`external_verified` 仍是人工声明。独立复审代理因账户额度限制没有返回结果，以上结论来自本地测试、隔离浏览器、克隆预演、原卷快照和 GitHub Actions。
