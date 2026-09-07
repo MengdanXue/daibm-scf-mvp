@@ -195,6 +195,65 @@ def _command(version: int) -> dict:
     return {"version": version, "idempotency_key": str(uuid.uuid4())}
 
 
+def test_deployment_api_requires_exact_scope_and_exposes_temporal_evidence(
+    outcome_client, session_factory, tmp_path
+):
+    from tests.test_outcome_service import _seed_pending_v4_run
+
+    service, run_id = _seed_pending_v4_run(session_factory, tmp_path)
+    service.reconcile_deployments()
+    _login(outcome_client, "auditor.demo")
+    assert outcome_client.get("/api/v1/calibration-deployments/active").status_code == 422
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active?scope=mixed").status_code == 422
+    )
+    assert (
+        outcome_client.get(
+            "/api/v1/calibration-deployments/active?scope=external_verified"
+        ).status_code
+        == 404
+    )
+    result = outcome_client.get("/api/v1/calibration-deployments/active?scope=controlled_demo")
+    assert result.status_code == 200
+    data = result.json()
+    assert data["calibration_run_id"] == str(run_id)
+    evidence = data["temporal_validation"]
+    assert evidence["training_cutoff"] < evidence["validation_start"]
+    assert len(evidence["training_outcome_ids"]) == 28
+    assert len(evidence["validation_outcome_ids"]) == 12
+    assert data["metrics_after"] == evidence["metrics_after"]
+    assert data["oof_metrics_after"] is None
+    assert (
+        outcome_client.post(
+            "/api/v1/calibration-deployments/rollback",
+            json={
+                "expected_active_run_id": str(run_id),
+                "deployment_scope": "external_verified",
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        outcome_client.post(
+            "/api/v1/calibration-deployments/rollback",
+            json={
+                "expected_active_run_id": str(run_id),
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_browser_cannot_declare_external_verified_application(outcome_client):
+    from tests.test_workflow_service import draft_payload
+
+    _login(outcome_client, "supplier.demo")
+    payload = draft_payload().model_dump()
+    payload["assessment_scope"] = "external_verified"
+    response = outcome_client.post("/api/v1/applications", json=payload)
+    assert response.status_code == 422
+
+
 def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_client):
     _login(outcome_client, "supplier.demo")
     created = outcome_client.post(
@@ -370,12 +429,12 @@ def test_auditor_submits_and_queries_derived_outcome_and_queued_job(
     assert "artifact_locator" not in created.text
     outcome_id = body["outcome"]["outcome_id"]
     assert outcome_client.get("/api/v1/outcomes").json() == [body["outcome"]]
-    assert outcome_client.get(f"/api/v1/outcomes/{outcome_id}").json() == body[
-        "outcome"
-    ]
+    assert outcome_client.get(f"/api/v1/outcomes/{outcome_id}").json() == body["outcome"]
     assert outcome_client.get("/api/v1/calibration-runs").json() == []
     assert (
-        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        outcome_client.get(
+            "/api/v1/calibration-deployments/active?scope=controlled_demo"
+        ).status_code
         == 404
     )
 

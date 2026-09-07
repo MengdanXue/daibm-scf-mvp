@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
-from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -54,45 +52,19 @@ def _observation(
 
 def _varied_observations() -> tuple[CalibrationObservation, ...]:
     return tuple(
-        _observation(index, 0.05 + index * 0.045, index >= 10)
-        for index in range(20)
+        _observation(index, 0.05 + (index % 10) * 0.09, index % 10 >= 5) for index in range(40)
     )
 
 
-def test_candidate_is_deterministic_and_reports_oof_metrics():
-    observations = _varied_observations()
-
-    first = build_calibration_candidate(observations)
-    second = build_calibration_candidate(tuple(reversed(observations)))
-
-    assert first == second
-    assert first.sample_count == 20
-    assert first.positive_count == 10
-    assert first.negative_count == 10
-    assert first.status == "eligible_candidate"
-    assert first.distinct_score_count == 20
+def test_candidate_is_deterministic_and_reports_holdout_metrics():
+    rows = _varied_observations()
+    first = build_calibration_candidate(rows)
+    assert first == build_calibration_candidate(tuple(reversed(rows)))
+    assert first.sample_count == 40
+    assert first.artifact_schema == "daibm.platt-calibration.v4"
     assert first.metrics_before["brier_score"] == pytest.approx(
-        sum(
-            (row.original_score - float(row.defaulted)) ** 2
-            for row in observations
-        )
-        / 20
+        sum((row.original_score - row.defaulted) ** 2 for row in rows[28:]) / 12
     )
-    assert first.artifact["artifact_schema"] == "daibm.platt-calibration.v3"
-    assert first.artifact["validation"]["method"] == (
-        "deterministic_stratified_5_fold_oof"
-    )
-    assert first.artifact["validation"]["metrics_after"] == first.metrics_after
-    assert first.artifact["diagnostics"]["final_fit"]["metrics"] != (
-        first.metrics_after
-    )
-    assert json.dumps(
-        first.artifact,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8") == first.artifact_bytes
 
 
 def test_serialized_numeric_policy_is_stable_and_metric_snapshots_do_not_alias():
@@ -128,109 +100,65 @@ def test_training_config_rejects_epsilon_that_canonicalizes_to_half():
         )
 
 
-def test_oof_fit_inputs_exclude_every_held_out_observation(monkeypatch):
-    observations = tuple(
-        replace(row, original_score=0.2 + (index // 2) * 0.05)
-        for index, row in enumerate(_varied_observations())
-    )
-    assignments = assign_stratified_folds(observations)
-    calls: list[
-        tuple[tuple[str, ...], tuple[float, ...], tuple[float, ...]]
-    ] = []
-    real_fit = calibration_module._fit_platt
+def test_holdout_fit_inputs_exclude_every_validation_observation(monkeypatch):
+    rows = _varied_observations()
+    calls = []
+    original = calibration_module._fit_platt
 
-    def recording_fit(
-        scores,
-        labels,
-        config,
-        *,
-        training_outcome_ids=(),
-    ):
-        calls.append(
-            (
-                tuple(training_outcome_ids),
-                tuple(scores.tolist()),
-                tuple(labels.tolist()),
-            )
-        )
-        return real_fit(scores, labels, config)
+    def recording_fit(scores, labels, config, *, training_outcome_ids=()):
+        calls.append((training_outcome_ids, tuple(scores), tuple(labels)))
+        return original(scores, labels, config)
 
     monkeypatch.setattr(calibration_module, "_fit_platt", recording_fit)
-
-    candidate = build_calibration_candidate(observations)
-
-    assert len(calls) == 6
-    ordered = tuple(sorted(observations, key=lambda row: row.outcome_id))
-    held_out_coverage: list[str] = []
-    for fold, (training_ids, _training_scores, training_labels) in enumerate(
-        calls[:5]
-    ):
-        expected_training_ids = tuple(
-            row.outcome_id
-            for row in ordered
-            if assignments[row.outcome_id] != fold
+    build_calibration_candidate(rows)
+    assert calls == [
+        (
+            tuple(row.outcome_id for row in rows[:28]),
+            tuple(row.original_score for row in rows[:28]),
+            tuple(int(row.defaulted) for row in rows[:28]),
         )
-        expected_held_out_ids = {
-            row.outcome_id
-            for row in ordered
-            if assignments[row.outcome_id] == fold
-        }
-        assert training_ids == expected_training_ids
-        assert set(training_ids).isdisjoint(expected_held_out_ids)
-        assert set(training_ids) | expected_held_out_ids == {
-            row.outcome_id for row in ordered
-        }
-        assert set(training_labels) == {0.0, 1.0}
-        held_out_coverage.extend(expected_held_out_ids)
-    assert Counter(held_out_coverage) == Counter(row.outcome_id for row in ordered)
-    assert calls[-1][0] == tuple(row.outcome_id for row in ordered)
-    assert set(calls[-1][2]) == {0.0, 1.0}
-    held_out_ids = [
-        outcome_id
-        for fold_evidence in candidate.artifact["validation"]["folds"]
-        for outcome_id in fold_evidence["held_out_outcome_ids"]
     ]
-    assert sorted(held_out_ids) == sorted(row.outcome_id for row in observations)
-    for fold_evidence in candidate.artifact["validation"]["folds"]:
-        fold = fold_evidence["fold"]
-        assert fold_evidence["held_out_outcome_ids"] == [
-            row.outcome_id
-            for row in sorted(observations, key=lambda item: item.outcome_id)
-            if assignments[row.outcome_id] == fold
-        ]
-        assert fold_evidence["training_outcome_ids"] == [
-            row.outcome_id
-            for row in sorted(observations, key=lambda item: item.outcome_id)
-            if assignments[row.outcome_id] != fold
-        ]
 
 
 def test_fold_assignment_is_stratified_canonical_and_order_independent():
-    observations = _varied_observations()
+    observations = _varied_observations()[:20]
 
     assignment = assign_stratified_folds(observations)
     reversed_assignment = assign_stratified_folds(tuple(reversed(observations)))
 
     assert assignment == reversed_assignment
     assert sorted(assignment.values()) == [
-        0, 0, 0, 0, 1, 1, 1, 1, 2, 2,
-        2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        3,
+        4,
+        4,
+        4,
+        4,
     ]
     for fold in range(5):
-        labels = {
-            row.defaulted
-            for row in observations
-            if assignment[row.outcome_id] == fold
-        }
+        labels = {row.defaulted for row in observations if assignment[row.outcome_id] == fold}
         assert labels == {False, True}
 
 
 def test_public_fold_assigner_requires_approved_support():
     with pytest.raises(ValueError, match="at least 20"):
-        assign_stratified_folds(_varied_observations()[:-1])
+        assign_stratified_folds(_varied_observations()[:19])
     unsupported = tuple(
-        replace(row, defaulted=index >= 16)
-        for index, row in enumerate(_varied_observations())
+        replace(row, defaulted=index >= 16) for index, row in enumerate(_varied_observations()[:20])
     )
     with pytest.raises(ValueError, match="five observations per class"):
         assign_stratified_folds(unsupported)
@@ -251,9 +179,7 @@ def test_semantically_identical_noncanonical_uuid_cannot_form_two_identities():
 def test_equivalent_timestamp_offsets_have_identical_lineage_and_fold_bytes():
     observations = _varied_observations()
     equivalent_offset = tuple(
-        replace(row, observed_at="2026-07-31T20:05:00.000000-04:00")
-        if index == 5
-        else row
+        replace(row, observed_at="2026-07-31T20:05:00.000000-04:00") if index == 5 else row
         for index, row in enumerate(observations)
     )
 
@@ -265,37 +191,14 @@ def test_equivalent_timestamp_offsets_have_identical_lineage_and_fold_bytes():
     assert equivalent.artifact_bytes == baseline.artifact_bytes
 
 
-def test_fold_hash_changes_only_when_assignment_changes():
-    observations = _varied_observations()
-    baseline = build_calibration_candidate(observations)
-    score_changed = tuple(
-        replace(row, original_score=row.original_score + 0.001)
-        if row is observations[0]
-        else row
-        for row in observations
+def test_chronological_partition_changes_when_observation_moves_past_cutoff():
+    rows = _varied_observations()
+    baseline = build_calibration_candidate(rows)
+    changed = build_calibration_candidate(
+        (replace(rows[0], observed_at="2026-09-01T00:00:00+00:00"),) + rows[1:]
     )
-    assignment_changed = tuple(
-        replace(row, observed_at="2026-09-01T00:00:00.000000+00:00")
-        if row is observations[0]
-        else row
-        for row in observations
-    )
-
-    score_candidate = build_calibration_candidate(score_changed)
-    assignment_candidate = build_calibration_candidate(assignment_changed)
-    assert score_candidate.fold_assignment_sha256 == baseline.fold_assignment_sha256
-    assert score_candidate.dataset_sha256 != baseline.dataset_sha256
-    assert assignment_candidate.fold_assignment_sha256 != (
-        baseline.fold_assignment_sha256
-    )
-    canonical_assignment = json.dumps(
-        assign_stratified_folds(observations),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    assert baseline.fold_assignment_sha256 == hashlib.sha256(
-        canonical_assignment
-    ).hexdigest()
+    assert changed.dataset_sha256 != baseline.dataset_sha256
+    assert rows[0].outcome_id in changed.artifact["validation"]["validation_outcome_ids"]
 
 
 def test_metrics_match_hand_calculated_brier_and_log_loss_with_clamping():
@@ -334,9 +237,10 @@ def test_dataset_hash_tracks_correction_head_lineage():
     changed = build_calibration_candidate(corrected)
 
     assert changed.dataset_sha256 != original.dataset_sha256
-    assert changed.artifact["dataset"]["correction_heads"][
-        observations[0].outcome_id
-    ] == "50000000-0000-0000-0000-000000000001"
+    assert (
+        changed.artifact["dataset"]["correction_heads"][observations[0].outcome_id]
+        == "50000000-0000-0000-0000-000000000001"
+    )
 
 
 def test_duplicate_outcome_ids_are_rejected_before_fold_assignment():
@@ -374,24 +278,20 @@ def test_candidate_rejects_nonfinite_or_out_of_range_raw_scores(score):
         build_calibration_candidate(malformed)
 
 
-def test_candidate_requires_the_approved_oof_sample_and_class_support():
-    with pytest.raises(ValueError, match="at least 20"):
-        build_calibration_candidate(_varied_observations()[:-1])
-    unsupported = tuple(
-        replace(row, defaulted=index >= 16)
-        for index, row in enumerate(_varied_observations())
-    )
-    with pytest.raises(ValueError, match="at least five observations per class"):
-        build_calibration_candidate(unsupported)
+def test_candidate_requires_the_approved_temporal_support():
+    with pytest.raises(ValueError, match="temporal_insufficient_partition_sizes"):
+        build_calibration_candidate(_varied_observations()[:29])
+    with pytest.raises(ValueError, match="class_support"):
+        build_calibration_candidate(
+            tuple(replace(row, defaulted=False) for row in _varied_observations())
+        )
 
 
-def test_identical_scores_preserve_count_evidence_for_the_gate():
-    candidate = build_calibration_candidate(
-        tuple(replace(row, original_score=0.5595) for row in _varied_observations())
-    )
-
-    assert candidate.status == "eligible_candidate"
-    assert candidate.distinct_score_count == 1
+def test_identical_scores_are_rejected_before_fitting():
+    with pytest.raises(ValueError, match="temporal_insufficient_distinct_scores"):
+        build_calibration_candidate(
+            tuple(replace(row, original_score=0.5595) for row in _varied_observations())
+        )
 
 
 def test_candidate_artifact_is_atomically_written_and_verified(tmp_path):

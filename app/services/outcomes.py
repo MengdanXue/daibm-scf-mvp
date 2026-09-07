@@ -528,10 +528,10 @@ class OutcomeService:
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                 self._reject_unrecoverable_deployment(run_id)
 
-    def get_active_deployment(self, user: AuthenticatedUser) -> dict[str, Any]:
+    def get_active_deployment(self, user: AuthenticatedUser, *, scope: str) -> dict[str, Any]:
         self._require_auditor(user)
         with self.session_factory() as session:
-            run = self.repository.get_active_run(session)
+            run = self.repository.get_active_run(session, scope=scope)
             if run is None:
                 raise OutcomeNotFound("active calibration deployment")
             return self._serialize_run(run, session=session)
@@ -540,18 +540,14 @@ class OutcomeService:
         self,
         expected_active_run_id: str | uuid.UUID,
         user: AuthenticatedUser,
+        *,
+        scope: str,
     ) -> dict[str, Any]:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
         with self.session_factory.begin() as session:
-            current_hint = self.repository.get_active_run(session)
-            if current_hint is None:
-                raise OutcomeNotFound("active calibration deployment")
-            scope = current_hint.deployment_scope
             self.repository.acquire_scope_lock(session, scope=scope)
-            current = self.repository.get_active_run(
-                session, scope=scope, for_update=True
-            )
+            current = self.repository.get_active_run(session, scope=scope, for_update=True)
             if current is None:
                 raise OutcomeNotFound("active calibration deployment")
             if current.calibration_run_id != expected_id:
@@ -566,6 +562,19 @@ class OutcomeService:
                 raise OutcomeConflict("rollback predecessor is unavailable")
             if restored.deployment_scope != scope:
                 raise OutcomeConflict("rollback predecessor scope is inconsistent")
+            if not self.repository.run_membership_is_eligible(
+                session, restored.calibration_run_id, scope=scope
+            ):
+                raise OutcomeConflict("rollback predecessor membership is no longer eligible")
+            try:
+                self._candidate_from_run(
+                    restored,
+                    tuple(
+                        self.repository.list_run_membership(session, restored.calibration_run_id)
+                    ),
+                )
+            except (OSError, TypeError, KeyError, ValueError) as error:
+                raise OutcomeConflict("rollback predecessor artifact is invalid") from error
 
             now = self._now()
             current.deployment_status = "superseded"
@@ -1215,13 +1224,11 @@ class OutcomeService:
         validation = artifact.get("validation")
         if not isinstance(dataset, dict):
             raise ValueError("calibration artifact dataset is invalid")
-        if schema == "daibm.platt-calibration.v3":
+        if schema in {"daibm.platt-calibration.v3", "daibm.platt-calibration.v4"}:
             if not isinstance(validation, dict):
                 raise ValueError("calibration artifact validation is invalid")
             distinct_score_count = int(dataset["distinct_score_count"])
-            fold_assignment_sha256 = str(
-                validation["fold_assignment_sha256"]
-            )
+            fold_assignment_sha256 = str(validation.get("fold_assignment_sha256", ""))
         else:
             distinct_score_count = 0
             fold_assignment_sha256 = ""
@@ -1233,12 +1240,8 @@ class OutcomeService:
             status=run.status,
             slope=calibration.slope,
             intercept=calibration.intercept,
-            metrics_before={
-                key: float(value) for key, value in run.metrics_before.items()
-            },
-            metrics_after={
-                key: float(value) for key, value in run.metrics_after.items()
-            },
+            metrics_before={key: float(value) for key, value in run.metrics_before.items()},
+            metrics_after={key: float(value) for key, value in run.metrics_after.items()},
             artifact=artifact,
             artifact_bytes=artifact_bytes,
             distinct_score_count=distinct_score_count,
@@ -1248,11 +1251,7 @@ class OutcomeService:
             correction_heads=tuple(
                 (
                     str(item.outcome_id),
-                    (
-                        str(item.correction_head_id)
-                        if item.correction_head_id is not None
-                        else None
-                    ),
+                    (str(item.correction_head_id) if item.correction_head_id is not None else None),
                 )
                 for item in memberships
             ),
@@ -1422,21 +1421,25 @@ class OutcomeService:
         session: Session | None = None,
     ) -> dict[str, Any]:
         fold_assignment_sha256: str | None = None
+        temporal_validation: dict[str, Any] | None = None
         if run.artifact_locator is None or run.artifact_sha256 is None:
             integrity = "not_applicable"
         else:
             artifact_path = Path(run.artifact_locator)
             try:
-                integrity = recover_candidate_artifact(
-                    artifact_path, run.artifact_sha256
-                )
+                integrity = recover_candidate_artifact(artifact_path, run.artifact_sha256)
             except OSError:
                 integrity = "unavailable"
-            if integrity == "verified" and run.artifact_schema == "daibm.platt-calibration.v3":
+            if integrity == "verified" and run.artifact_schema in {
+                "daibm.platt-calibration.v3",
+                "daibm.platt-calibration.v4",
+            }:
                 try:
                     artifact = json.loads(artifact_path.read_bytes())
                     validation = artifact.get("validation")
                     if isinstance(validation, dict):
+                        if run.artifact_schema == "daibm.platt-calibration.v4":
+                            temporal_validation = validation
                         value = validation.get("fold_assignment_sha256")
                         if isinstance(value, str):
                             fold_assignment_sha256 = value
@@ -1462,6 +1465,8 @@ class OutcomeService:
                 evidence = event.payload
         eligible_count = evidence.get("eligible_count", run.sample_count)
         excluded_count = evidence.get("excluded_count", 0)
+        if temporal_validation is None and isinstance(evidence.get("temporal_validation"), dict):
+            temporal_validation = evidence["temporal_validation"]
         if fold_assignment_sha256 is None:
             value = evidence.get("fold_assignment_sha256")
             if isinstance(value, str):
@@ -1469,9 +1474,7 @@ class OutcomeService:
         return {
             "calibration_run_id": str(run.calibration_run_id),
             "trigger_outcome_id": (
-                str(run.trigger_outcome_id)
-                if run.trigger_outcome_id is not None
-                else None
+                str(run.trigger_outcome_id) if run.trigger_outcome_id is not None else None
             ),
             "dataset_sha256": run.dataset_sha256,
             "sample_count": run.sample_count,
@@ -1479,8 +1482,16 @@ class OutcomeService:
             "negative_count": run.negative_count,
             "metrics_before": run.metrics_before,
             "metrics_after": run.metrics_after,
-            "oof_metrics_before": run.metrics_before,
-            "oof_metrics_after": run.metrics_after,
+            "oof_metrics_before": run.metrics_before
+            if run.artifact_schema == "daibm.platt-calibration.v3"
+            else None,
+            "oof_metrics_after": run.metrics_after
+            if run.artifact_schema == "daibm.platt-calibration.v3"
+            else None,
+            "temporal_validation": temporal_validation,
+            "validation_policy": temporal_validation.get("policy")
+            if temporal_validation
+            else evidence.get("validation_policy"),
             "configuration": run.configuration,
             "status": run.status,
             "artifact_sha256": run.artifact_sha256,
@@ -1495,19 +1506,13 @@ class OutcomeService:
             "activation_mode": run.activation_mode,
             "activation_reason": run.activation_reason,
             "activated_at": (
-                canonical_timestamp(run.activated_at)
-                if run.activated_at is not None
-                else None
+                canonical_timestamp(run.activated_at) if run.activated_at is not None else None
             ),
             "deactivated_at": (
-                canonical_timestamp(run.deactivated_at)
-                if run.deactivated_at is not None
-                else None
+                canonical_timestamp(run.deactivated_at) if run.deactivated_at is not None else None
             ),
             "previous_active_run_id": (
-                str(run.previous_active_run_id)
-                if run.previous_active_run_id is not None
-                else None
+                str(run.previous_active_run_id) if run.previous_active_run_id is not None else None
             ),
             "started_at": canonical_timestamp(run.started_at),
             "completed_at": canonical_timestamp(run.completed_at),

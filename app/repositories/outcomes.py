@@ -619,6 +619,7 @@ class OutcomeRepository:
             select(CalibrationRunModel).where(
                 CalibrationRunModel.dataset_sha256 == dataset_sha256,
                 CalibrationRunModel.deployment_scope == scope,
+                CalibrationRunModel.artifact_schema == "daibm.platt-calibration.v4",
                 CalibrationRunModel.status == "eligible_candidate",
                 CalibrationRunModel.deployment_status.in_(
                     ("not_deployed", "active")
@@ -682,17 +683,14 @@ class OutcomeRepository:
         self,
         session: Session,
         *,
-        scope: str | None = None,
+        scope: str,
         for_update: bool = False,
     ) -> CalibrationRunModel | None:
         statement = select(CalibrationRunModel).where(
             CalibrationRunModel.deployment_status == "active"
         )
-        if scope is not None:
-            self._provenance_for_scope(scope)
-            statement = statement.where(
-                CalibrationRunModel.deployment_scope == scope
-            )
+        self._provenance_for_scope(scope)
+        statement = statement.where(CalibrationRunModel.deployment_scope == scope)
         if for_update:
             statement = statement.with_for_update()
         return session.scalar(statement)

@@ -8,6 +8,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -65,13 +66,9 @@ class CalibrationTrainingConfig:
         if l2_penalty < 0:
             raise ValueError("L2 penalty must be non-negative and finite")
         try:
-            probability_epsilon = canonical_calibration_float(
-                self.probability_epsilon
-            )
+            probability_epsilon = canonical_calibration_float(self.probability_epsilon)
         except ValueError as error:
-            raise ValueError(
-                "probability epsilon must be between zero and 0.5"
-            ) from error
+            raise ValueError("probability epsilon must be between zero and 0.5") from error
         if not 0 < probability_epsilon < 0.5:
             raise ValueError("probability epsilon must be between zero and 0.5")
         object.__setattr__(self, "learning_rate", learning_rate)
@@ -88,9 +85,7 @@ def canonical_training_configuration(
         "epochs": config.epochs,
         "l2_penalty": canonical_calibration_float(config.l2_penalty),
         "learning_rate": canonical_calibration_float(config.learning_rate),
-        "probability_epsilon": canonical_calibration_float(
-            config.probability_epsilon
-        ),
+        "probability_epsilon": canonical_calibration_float(config.probability_epsilon),
     }
 
 
@@ -160,9 +155,7 @@ class UnmeasuredCalibrationDataset:
 
 
 def _serialized_metrics(metrics: dict[str, float]) -> dict[str, float]:
-    return {
-        key: canonical_calibration_float(value) for key, value in metrics.items()
-    }
+    return {key: canonical_calibration_float(value) for key, value in metrics.items()}
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
@@ -189,10 +182,7 @@ def _metrics(labels: np.ndarray, probabilities: np.ndarray, epsilon: float) -> d
     metrics = {
         "brier_score": float(np.mean(np.square(bounded - labels))),
         "log_loss": float(
-            -np.mean(
-                labels * np.log(bounded)
-                + (1.0 - labels) * np.log(1.0 - bounded)
-            )
+            -np.mean(labels * np.log(bounded) + (1.0 - labels) * np.log(1.0 - bounded))
         ),
     }
     if not all(math.isfinite(value) for value in metrics.values()):
@@ -286,8 +276,7 @@ def assign_stratified_folds(
     if len(ordered) < 20:
         raise ValueError("fold assignment requires at least 20 observations")
     class_counts = {
-        label: sum(row.defaulted is label for row in ordered)
-        for label in (False, True)
+        label: sum(row.defaulted is label for row in ordered) for label in (False, True)
     }
     if min(class_counts.values()) < folds:
         raise ValueError("fold assignment requires five observations per class")
@@ -400,174 +389,155 @@ def summarize_calibration_observations(
     return _prepare_dataset(observations, active_config)[3]
 
 
+TEMPORAL_POLICY = {
+    "training_fraction": 0.7,
+    "minimum_training_count": 20,
+    "minimum_validation_count": 10,
+    "minimum_distinct_training_scores": 5,
+    "minimum_training_score_span": 0.05,
+    "minimum_class_count_per_partition": 2,
+    "metric_tolerance": 1e-12,
+    "boundary_selection": "nearest_size_only_earlier_tie",
+}
+
+
+def temporal_partition(
+    observations: tuple[CalibrationObservation, ...],
+) -> tuple[tuple[CalibrationObservation, ...], tuple[CalibrationObservation, ...]]:
+    ordered = tuple(
+        sorted(
+            _validate_observations(observations),
+            key=lambda row: (_canonical_observed_at(row.observed_at), row.outcome_id),
+        )
+    )
+    boundaries = [
+        index
+        for index in range(20, len(ordered) - 9)
+        if _canonical_observed_at(ordered[index - 1].observed_at)
+        < _canonical_observed_at(ordered[index].observed_at)
+    ]
+    if not boundaries:
+        raise ValueError("temporal_insufficient_partition_sizes")
+    # Integer arithmetic makes ties exact; labels and score quality are not consulted.
+    boundary = min(boundaries, key=lambda index: (abs(10 * index - 7 * len(ordered)), index))
+    training, validation = ordered[:boundary], ordered[boundary:]
+    scores = [row.original_score for row in training]
+    if len(set(scores)) < 5:
+        raise ValueError("temporal_insufficient_distinct_scores")
+    if Decimal(str(max(scores))) - Decimal(str(min(scores))) < Decimal("0.05"):
+        raise ValueError("temporal_insufficient_score_span")
+    for name, rows in (("training", training), ("validation", validation)):
+        if min(sum(row.defaulted is label for row in rows) for label in (False, True)) < 2:
+            raise ValueError(f"temporal_insufficient_{name}_class_support")
+    return training, validation
+
+
+def partition_summary(rows: tuple[CalibrationObservation, ...]) -> dict[str, int | float]:
+    scores = [row.original_score for row in rows]
+    return {
+        "sample_count": len(rows),
+        "positive_count": sum(row.defaulted for row in rows),
+        "negative_count": sum(not row.defaulted for row in rows),
+        "distinct_score_count": len(set(scores)),
+        "score_span": canonical_calibration_float(max(scores) - min(scores)),
+    }
+
+
 def build_calibration_candidate(
     observations: tuple[CalibrationObservation, ...],
     *,
     config: CalibrationTrainingConfig | None = None,
 ) -> CalibrationCandidate:
-    """Fit a deterministic Platt calibration layer for governed deployment."""
-
+    """Fit only the earlier partition and evaluate only later unseen observations."""
     active_config = config or CalibrationTrainingConfig()
-    ordered, labels, bounded_scores, summary = _prepare_dataset(
-        observations, active_config
+    ordered, _, _, summary = _prepare_dataset(observations, active_config)
+    training, validation = temporal_partition(ordered)
+    train_scores = np.asarray([row.original_score for row in training])
+    train_labels = np.asarray([int(row.defaulted) for row in training])
+    validation_scores = np.asarray([row.original_score for row in validation])
+    validation_labels = np.asarray([int(row.defaulted) for row in validation])
+    slope, intercept = _fit_platt(
+        train_scores,
+        train_labels,
+        active_config,
+        training_outcome_ids=tuple(row.outcome_id for row in training),
     )
-    sample_count = summary.sample_count
-    positive_count = summary.positive_count
-    negative_count = summary.negative_count
-    if sample_count < 20:
-        raise ValueError("OOF calibration requires at least 20 observations")
-    if positive_count < 5 or negative_count < 5:
-        raise ValueError("OOF calibration requires at least five observations per class")
-
-    assignments = assign_stratified_folds(ordered)
-    fold_assignment_sha256 = hashlib.sha256(
-        canonical_bytes(assignments)
-    ).hexdigest()
-    raw_scores = np.asarray(
-        [item.original_score for item in ordered], dtype=np.float64
+    slope = canonical_calibration_float(slope)
+    intercept = canonical_calibration_float(intercept)
+    probabilities = _apply_coefficients(
+        validation_scores, slope, intercept, active_config.probability_epsilon
     )
-    oof_probabilities = np.full(sample_count, np.nan, dtype=np.float64)
-    predicted = np.zeros(sample_count, dtype=bool)
-    fold_evidence: list[dict[str, object]] = []
-    for fold in range(5):
-        training_mask = np.asarray(
-            [assignments[item.outcome_id] != fold for item in ordered],
-            dtype=bool,
-        )
-        held_out_mask = ~training_mask
-        if not np.any(held_out_mask):
-            raise ValueError("every OOF fold must contain held-out observations")
-        if set(labels[training_mask].tolist()) != {0.0, 1.0}:
-            raise ValueError("every OOF training partition requires both classes")
-        fold_slope, fold_intercept = _fit_platt(
-            raw_scores[training_mask],
-            labels[training_mask],
-            active_config,
-            training_outcome_ids=tuple(
-                row.outcome_id
-                for index, row in enumerate(ordered)
-                if training_mask[index]
-            ),
-        )
-        oof_probabilities[held_out_mask] = _apply_coefficients(
-            raw_scores[held_out_mask],
-            fold_slope,
-            fold_intercept,
+    before = _serialized_metrics(
+        _metrics(validation_labels, validation_scores, active_config.probability_epsilon)
+    )
+    after = _serialized_metrics(
+        _metrics(validation_labels, probabilities, active_config.probability_epsilon)
+    )
+    training_metrics = _serialized_metrics(
+        _metrics(
+            train_labels,
+            _apply_coefficients(train_scores, slope, intercept, active_config.probability_epsilon),
             active_config.probability_epsilon,
         )
-        if np.any(predicted[held_out_mask]):
-            raise RuntimeError("an OOF observation was predicted more than once")
-        predicted[held_out_mask] = True
-        fold_evidence.append(
-            {
-                "fold": fold,
-                "held_out_outcome_ids": [
-                    row.outcome_id
-                    for index, row in enumerate(ordered)
-                    if held_out_mask[index]
-                ],
-                "training_outcome_ids": [
-                    row.outcome_id
-                    for index, row in enumerate(ordered)
-                    if training_mask[index]
-                ],
-            }
-        )
-    if not np.all(predicted) or not np.all(np.isfinite(oof_probabilities)):
-        raise RuntimeError("every observation must receive exactly one OOF prediction")
-
-    before = summary.metrics_before
-    after = _metrics(labels, oof_probabilities, active_config.probability_epsilon)
-    slope, intercept = _fit_platt(
-        raw_scores,
-        labels,
-        active_config,
-        training_outcome_ids=tuple(row.outcome_id for row in ordered),
     )
-    final_probabilities = _apply_coefficients(
-        raw_scores,
-        slope,
-        intercept,
-        active_config.probability_epsilon,
-    )
-    final_metrics = _metrics(
-        labels, final_probabilities, active_config.probability_epsilon
-    )
-    serialized_before = _serialized_metrics(before)
-    serialized_after = _serialized_metrics(after)
-    serialized_final_metrics = _serialized_metrics(final_metrics)
-    serialized_slope = canonical_calibration_float(slope)
-    serialized_intercept = canonical_calibration_float(intercept)
-    distinct_score_count = len(set(raw_scores.tolist()))
-    limitations = ["activation_gate_required"]
-    if distinct_score_count < 2:
-        limitations.insert(0, "insufficient_distinct_scores")
-
-    dataset_sha256 = summary.dataset_sha256
+    evidence = {
+        "method": "chronological_holdout_70_30",
+        "policy": dict(TEMPORAL_POLICY),
+        "training_outcome_ids": [row.outcome_id for row in training],
+        "validation_outcome_ids": [row.outcome_id for row in validation],
+        "training_cutoff": _canonical_observed_at(training[-1].observed_at),
+        "validation_start": _canonical_observed_at(validation[0].observed_at),
+        "training_summary": partition_summary(training),
+        "validation_summary": partition_summary(validation),
+        "metrics_before": before,
+        "metrics_after": after,
+    }
     artifact: dict[str, object] = {
-        "artifact_schema": "daibm.platt-calibration.v3",
-        "coefficients": {
-            "intercept": serialized_intercept,
-            "slope": serialized_slope,
-        },
+        "artifact_schema": "daibm.platt-calibration.v4",
+        "coefficients": {"intercept": intercept, "slope": slope},
         "configuration": canonical_training_configuration(active_config),
         "dataset": {
-            "correction_heads": {
-                item.outcome_id: item.correction_head_id for item in ordered
-            },
-            "distinct_score_count": distinct_score_count,
-            "negative_count": negative_count,
-            "outcome_ids": [item.outcome_id for item in ordered],
-            "positive_count": positive_count,
-            "sample_count": sample_count,
-            "sha256": dataset_sha256,
+            "correction_heads": {row.outcome_id: row.correction_head_id for row in ordered},
+            "distinct_score_count": len(set(row.original_score for row in ordered)),
+            "negative_count": summary.negative_count,
+            "positive_count": summary.positive_count,
+            "sample_count": summary.sample_count,
+            "outcome_ids": [row.outcome_id for row in ordered],
+            "sha256": summary.dataset_sha256,
+            "observations": [_observation_payload(row) for row in ordered],
         },
         "deployment": {
-            "gate_policy": "fixed_v1",
+            "gate_policy": "temporal_v1",
             "initial_status": "not_deployed",
             "scope": _deployment_scope(ordered),
+            "external_verified_basis": "human_declaration_not_cryptographic_provenance",
         },
-        "diagnostics": {
-            "final_fit": {
-                "metrics": dict(serialized_final_metrics),
-            }
-        },
-        "limitations": limitations,
+        "diagnostics": {"training_fit": {"metrics": training_metrics}},
+        "limitations": ["activation_gate_required"],
         "model_family": "platt_logistic_calibration",
         "status": "eligible_candidate",
         "training_input": "logit(original_risk_score)",
-        "validation": {
-            "fold_assignment_sha256": fold_assignment_sha256,
-            "fold_assignments": assignments,
-            "folds": fold_evidence,
-            "method": "deterministic_stratified_5_fold_oof",
-            "metrics_after": dict(serialized_after),
-            "metrics_before": dict(serialized_before),
-        },
+        "validation": evidence,
     }
     artifact_bytes = canonical_bytes(artifact)
-    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
     return CalibrationCandidate(
-        dataset_sha256=dataset_sha256,
-        sample_count=sample_count,
-        positive_count=positive_count,
-        negative_count=negative_count,
-        status=str(artifact["status"]),
-        slope=serialized_slope,
-        intercept=serialized_intercept,
-        metrics_before=dict(serialized_before),
-        metrics_after=dict(serialized_after),
+        dataset_sha256=summary.dataset_sha256,
+        sample_count=summary.sample_count,
+        positive_count=summary.positive_count,
+        negative_count=summary.negative_count,
+        status="eligible_candidate",
+        slope=slope,
+        intercept=intercept,
+        metrics_before=dict(before),
+        metrics_after=dict(after),
         artifact=artifact,
         artifact_bytes=artifact_bytes,
-        distinct_score_count=distinct_score_count,
-        fold_assignment_sha256=fold_assignment_sha256,
-        artifact_sha256=artifact_sha256,
-        outcome_ids=tuple(item.outcome_id for item in ordered),
-        correction_heads=tuple(
-            (item.outcome_id, item.correction_head_id) for item in ordered
-        ),
+        distinct_score_count=len(set(row.original_score for row in ordered)),
+        artifact_sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+        outcome_ids=tuple(row.outcome_id for row in ordered),
+        correction_heads=tuple((row.outcome_id, row.correction_head_id) for row in ordered),
         configuration=tuple(sorted(canonical_training_configuration(active_config).items())),
-        artifact_schema="daibm.platt-calibration.v3",
+        artifact_schema="daibm.platt-calibration.v4",
         deployment_scope=_deployment_scope(ordered),
     )
 
