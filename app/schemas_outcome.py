@@ -147,6 +147,7 @@ class CalibrationRollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_active_run_id: UUID
+    deployment_scope: Literal["controlled_demo", "external_verified"]
 
 
 __all__ = [

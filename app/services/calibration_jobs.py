@@ -17,6 +17,7 @@ from app.services.outcome_calibration import (
     CalibrationCandidate,
     CalibrationObservation,
     CalibrationArtifact,
+    TEMPORAL_POLICY,
     StagedCalibrationArtifact,
     discard_staged_artifact,
     publish_candidate_artifact,
@@ -253,9 +254,7 @@ class CalibrationJobService:
                 replace(
                     self.outcome_service._observation(outcome),
                     correction_head_id=(
-                        str(correction_head_id)
-                        if correction_head_id is not None
-                        else None
+                        str(correction_head_id) if correction_head_id is not None else None
                     ),
                 )
                 for outcome, correction_head_id in rows
@@ -265,12 +264,15 @@ class CalibrationJobService:
                     observations,
                     config=self.outcome_service.training_config,
                 )
-            except ValueError:
+            except ValueError as error:
                 return self._persist_data_rejection(
                     session,
                     job=job,
                     observations=observations,
                     scope=claim.deployment_scope,
+                    rejection_reason=str(error)
+                    if str(error).startswith("temporal_")
+                    else "calibration_data_rejected",
                 )
             if candidate.deployment_scope != claim.deployment_scope:
                 raise DeterministicCalibrationRejection
@@ -369,9 +371,8 @@ class CalibrationJobService:
                             "negative_count": run.negative_count,
                             "eligible_count": run.sample_count,
                             "excluded_count": excluded_count,
-                            "fold_assignment_sha256": (
-                                candidate.fold_assignment_sha256
-                            ),
+                            "fold_assignment_sha256": (candidate.fold_assignment_sha256),
+                            "temporal_validation": candidate.artifact.get("validation"),
                             "artifact_schema": candidate.artifact_schema,
                             "artifact_sha256": run.artifact_sha256,
                             "deployment_scope": run.deployment_scope,
@@ -431,6 +432,7 @@ class CalibrationJobService:
         job: CalibrationJobModel,
         observations: tuple[CalibrationObservation, ...],
         scope: str,
+        rejection_reason: str = "calibration_data_rejected",
     ) -> PreparedRun:
         if not observations:
             raise DeterministicCalibrationRejection
@@ -463,7 +465,7 @@ class CalibrationJobService:
                 activated_at=None,
                 deactivated_at=None,
                 previous_active_run_id=None,
-                activation_reason="training_not_eligible",
+                activation_reason=rejection_reason,
                 started_at=now,
                 completed_at=now,
             ),
@@ -502,6 +504,8 @@ class CalibrationJobService:
                         "eligible_count": run.sample_count,
                         "excluded_count": excluded_count,
                         "failure_code": run.failure_code,
+                        "activation_reason": run.activation_reason,
+                        "validation_policy": dict(TEMPORAL_POLICY),
                         "deployment_scope": scope,
                         "status": run.status,
                     },

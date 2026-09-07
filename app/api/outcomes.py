@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -47,6 +47,8 @@ class CalibrationRunResponse(BaseModel):
     metrics_after: dict[str, float] | None
     oof_metrics_before: dict[str, float] | None
     oof_metrics_after: dict[str, float] | None
+    temporal_validation: dict[str, Any] | None
+    validation_policy: dict[str, Any] | None
     configuration: dict[str, float | int]
     status: str
     artifact_sha256: str | None
@@ -109,9 +111,7 @@ def submit_actual_outcome(
     user: CurrentAuditor,
     request: Request,
 ):
-    return _execute(
-        lambda: request.app.state.outcome_service.submit(facility_id, payload, user)
-    )
+    return _execute(lambda: request.app.state.outcome_service.submit(facility_id, payload, user))
 
 
 @router.get(
@@ -123,9 +123,7 @@ def preview_actual_outcome(
     user: CurrentAuditor,
     request: Request,
 ):
-    return _execute(
-        lambda: request.app.state.outcome_service.preview(facility_id, user)
-    )
+    return _execute(lambda: request.app.state.outcome_service.preview(facility_id, user))
 
 
 @router.get("/api/v1/outcomes", response_model=list[ActualOutcomeResponse])
@@ -135,9 +133,7 @@ def list_actual_outcomes(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    return request.app.state.outcome_service.list_outcomes(
-        user, limit=limit, offset=offset
-    )
+    return request.app.state.outcome_service.list_outcomes(user, limit=limit, offset=offset)
 
 
 @router.get("/api/v1/outcomes/{outcome_id}", response_model=ActualOutcomeResponse)
@@ -146,9 +142,7 @@ def get_actual_outcome(
     user: CurrentAuditor,
     request: Request,
 ):
-    return _execute(
-        lambda: request.app.state.outcome_service.get_outcome(outcome_id, user)
-    )
+    return _execute(lambda: request.app.state.outcome_service.get_outcome(outcome_id, user))
 
 
 @router.get(
@@ -160,9 +154,7 @@ def list_outcome_corrections(
     user: CurrentAuditor,
     request: Request,
 ):
-    return _execute(
-        lambda: request.app.state.outcome_service.list_corrections(outcome_id, user)
-    )
+    return _execute(lambda: request.app.state.outcome_service.list_corrections(outcome_id, user))
 
 
 @router.post(
@@ -177,9 +169,7 @@ def create_outcome_correction(
     request: Request,
 ):
     return _execute(
-        lambda: request.app.state.outcome_service.create_correction(
-            outcome_id, payload, user
-        )
+        lambda: request.app.state.outcome_service.create_correction(outcome_id, payload, user)
     )
 
 
@@ -193,9 +183,7 @@ def list_calibration_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    return request.app.state.outcome_service.list_runs(
-        user, limit=limit, offset=offset
-    )
+    return request.app.state.outcome_service.list_runs(user, limit=limit, offset=offset)
 
 
 @router.get(
@@ -229,9 +217,10 @@ def get_calibration_job(
 def get_active_calibration_deployment(
     user: CurrentAuditor,
     request: Request,
+    scope: Literal["controlled_demo", "external_verified"],
 ):
     return _execute(
-        lambda: request.app.state.outcome_service.get_active_deployment(user)
+        lambda: request.app.state.outcome_service.get_active_deployment(user, scope=scope)
     )
 
 
@@ -248,6 +237,7 @@ def rollback_calibration_deployment(
         lambda: request.app.state.outcome_service.rollback(
             payload.expected_active_run_id,
             user,
+            scope=payload.deployment_scope,
         )
     )
 

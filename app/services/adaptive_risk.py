@@ -11,8 +11,21 @@ from typing import Any
 from app.repositories.outcomes import OutcomeRepository
 from app.services.outcome_calibration import (
     CalibrationCandidate,
+    CalibrationObservation,
+    CalibrationTrainingConfig,
+    TEMPORAL_POLICY,
+    _apply_coefficients,
+    _canonical_observed_at,
+    _metrics,
+    _observation_payload,
+    _serialized_metrics,
+    _validate_observations,
     canonical_calibration_float,
+    canonical_training_configuration,
+    temporal_partition,
+    partition_summary,
 )
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -46,15 +59,35 @@ class AdaptiveRiskInferenceService:
     def __init__(self, repository: OutcomeRepository | None = None) -> None:
         self.repository = repository or OutcomeRepository()
 
-    def assess(self, session: Any, baseline_probability: float) -> AdaptiveRiskResult:
-        active = self.repository.get_active_run(session)
+    def assess(
+        self, session: Any, baseline_probability: float, assessment_scope: str
+    ) -> AdaptiveRiskResult:
+        if assessment_scope not in {"controlled_demo", "external_verified"}:
+            raise ValueError("assessment scope must be explicit and deployable")
+        active = self.repository.get_active_run(session, scope=assessment_scope)
         if active is None:
+            other_scope = (
+                "controlled_demo"
+                if assessment_scope == "external_verified"
+                else "external_verified"
+            )
+            incompatible = self.repository.get_active_run(session, scope=other_scope)
+            if incompatible is not None:
+                return self._fallback(
+                    baseline_probability,
+                    str(incompatible.calibration_run_id),
+                    "calibration_scope_mismatch",
+                )
             return AdaptiveRiskResult(
                 raw_score=baseline_probability,
                 final_score=baseline_probability,
                 calibration_run_id=None,
                 deployment_scope=None,
                 fallback_code=None,
+            )
+        if active.deployment_scope != assessment_scope:
+            return self._fallback(
+                baseline_probability, str(active.calibration_run_id), "calibration_scope_mismatch"
             )
         if active.artifact_locator is None or active.artifact_sha256 is None:
             return self._fallback(
@@ -90,13 +123,14 @@ class AdaptiveRiskInferenceService:
     def _fallback(
         baseline_probability: float,
         attempted_run_id: str,
+        reason: str = "active_artifact_invalid",
     ) -> AdaptiveRiskResult:
         return AdaptiveRiskResult(
             raw_score=baseline_probability,
             final_score=baseline_probability,
             calibration_run_id=None,
             deployment_scope=None,
-            fallback_code="active_artifact_invalid",
+            fallback_code=reason,
             attempted_calibration_run_id=attempted_run_id,
         )
 
@@ -119,15 +153,14 @@ def evaluate_activation_gate(
     scope = resolve_deployment_scope(provenances)
     if candidate.status != "eligible_candidate":
         return ActivationDecision(False, "training_not_eligible", scope)
-    if candidate.sample_count < 20:
+    if candidate.sample_count < 30:
         return ActivationDecision(False, "insufficient_samples", scope)
-    if candidate.positive_count < 5:
+    if candidate.positive_count < 4:
         return ActivationDecision(False, "insufficient_positive_support", scope)
-    if candidate.negative_count < 5:
+    if candidate.negative_count < 4:
         return ActivationDecision(False, "insufficient_negative_support", scope)
     if (
-        candidate.positive_count + candidate.negative_count
-        != candidate.sample_count
+        candidate.positive_count + candidate.negative_count != candidate.sample_count
         or candidate.distinct_score_count > candidate.sample_count
     ):
         return ActivationDecision(False, "count_evidence_mismatch", scope)
@@ -145,12 +178,12 @@ def evaluate_activation_gate(
     except (TypeError, ValueError, json.JSONDecodeError):
         return ActivationDecision(False, "artifact_unverified", scope)
     schema = artifact.get("artifact_schema")
-    if schema == "daibm.platt-calibration.v2":
+    if schema in {"daibm.platt-calibration.v2", "daibm.platt-calibration.v3"}:
         return ActivationDecision(False, "legacy_artifact_not_activatable", scope)
-    if schema != "daibm.platt-calibration.v3":
+    if schema != "daibm.platt-calibration.v4":
         return ActivationDecision(False, "unsupported_artifact_schema", scope)
     try:
-        _validate_v3_lineage(
+        _validate_v4_lineage(
             artifact,
             candidate.artifact_bytes,
             deployment_scope=scope,
@@ -163,16 +196,13 @@ def evaluate_activation_gate(
             candidate.artifact_schema != artifact["artifact_schema"]
             or candidate.deployment_scope != artifact["deployment"]["scope"]
             or candidate.outcome_ids != tuple(dataset["outcome_ids"])
-            or candidate.correction_heads
-            != tuple(sorted(dataset["correction_heads"].items()))
-            or candidate.configuration
-            != tuple(sorted(artifact["configuration"].items()))
+            or candidate.correction_heads != tuple(sorted(dataset["correction_heads"].items()))
+            or candidate.configuration != tuple(sorted(artifact["configuration"].items()))
             or candidate.sample_count != dataset["sample_count"]
             or candidate.positive_count != dataset["positive_count"]
             or candidate.negative_count != dataset["negative_count"]
             or candidate.distinct_score_count != dataset["distinct_score_count"]
-            or candidate.fold_assignment_sha256
-            != validation["fold_assignment_sha256"]
+            or candidate.fold_assignment_sha256 != ""
             or candidate.status != artifact["status"]
             or candidate.metrics_before != validation["metrics_before"]
             or candidate.metrics_after != validation["metrics_after"]
@@ -193,14 +223,19 @@ def evaluate_activation_gate(
         candidate.metrics_after.get("log_loss"),
     )
     if not all(
-        isinstance(value, (int, float)) and math.isfinite(float(value))
-        for value in metric_values
+        isinstance(value, (int, float)) and math.isfinite(float(value)) for value in metric_values
     ):
         return ActivationDecision(False, "metrics_nonfinite", scope)
-    if candidate.metrics_after["brier_score"] > candidate.metrics_before["brier_score"]:
+    tolerance = 1e-12
+    if candidate.metrics_after["brier_score"] > candidate.metrics_before["brier_score"] + tolerance:
         return ActivationDecision(False, "brier_regression", scope)
-    if candidate.metrics_after["log_loss"] > candidate.metrics_before["log_loss"]:
+    if candidate.metrics_after["log_loss"] > candidate.metrics_before["log_loss"] + tolerance:
         return ActivationDecision(False, "log_loss_regression", scope)
+    if not any(
+        candidate.metrics_after[key] < candidate.metrics_before[key] - tolerance
+        for key in ("brier_score", "log_loss")
+    ):
+        return ActivationDecision(False, "no_metric_improvement", scope)
     return ActivationDecision(True, "gate_passed", scope)
 
 
@@ -449,6 +484,117 @@ def _validate_v3_lineage(
     _require_metric_block(final_fit.get("metrics"))
 
 
+def _validate_v4_lineage(
+    artifact: dict[str, Any],
+    artifact_bytes: bytes,
+    *,
+    deployment_scope: str,
+    expected_dataset_sha256: str,
+) -> None:
+    if _canonical_bytes(artifact) != artifact_bytes:
+        raise ValueError("temporal artifact is not canonical")
+    _require_exact_fields(
+        artifact,
+        {
+            "artifact_schema",
+            "coefficients",
+            "configuration",
+            "dataset",
+            "deployment",
+            "diagnostics",
+            "limitations",
+            "model_family",
+            "status",
+            "training_input",
+            "validation",
+        },
+        "temporal artifact",
+    )
+    if artifact["artifact_schema"] != "daibm.platt-calibration.v4":
+        raise ValueError("temporal schema mismatch")
+    if deployment_scope not in {"controlled_demo", "external_verified"}:
+        raise ValueError("temporal scope is not deployable")
+    if artifact["deployment"] != {
+        "scope": deployment_scope,
+        "gate_policy": "temporal_v1",
+        "initial_status": "not_deployed",
+        "external_verified_basis": "human_declaration_not_cryptographic_provenance",
+    }:
+        raise ValueError("temporal deployment scope mismatch")
+    dataset = artifact["dataset"]
+    _require_exact_fields(
+        dataset,
+        {
+            "correction_heads",
+            "distinct_score_count",
+            "negative_count",
+            "positive_count",
+            "sample_count",
+            "outcome_ids",
+            "sha256",
+            "observations",
+        },
+        "dataset",
+    )
+    rows = _validate_observations(
+        tuple(CalibrationObservation(**row) for row in dataset["observations"])
+    )
+    if resolve_deployment_scope(tuple(row.provenance for row in rows)) != deployment_scope:
+        raise ValueError("temporal observation scope mismatch")
+    expected_hash = hashlib.sha256(
+        _canonical_bytes([_observation_payload(row) for row in rows])
+    ).hexdigest()
+    if dataset["sha256"] != expected_hash or expected_hash != expected_dataset_sha256:
+        raise ValueError("temporal dataset mismatch")
+    if (
+        dataset["outcome_ids"] != [row.outcome_id for row in rows]
+        or dataset["correction_heads"] != {row.outcome_id: row.correction_head_id for row in rows}
+        or dataset["sample_count"] != len(rows)
+        or dataset["positive_count"] != sum(row.defaulted for row in rows)
+        or dataset["negative_count"] != sum(not row.defaulted for row in rows)
+        or dataset["distinct_score_count"] != len(set(row.original_score for row in rows))
+    ):
+        raise ValueError("temporal count or correction lineage mismatch")
+    training, validation = temporal_partition(rows)
+    config = CalibrationTrainingConfig(**artifact["configuration"])
+    if artifact["configuration"] != canonical_training_configuration(config):
+        raise ValueError("temporal configuration is noncanonical")
+    coefficients = _require_exact_fields(
+        artifact["coefficients"], {"slope", "intercept"}, "coefficients"
+    )
+    if not all(_is_canonical_float(value) for value in coefficients.values()):
+        raise ValueError("temporal coefficients invalid")
+    scores = np.asarray([row.original_score for row in validation])
+    labels = np.asarray([int(row.defaulted) for row in validation])
+    probabilities = _apply_coefficients(
+        scores, coefficients["slope"], coefficients["intercept"], config.probability_epsilon
+    )
+    expected_validation = {
+        "method": "chronological_holdout_70_30",
+        "policy": dict(TEMPORAL_POLICY),
+        "training_outcome_ids": [row.outcome_id for row in training],
+        "validation_outcome_ids": [row.outcome_id for row in validation],
+        "training_cutoff": _canonical_observed_at(training[-1].observed_at),
+        "validation_start": _canonical_observed_at(validation[0].observed_at),
+        "training_summary": partition_summary(training),
+        "validation_summary": partition_summary(validation),
+        "metrics_before": _serialized_metrics(_metrics(labels, scores, config.probability_epsilon)),
+        "metrics_after": _serialized_metrics(
+            _metrics(labels, probabilities, config.probability_epsilon)
+        ),
+    }
+    if artifact["validation"] != expected_validation:
+        raise ValueError("temporal partition or holdout metrics mismatch")
+    _require_metric_block(artifact["validation"]["metrics_before"])
+    _require_metric_block(artifact["validation"]["metrics_after"])
+    if (
+        artifact["status"] != "eligible_candidate"
+        or artifact["model_family"] != "platt_logistic_calibration"
+        or artifact["training_input"] != "logit(original_risk_score)"
+    ):
+        raise ValueError("temporal model metadata mismatch")
+
+
 def load_verified_calibration(
     path: Path,
     *,
@@ -468,6 +614,13 @@ def load_verified_calibration(
         if schema == "daibm.platt-calibration.v2":
             if deployment_scope != "controlled_demo":
                 raise ValueError("legacy v2 calibration is controlled-demo only")
+        elif schema == "daibm.platt-calibration.v4":
+            _validate_v4_lineage(
+                artifact,
+                artifact_bytes,
+                deployment_scope=deployment_scope,
+                expected_dataset_sha256=expected_dataset_sha256,
+            )
         elif schema == "daibm.platt-calibration.v3":
             _validate_v3_lineage(
                 artifact,

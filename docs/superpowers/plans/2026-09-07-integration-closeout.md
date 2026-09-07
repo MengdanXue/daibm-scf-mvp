@@ -45,20 +45,33 @@
 - [ ] Make all active reads, rollback and inference require scope; persist fallback reason and attempted run lineage when incompatibility prevents calibration. Controlled_demo→external_verified and all mixed promotion must reject.
 - [ ] Run focused calibration, worker, workflow and API tests; commit and report.
 
-### Task 3: Bilingual lifecycle and governance UI and acceptance
+### Task 3: Complete default restructuring history and financial summaries
+
+**Files:** app/domain/facility.py, app/models_facility.py, app/repositories/facility.py, app/services/facility.py, app/schemas_facility.py, lifecycle/outcome tests; new additive Alembic migration after current head.
+
+**Interfaces:** Defaulted facilities may restructure outstanding future installments, retain prior defaults and later default again on a replacement schedule. Response preserves legacy `default_event` and `closure_reason`, adds complete `default_history`, settlement classification and an exact financial summary.
+
+- [ ] Write RED tests for DEFAULTED→RESTRUCTURED→repayment→closed; DEFAULTED→RESTRUCTURED→OVERDUE→DEFAULTED with two immutable default episodes; multiple restructures preserving old schedules; no pending-payment or stale-version bypass.
+- [ ] Replace one-default-per-facility constraint with one default episode per schedule version through a normal migration. Backfill original default schedule version from current facility version, valid because historical code prohibited restructuring after any default. Preserve all original default IDs and bytes of outcome/ledger records.
+- [ ] Expose `NORMAL_SETTLED` for fully repaid closed facilities, `WRITTEN_OFF` for write-off closures, and separate historical default facts. Successful replacement-plan completion does not erase prior default evidence or change old outcomes.
+- [ ] Expose exact-money `outstanding_balance`, `recovered_amount` (total confirmed cash principal repayments), `written_off_amount`, `realized_loss`. Enforce principal = outstanding + recovered + written_off and realized_loss = written_off; document recovery as cumulative cash, including repayments before default. Rejected/pending payments and superseded schedule balances cannot inflate recovery. Use database and service invariants consistent with existing money tables; do not double-count old schedules or mutate prior payments.
+- [ ] Run real PostgreSQL lifecycle/API/outcome/migration tests including downgrade protection with multiple default history, conservation, normal repayment regression and rollback. Commit and review before UI work.
+
+### Task 4: Bilingual lifecycle and governance UI and acceptance
 
 **Files:** app/static/workflow.js, templates/styles, scripts/*browser_acceptance.py, tests; docs/research/integration-acceptance-2026-09-07.md.
 
 **Interfaces:** Render backend allowed actions, old/new schedules, balance/recovery/loss, correction history, job polling and temporal validation gates in Russian/Chinese. No user-controlled switch authorizes external_verified applications.
 
 - [ ] Add observable browser tests for lifecycle commands, correction/exclusion, job status and temporal diagnostics; expose server errors without losing form context.
+- [ ] Keep browser acceptance explicitly pointed at an isolated application database and artifact directory. Add working `--help` / `--base-url` handling to the outcome acceptance entry point (currently it starts the flow even for `--help`). Never use generated acceptance outcomes as evidence that the five original outcomes were corrected.
 - [ ] Execute normal settlement; overdue/default/recovery/write-off; restructure/settle; restructure/default; multiple restructure history and money conservation.
 - [ ] Expose NORMAL_SETTLED as the successful fully repaid closure classification (including successfully completed replacement schedules), distinct from WRITTEN_OFF. Keep historical default facts and legacy closure_reason unchanged; settlement classification must not erase an earlier default label in the immutable outcome lineage.
 - [ ] Identify the actual five contradictory historical outcomes read-only; append correction events through public APIs with precise reasons and record before/after immutable hashes. New controlled samples are marked demo and do not substitute for historical evidence.
-- [ ] Fix invoice_limit@1 circuit version compatibility without modifying old anchors; verify existing proof/browser flow survives.
+- [ ] Fix invoice_limit@1 circuit version compatibility in the Python outbox, gateway and chaincode without modifying old anchors; regression tests must preserve the exact version in newly created envelopes and continue accepting legacy envelopes. Verify existing proof/browser flow survives.
 - [ ] Commit behavior and evidence.
 
-### Task 4: Durable upgrade, final audit, CI and closeout
+### Task 5: Durable upgrade, final audit, CI and closeout
 
 **Files:** acceptance scripts, CI if needed, docs/research/integration-closeout-2026-09-07.md.
 
