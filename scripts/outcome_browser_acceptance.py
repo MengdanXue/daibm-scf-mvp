@@ -235,6 +235,9 @@ def run_outcome_acceptance(base_url: str = "http://127.0.0.1:8017") -> tuple[str
             assert "failed" in page.locator(
                 "#calibrationCandidate"
             ).inner_text().lower()
+            # Let the intercepted refresh complete before removing the route;
+            # otherwise Playwright may report a late handler after browser close.
+            page.wait_for_timeout(250)
             page.unroute(runs_pattern, expose_failed_run)
             assert errors == [], errors
             return facility_id, SCREENSHOT
