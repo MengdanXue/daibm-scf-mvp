@@ -262,7 +262,13 @@ def create_app(
         request: Request,
         _user=Depends(require_roles("auditor")),
     ):
-        return request.app.state.service.reset_demo()
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "demo_reset_retired",
+                "message": "Destructive demo reset is retired; governed history is preserved.",
+            },
+        )
 
     @application.post("/api/demo/tamper")
     def tamper_demo(

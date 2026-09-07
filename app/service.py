@@ -132,12 +132,7 @@ class FinancingService:
         return [self._request_to_dict(model) for model in models]
 
     def reset_demo(self) -> list[dict[str, Any]]:
-        with self.session_factory.begin() as session:
-            self.ledger_repository.clear_demo_data(session)
-            models = [
-                self._create_request_in_session(session, scenario) for scenario in DEMO_SCENARIOS
-            ]
-        return [self._request_to_dict(model) for model in models]
+        raise RuntimeError("Destructive demo reset is retired; governed history is preserved")
 
     def tamper_demo_ledger(self) -> dict[str, Any]:
         with self.session_factory() as session:

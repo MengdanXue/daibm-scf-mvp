@@ -38,12 +38,7 @@ class LedgerRepository:
         )
 
     def clear_demo_data(self, session: Session) -> None:
-        session.execute(
-            text(
-                "TRUNCATE ledger_events, financing_requests "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        raise RuntimeError("Destructive demo reset is retired; governed history is preserved")
 
     def append_many(
         self,

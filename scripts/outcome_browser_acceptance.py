@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+import argparse
 
 from playwright.sync_api import Route, sync_playwright
 
@@ -66,14 +67,14 @@ def _confirm_payment(page, reference: str) -> None:
     _wait_facility_idle(page)
 
 
-def run_outcome_acceptance() -> tuple[str, Path]:
+def run_outcome_acceptance(base_url: str = "http://127.0.0.1:8017") -> tuple[str, Path]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 1100})
             errors: list[str] = []
             page.on("pageerror", lambda error: errors.append(str(error)))
-            application_id = _exercise_primary(page)
+            application_id = _exercise_primary(page) if base_url == "http://127.0.0.1:8010" else _exercise_primary(page, base_url)
             prior_outcomes = page.evaluate(
                 "fetch('/api/v1/outcomes?limit=50').then(response => response.json())"
             )
@@ -155,8 +156,6 @@ def run_outcome_acceptance() -> tuple[str, Path]:
                 retry_once,
             )
             evidence_reference = f"controlled-demo://closure/{facility_id}"
-            form.locator('input[name="days_past_due"]').fill("0")
-            form.locator('input[name="loss_amount"]').fill("0.00")
             form.locator('input[name="evidence_reference"]').fill(
                 evidence_reference
             )
@@ -232,7 +231,10 @@ def run_outcome_acceptance() -> tuple[str, Path]:
 
 
 if __name__ == "__main__":
-    accepted_facility, screenshot = run_outcome_acceptance()
+    parser = argparse.ArgumentParser(description="Run isolated outcome browser acceptance")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8017")
+    args = parser.parse_args()
+    accepted_facility, screenshot = run_outcome_acceptance(args.base_url)
     print(
         "outcome_browser_acceptance=passed "
         f"facility={accepted_facility} screenshot={screenshot}"

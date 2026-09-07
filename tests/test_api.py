@@ -60,11 +60,11 @@ def test_demo_creates_closed_loop_and_valid_ledger(client):
     assert tampered.json()["reason"] == "event_hash_mismatch"
 
     reset = client.post("/api/demo/reset")
-    assert reset.status_code == 200
-    assert len(reset.json()) == 3
-    repaired = client.get("/api/ledger/verify").json()
-    assert repaired["valid"] is True
-    assert repaired["event_count"] == 12
+    assert reset.status_code == 410
+    assert reset.json()["detail"]["code"] == "demo_reset_retired"
+    preserved = client.get("/api/ledger/verify").json()
+    assert preserved["valid"] is False
+    assert preserved["event_count"] == 12
 
 
 def test_missing_request_returns_404(client):

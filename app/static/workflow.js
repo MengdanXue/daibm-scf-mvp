@@ -700,9 +700,7 @@
       return `<section id="actualOutcomePanel" class="actual-outcome-panel" aria-labelledby="actualOutcomeTitle">
         <div class="outcome-heading"><div><span>${escapeHtml(tr("outcomeEyebrow"))}</span><h3 id="actualOutcomeTitle">${escapeHtml(tr("outcomeTitle"))}</h3><p>${escapeHtml(tr("outcomeSubtitle"))}</p></div><b>PLATT · GOVERNED AUTO</b></div>
         <form id="actualOutcomeForm" class="actual-outcome-form" data-facility-id="${escapeHtml(facility.facility_id)}">
-          <label class="outcome-checkbox"><input name="defaulted" type="checkbox"><span>${escapeHtml(tr("outcomeDefaulted"))}</span></label>
-          <label><span>${escapeHtml(tr("outcomeDaysPastDue"))}</span><input name="days_past_due" type="number" min="0" value="0" required></label>
-          <label><span>${escapeHtml(tr("outcomeLossAmount"))}</span><input name="loss_amount" inputmode="decimal" value="0.00" pattern="[0-9]+([.,][0-9]{1,2})?" required></label>
+          <p class="outcome-derived-facts">${escapeHtml(tr("outcomeDerivedFacts"))}: ${escapeHtml(facility.default_history?.length ? tr("outcomeDerivedDefault") : tr("outcomeDerivedSettled"))}; ${escapeHtml(tr("outcomeLossAmount"))}: ${escapeHtml(facility.realized_loss || "0.00")}</p>
           <label><span>${escapeHtml(tr("outcomeObservedAt"))}</span><input name="observed_at" type="datetime-local" step="1" value="${localObservedAt(facility.closed_at)}" required></label>
           <label class="outcome-evidence-reference"><span>${escapeHtml(tr("outcomeEvidenceReference"))}</span><input name="evidence_reference" autocomplete="off" maxlength="500" required></label>
           <label><span>${escapeHtml(tr("outcomeProvenance"))}</span><select name="provenance"><option value="CONTROLLED_DEMO">${escapeHtml(tr("outcomeControlledDemo"))}</option><option value="EXTERNAL_VERIFIED">${escapeHtml(tr("outcomeExternalVerified"))}</option></select></label>
@@ -750,25 +748,19 @@
     if (!facility || state.outcomePending || state.user?.role !== "auditor" || facility.status !== "closed") return;
     const data = new FormData(form);
     const reference = String(data.get("evidence_reference") || "").trim();
-    const lossAmount = normalizeMoneyInput(data.get("loss_amount"));
     const observed = new Date(String(data.get("observed_at")));
     const errorElement = document.querySelector("#outcomeSubmitError");
     try {
       if (!reference || !Number.isFinite(observed.getTime())) throw new Error(tr("outcomeRequired"));
-      moneyToCents(lossAmount, true);
       setOutcomePending(true);
       const payload = {
         idempotency_key: state.outcomeIdempotencyKeys[facility.facility_id] ||= crypto.randomUUID(),
-        defaulted: data.get("defaulted") === "on",
-        days_past_due: Number(data.get("days_past_due")),
-        loss_amount: lossAmount,
         observed_at: observed.toISOString(),
         evidence_sha256: await hashEvidenceReference(reference),
         provenance: String(data.get("provenance"))
       };
       const result = await wfApi(`/api/v1/facilities/${facility.facility_id}/actual-outcome`, { method: "POST", body: JSON.stringify(payload) });
       state.outcomes = [result.outcome, ...state.outcomes.filter((item) => item.outcome_id !== result.outcome.outcome_id)];
-      state.calibrationRuns = [result.calibration_run, ...state.calibrationRuns.filter((item) => item.calibration_run_id !== result.calibration_run.calibration_run_id)];
       notify(tr("outcomeRecorded"));
       renderFacilityDetail();
     } catch (error) {
@@ -783,7 +775,7 @@
       setOutcomePending(true);
       await wfApi("/api/v1/calibration-deployments/rollback", {
         method: "POST",
-        body: JSON.stringify({ expected_active_run_id: expectedActiveRunId })
+        body: JSON.stringify({ expected_active_run_id: expectedActiveRunId, deployment_scope: state.activeCalibration?.deployment_scope || "controlled_demo" })
       });
       await refreshOutcomes();
       notify(tr("outcomeRollbackDone"));
