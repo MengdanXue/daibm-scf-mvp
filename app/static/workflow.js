@@ -664,10 +664,11 @@
       return;
     }
     try {
+      const activeDeploymentPath = "/api/v1/calibration-deployments/active";
       [state.outcomes, state.calibrationRuns, state.activeCalibration] = await Promise.all([
         wfApi("/api/v1/outcomes?limit=50"),
         wfApi("/api/v1/calibration-runs?limit=50"),
-        wfApi("/api/v1/calibration-deployments/active").catch((error) => {
+        wfApi(`${activeDeploymentPath}?scope=controlled_demo`).catch((error) => {
           if (error.status === 404) return null;
           throw error;
         })
