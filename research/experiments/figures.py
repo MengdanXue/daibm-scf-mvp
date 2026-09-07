@@ -252,16 +252,18 @@ def _curve_figure(
             interpolated = np.interp(grid, x, y)
             curves.append(interpolated)
             style = STYLES[model]
-            display.plot(
-                ax=ax,
-                name=raw_label,
-                curve_kwargs={
-                    "color": style["color"],
-                    "linestyle": style["linestyle"],
-                    "linewidth": 0.7,
-                    "alpha": 0.22,
-                },
-            )
+            curve_style = {
+                "color": style["color"],
+                "linestyle": style["linestyle"],
+                "linewidth": 0.7,
+                "alpha": 0.22,
+            }
+            # RocCurveDisplay exposes curve_kwargs, while the installed
+            # PrecisionRecallDisplay forwards line options directly.
+            if kind == "roc":
+                display.plot(ax=ax, name=raw_label, curve_kwargs=curve_style)
+            else:
+                display.plot(ax=ax, name=raw_label, **curve_style)
             display.line_.set_label("_individual seed")
             if ax.legend_ is not None:
                 ax.legend_.remove()
