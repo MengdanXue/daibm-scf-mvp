@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -258,9 +259,10 @@ def _curve_figure(
                 "linewidth": 0.7,
                 "alpha": 0.22,
             }
-            # RocCurveDisplay exposes curve_kwargs, while the installed
-            # PrecisionRecallDisplay forwards line options directly.
-            if kind == "roc":
+            # scikit-learn 1.9 exposes ``curve_kwargs`` on both displays;
+            # older PrecisionRecallDisplay versions only accept line options
+            # through deprecated ``**kwargs``.
+            if "curve_kwargs" in inspect.signature(display.plot).parameters:
                 display.plot(ax=ax, name=raw_label, curve_kwargs=curve_style)
             else:
                 display.plot(ax=ax, name=raw_label, **curve_style)
