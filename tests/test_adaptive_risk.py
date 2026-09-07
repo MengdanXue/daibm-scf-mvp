@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from app.services import adaptive_risk as adaptive_risk_module
 
 from app.services.adaptive_risk import (
     ActiveCalibration,
@@ -20,8 +22,14 @@ from app.services.adaptive_risk import (
 from app.services.outcome_calibration import (
     CalibrationCandidate,
     CalibrationObservation,
+    _apply_coefficients,
+    _metrics,
+    _serialized_metrics,
+    TEMPORAL_POLICY as PERSISTED_TEMPORAL_POLICY,
     build_calibration_candidate,
+    temporal_partition,
 )
+import numpy as np
 
 
 def _built_candidate() -> CalibrationCandidate:
@@ -102,6 +110,40 @@ def _candidate(
     )
 
 
+def _candidate_with_coefficients(slope: float, intercept: float) -> CalibrationCandidate:
+    """Keep v4 lineage valid while exercising the metric gate branches."""
+    baseline = _candidate()
+    artifact = deepcopy(baseline.artifact)
+    rows = tuple(
+        CalibrationObservation(**row) for row in artifact["dataset"]["observations"]
+    )
+    _, validation = temporal_partition(rows)
+    labels = np.asarray([int(row.defaulted) for row in validation])
+    scores = np.asarray([row.original_score for row in validation])
+    epsilon = float(artifact["configuration"]["probability_epsilon"])
+    metrics_after = _serialized_metrics(
+        _metrics(labels, _apply_coefficients(scores, slope, intercept, epsilon), epsilon)
+    )
+    artifact["coefficients"] = {"intercept": intercept, "slope": slope}
+    artifact["validation"]["metrics_after"] = metrics_after
+    artifact_bytes = json.dumps(
+        artifact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return replace(
+        baseline,
+        slope=slope,
+        intercept=intercept,
+        metrics_after=metrics_after,
+        artifact=artifact,
+        artifact_bytes=artifact_bytes,
+        artifact_sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+    )
+
+
 def test_gate_activates_only_an_integrity_verified_non_regressing_eligible_run():
     decision = evaluate_activation_gate(
         _candidate(),
@@ -112,6 +154,34 @@ def test_gate_activates_only_an_integrity_verified_non_regressing_eligible_run()
     assert decision.activate is True
     assert decision.reason == "gate_passed"
     assert decision.deployment_scope == "controlled_demo"
+
+
+def test_temporal_policy_is_shared_by_artifact_validation_and_activation_gate():
+    assert adaptive_risk_module.TEMPORAL_POLICY is PERSISTED_TEMPORAL_POLICY
+    assert adaptive_risk_module.TEMPORAL_POLICY["metric_tolerance"] == 1e-12
+
+
+@pytest.mark.parametrize(
+    ("slope", "intercept", "reason"),
+    (
+        (0.0, 0.0, "brier_regression"),
+        (28.5, -4.5, "log_loss_regression"),
+        (1.0, 0.0, "no_metric_improvement"),
+    ),
+)
+def test_metric_gate_branches_validate_holdout_evidence_before_deciding(
+    slope, intercept, reason
+):
+    candidate = _candidate_with_coefficients(slope, intercept)
+
+    decision = evaluate_activation_gate(
+        candidate,
+        artifact_integrity="verified",
+        provenances=("CONTROLLED_DEMO",) * 40,
+    )
+
+    assert decision.activate is False
+    assert decision.reason == reason
 
 
 @pytest.mark.parametrize(
