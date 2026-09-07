@@ -60,9 +60,13 @@ class ResearchInferenceService:
 
     def health(self) -> dict[str, Any]:
         if not self.available:
+            # The reason was recorded but never read, so a failed artifact
+            # verification and a missing registry looked identical from the
+            # health endpoint -- exactly when the difference matters most.
             return {
                 "status": "unavailable",
                 "required": self.settings.required,
+                "reason": self.unavailable_reason or "registry_not_initialized",
             }
         assert self.artifact is not None
         return {

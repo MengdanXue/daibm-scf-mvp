@@ -37,6 +37,28 @@ research = [
   "xgboost>=3.4,<4",
 ]
 
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Pyflakes and syntax errors only. This gates real defects -- unused names,
+# shadowed builtins, undefined references -- without imposing a formatting
+# opinion on a codebase that is already internally consistent.
+select = ["F", "E9"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+files = ["app"]
+
+[[tool.mypy.overrides]]
+# The offline research pipeline is checked by its own tests rather than by
+# mypy: its numpy dtype annotations are not yet precise enough to gate on,
+# and `app` only imports it for artifact verification. Narrowing the gate to
+# `app` keeps it meaningful today instead of permanently advisory.
+module = "research.*"
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

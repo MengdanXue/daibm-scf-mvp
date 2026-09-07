@@ -16,6 +16,35 @@ WEIGHTS = {
 }
 
 
+# The single source for how a score becomes a band, a band becomes a
+# decision, and a decision becomes a control action. These were previously
+# copied between app.risk, app.service, and app.services.workflow, so moving
+# a threshold in one place silently disagreed with the band written into the
+# audit ledger by another.
+HIGH_RISK_THRESHOLD = 0.72
+MEDIUM_RISK_THRESHOLD = 0.45
+
+BAND_DECISIONS = {
+    "low": "approved",
+    "medium": "manual_review",
+    "high": "rejected",
+}
+
+DECISION_CONTROLS = {
+    "approved": "standard_monitoring",
+    "manual_review": "request_documents_and_enhanced_validation",
+    "rejected": "suspend_auto_approval_and_enhanced_validation",
+}
+
+
+def band_for_score(score: float) -> str:
+    if score >= HIGH_RISK_THRESHOLD:
+        return "high"
+    if score >= MEDIUM_RISK_THRESHOLD:
+        return "medium"
+    return "low"
+
+
 @dataclass(frozen=True)
 class RiskResult:
     score: float
@@ -36,7 +65,7 @@ def assess(request: FinancingRequestCreate) -> RiskResult:
         "relationship_age_risk": 1.0 - _clamp(request.relationship_months / 36),
         "transaction_velocity": _clamp(request.transactions_last_30d / 30),
     }
-    contributions = [
+    contributions: list[dict[str, float | str]] = [
         {
             "feature": feature,
             "normalized_value": round(value, 4),
@@ -44,12 +73,16 @@ def assess(request: FinancingRequestCreate) -> RiskResult:
         }
         for feature, value in normalized.items()
     ]
-    contributions.sort(key=lambda item: item["weighted_contribution"], reverse=True)
+    # Only the weighted contribution is ever ordered, and it is always a
+    # float; the annotation admits str because "feature" shares the mapping.
+    contributions.sort(
+        key=lambda item: float(item["weighted_contribution"]), reverse=True
+    )
     weighted_risk = sum(
         normalized[feature] * weight for feature, weight in WEIGHTS.items()
     )
     score = 1.0 / (1.0 + math.exp(-(-1.2 + 2.8 * weighted_risk)))
     score = round(score, 4)
-    band = "high" if score >= 0.72 else "medium" if score >= 0.45 else "low"
+    band = band_for_score(score)
     return RiskResult(score=score, band=band, contributions=contributions)
 

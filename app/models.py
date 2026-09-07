@@ -123,6 +123,15 @@ class FinancingRequestModel(Base):
             name="ck_financing_requests_trade_evidence_hash_length",
         ),
         CheckConstraint(
+            "confirmed_payable_amount IS NULL OR confirmed_payable_amount > 0",
+            name="ck_financing_requests_confirmed_payable_amount",
+        ),
+        CheckConstraint(
+            "confirmed_payable_amount IS NULL OR "
+            "confirmed_payable_amount >= amount",
+            name="ck_financing_requests_payable_covers_amount",
+        ),
+        CheckConstraint(
             "invoice_claim_sha256 IS NULL OR "
             "char_length(invoice_claim_sha256) = 64",
             name="ck_financing_requests_invoice_claim_hash_length",
@@ -203,6 +212,9 @@ class FinancingRequestModel(Base):
     contract_number: Mapped[str | None] = mapped_column(Text)
     invoice_number: Mapped[str | None] = mapped_column(Text)
     trade_evidence_sha256: Mapped[str | None] = mapped_column(Text)
+    confirmed_payable_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2)
+    )
     invoice_claim_sha256: Mapped[str | None] = mapped_column(Text)
     risk_assessment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True)

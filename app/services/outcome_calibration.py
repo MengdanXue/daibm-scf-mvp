@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 import re
@@ -10,16 +9,19 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 import numpy as np
+
+from app.canonical import canonical_bytes
 
 
 def canonical_calibration_float(value: object) -> float:
     """Return the platform-independent 15-significant-digit numeric boundary."""
 
-    if type(value) not in (int, float) or not math.isfinite(float(value)):
+    if type(value) not in (int, float) or not math.isfinite(float(cast(int | float, value))):
         raise ValueError("calibration number must be finite")
-    canonical = float(format(float(value), ".15g"))
+    canonical = float(format(float(cast(int | float, value)), ".15g"))
     return 0.0 if canonical == 0.0 else canonical
 
 
@@ -130,21 +132,31 @@ class StagedCalibrationArtifact:
 
 @dataclass(frozen=True)
 class CalibrationDatasetSummary:
+    """A dataset summary whose pre-calibration metrics are known.
+
+    Splitting this from the metric-less fallback keeps ``metrics_before``
+    non-optional everywhere it is read. It was previously widened to
+    ``| None`` purely to let ``OutcomeService._fallback_summary`` reuse the
+    type, which made every read a latent AttributeError -- inside a block
+    that swallows exceptions into a generic "training failed" code.
+    """
+
     dataset_sha256: str
     sample_count: int
     positive_count: int
     negative_count: int
-    metrics_before: dict[str, float] | None
+    metrics_before: dict[str, float]
 
 
-def _canonical_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+@dataclass(frozen=True)
+class UnmeasuredCalibrationDataset:
+    """A dataset counted but never scored, recorded when training failed."""
+
+    dataset_sha256: str
+    sample_count: int
+    positive_count: int
+    negative_count: int
+    metrics_before: None = None
 
 
 def _serialized_metrics(metrics: dict[str, float]) -> dict[str, float]:
@@ -313,7 +325,7 @@ def _prepare_dataset(
     positive_count = int(labels.sum())
     summary = CalibrationDatasetSummary(
         dataset_sha256=hashlib.sha256(
-            _canonical_bytes([_observation_payload(item) for item in ordered])
+            canonical_bytes([_observation_payload(item) for item in ordered])
         ).hexdigest(),
         sample_count=sample_count,
         positive_count=positive_count,
@@ -409,7 +421,7 @@ def build_calibration_candidate(
 
     assignments = assign_stratified_folds(ordered)
     fold_assignment_sha256 = hashlib.sha256(
-        _canonical_bytes(assignments)
+        canonical_bytes(assignments)
     ).hexdigest()
     raw_scores = np.asarray(
         [item.original_score for item in ordered], dtype=np.float64
@@ -533,7 +545,7 @@ def build_calibration_candidate(
             "metrics_before": dict(serialized_before),
         },
     }
-    artifact_bytes = _canonical_bytes(artifact)
+    artifact_bytes = canonical_bytes(artifact)
     artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
     return CalibrationCandidate(
         dataset_sha256=dataset_sha256,
@@ -554,9 +566,9 @@ def build_calibration_candidate(
         correction_heads=tuple(
             (item.outcome_id, item.correction_head_id) for item in ordered
         ),
-        configuration=tuple(sorted(artifact["configuration"].items())),
+        configuration=tuple(sorted(canonical_training_configuration(active_config).items())),
         artifact_schema="daibm.platt-calibration.v3",
-        deployment_scope=str(artifact["deployment"]["scope"]),
+        deployment_scope=_deployment_scope(ordered),
     )
 
 

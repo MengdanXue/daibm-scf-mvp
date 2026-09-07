@@ -139,6 +139,7 @@ class OutcomeRepository:
     ) -> CalibrationJobModel:
         job = self.get_job_for_update(session, job_id)
         self._require_job_owner(job, worker_id)
+        assert job is not None  # Validated by _require_job_owner.
         job.status = "completed"
         job.lease_owner = None
         job.leased_until = None
@@ -161,6 +162,7 @@ class OutcomeRepository:
             raise ValueError("renewed lease must end after now")
         job = self.get_job_for_update(session, job_id)
         self._require_job_owner(job, worker_id)
+        assert job is not None  # Validated by _require_job_owner.
         if job.leased_until is None or job.leased_until <= now:
             raise RuntimeError("calibration job lease expired")
         job.leased_until = lease_until
@@ -176,6 +178,7 @@ class OutcomeRepository:
     ) -> CalibrationJobModel:
         job = self.get_job_for_update(session, job_id)
         self._require_job_owner(job, worker_id)
+        assert job is not None  # Validated by _require_job_owner.
         if job.attempt_count < 1:
             raise RuntimeError("claimed calibration job has no attempt to release")
         job.status = "queued"
@@ -203,6 +206,7 @@ class OutcomeRepository:
             raise ValueError("failure_code must use stable lowercase code syntax")
         job = self.get_job_for_update(session, job_id)
         self._require_job_owner(job, worker_id)
+        assert job is not None  # Validated by _require_job_owner.
         job.lease_owner = None
         job.leased_until = None
         job.result_run_id = None

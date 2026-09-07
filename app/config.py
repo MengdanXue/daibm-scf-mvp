@@ -99,3 +99,41 @@ class FabricGatewaySettings:
                 "credentials, path, query, or fragment"
             )
         return cls(base_url=raw_url.rstrip("/"), timeout_seconds=5.0)
+
+
+@dataclass(frozen=True)
+class ZkpProverSettings:
+    base_url: str
+    timeout_seconds: float = 10.0
+    required: bool = False
+
+    @classmethod
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> "ZkpProverSettings":
+        values = os.environ if environ is None else environ
+        raw_url = values.get(
+            "ZKP_PROVER_URL", "http://zkp-prover:8091"
+        ).strip()
+        parsed = urlsplit(raw_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "ZKP_PROVER_URL must be an HTTP(S) service origin without "
+                "credentials, path, query, or fragment"
+            )
+        raw_required = values.get("ZKP_PROOF_REQUIRED", "false").strip().lower()
+        if raw_required not in {"true", "false"}:
+            raise ValueError("ZKP_PROOF_REQUIRED must be true or false")
+        return cls(
+            base_url=raw_url.rstrip("/"),
+            timeout_seconds=10.0,
+            required=raw_required == "true",
+        )

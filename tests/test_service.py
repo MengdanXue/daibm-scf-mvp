@@ -91,7 +91,7 @@ def test_reset_rebuilds_three_scenarios_and_identity_sequence(session_factory):
         "rejected",
     }
     with session_factory() as session:
-        events = service.ledger_repository.list(session, limit=20)
+        events = service.ledger_repository.list_recent(session, limit=20)
         verification = service.ledger_repository.verify(session)
     assert sorted(event["id"] for event in events) == list(range(1, 13))
     assert verification["valid"] is True

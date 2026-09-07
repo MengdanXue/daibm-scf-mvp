@@ -40,7 +40,7 @@ class AnchorOutboxRepository:
         return session.scalar(statement)
 
     @staticmethod
-    def list(session: Session, *, limit: int) -> list[AnchorOutboxModel]:
+    def list_recent(session: Session, *, limit: int) -> list[AnchorOutboxModel]:
         return list(
             session.scalars(
                 select(AnchorOutboxModel)

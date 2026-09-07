@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 
+from app.canonical import canonical_bytes
 from app.repositories.ledger import LedgerRepository
 from app.repositories.research import ResearchRepository, reference_uuid
 from app.services.research_decision import ResearchDecisionService
@@ -35,6 +34,8 @@ class ResearchScenarioService:
 
     def inject_risk(self, enterprise_id: str) -> dict[str, Any]:
         self.inference_service._require_available()
+        artifact = self.inference_service.artifact
+        assert artifact is not None
         enterprise_index = self.inference_service._enterprise_index(enterprise_id)
         identities = self.inference_service.identities
         before = self.decision_service.assess(
@@ -43,12 +44,7 @@ class ResearchScenarioService:
             model_version_id=identities["model_version_id"],
         )
         overlay = self._overlay(enterprise_id, enterprise_index)
-        overlay_bytes = json.dumps(
-            overlay,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        overlay_bytes = canonical_bytes(overlay)
         overlay_sha256 = hashlib.sha256(overlay_bytes).hexdigest()
         graph = build_graph_series(self.reference_dataset, overlay)
         samples = build_samples(graph)
@@ -103,9 +99,9 @@ class ResearchScenarioService:
                 synthetic_scenario_id=scenario_id,
                 scenario_revision=revision,
                 overlay_sha256=overlay_sha256,
-                feature_schema_version=self.inference_service.artifact.manifest[
-                    "feature_schema"
-                ]["version"],
+                feature_schema_version=artifact.manifest["feature_schema"][
+                    "version"
+                ],
                 normalization_id=samples.normalization.normalization_id,
                 node_ordering_sha256=node_ordering_sha256,
                 adjacency_sha256=adjacency_sha256,

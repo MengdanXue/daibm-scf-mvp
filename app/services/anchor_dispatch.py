@@ -180,7 +180,7 @@ class AnchorDispatchService:
         with self.session_factory() as session:
             return [
                 self.repository.public_record(row)
-                for row in self.repository.list(session, limit=limit)
+                for row in self.repository.list_recent(session, limit=limit)
             ]
 
     def get_outbox(self, anchor_id) -> dict[str, Any]:

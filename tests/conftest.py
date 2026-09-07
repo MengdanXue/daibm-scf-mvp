@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+import os
+import uuid
 
 import pytest
 from alembic import command
@@ -30,17 +32,22 @@ ALL_DATA_TABLES = (
 
 
 def truncate_all(connection) -> None:
-    connection.execute(
-        text(
-            "TRUNCATE "
-            + ", ".join(ALL_DATA_TABLES)
-            + " RESTART IDENTITY CASCADE"
-        )
-    )
+    connection.execute(text("TRUNCATE " + ", ".join(ALL_DATA_TABLES) + " RESTART IDENTITY CASCADE"))
 
 
 @pytest.fixture(scope="session")
 def postgres_url() -> Iterator[URL]:
+    configured_url = os.environ.get("TEST_POSTGRES_URL")
+    if configured_url:
+        url = make_url(configured_url)
+        if url.drivername != "postgresql+psycopg" or not (url.database or "").startswith(
+            ("daibm_test_", "integration_test_")
+        ):
+            raise ValueError(
+                "TEST_POSTGRES_URL must use postgresql+psycopg and a daibm_test_ or integration_test_ database"
+            )
+        yield url
+        return
     with PostgresContainer("postgres:17-alpine") as postgres:
         yield make_url(postgres.get_connection_url()).set(
             drivername="postgresql+psycopg",
@@ -57,6 +64,22 @@ def migrated_engine(postgres_url: URL) -> Iterator[Engine]:
         command.upgrade(config, "head")
         yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def isolated_postgres_engine(postgres_url: URL) -> Iterator[Engine]:
+    name = "integration_test_" + uuid.uuid4().hex
+    admin = create_engine(postgres_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{name}"'))
+    engine = create_engine(postgres_url.set(database=name))
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP DATABASE "{name}"'))
+        admin.dispose()
 
 
 @pytest.fixture

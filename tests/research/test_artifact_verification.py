@@ -2,7 +2,6 @@ import json
 import hashlib
 import shutil
 
-import numpy as np
 import pytest
 
 from research.artifacts.registry import promote_tgnn

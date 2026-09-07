@@ -1,1 +1,3 @@
 artifacts/reference/*.json text eol=lf
+docs/defense-one-page.md text eol=lf
+docs/research-brief-en.md text eol=lf

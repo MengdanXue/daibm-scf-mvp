@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Sequence
 
 from sqlalchemy import false, select, true
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session
 
 from app.models import FinancingRequestModel
@@ -104,6 +105,7 @@ class FacilityRepository:
                 UserModel.user_id == FinancingFacilityModel.created_by_user_id,
             )
         )
+        visibility: ColumnElement[bool]
         if role == "auditor":
             visibility = true()
         elif organization_id is None:

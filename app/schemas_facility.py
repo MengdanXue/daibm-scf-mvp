@@ -135,7 +135,7 @@ class RestructureFacilityRequest(EvidenceCommand):
             raise ValueError("installment sequences must be unique and contiguous")
         return self
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]  # Pydantic property decorator.
     @property
     def schedule_total(self) -> Decimal:
         return sum((row.amount for row in self.installments), Decimal("0.00"))

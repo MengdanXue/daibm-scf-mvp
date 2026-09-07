@@ -34,9 +34,28 @@ def test_self_training_revision_extends_the_single_head():
     revision = scripts.get_revision("20260824_0009")
 
     assert revision.down_revision == "20260824_0008"
-    assert scripts.get_revision("20260824_0010").down_revision == "20260824_0009"
-    assert scripts.get_revision("20260824_0011").down_revision == "20260824_0010"
-    assert scripts.get_current_head() == "20260824_0011"
+    # get_current_head() raises when the chain has branched, so calling it is
+    # itself the single-head assertion. What this revision has to guarantee is
+    # that it lies on that chain. Naming the head here instead would make
+    # every later migration fail a test that is about this one.
+    head = scripts.get_current_head()
+    assert head is not None
+    ancestry = {
+        script.revision for script in scripts.iterate_revisions(head, "base")
+    }
+    assert "20260824_0009" in ancestry
+
+
+def test_every_revision_forms_one_unbroken_chain():
+    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+    head = scripts.get_current_head()
+    chain = list(scripts.iterate_revisions(head, "base"))
+
+    # One head, one base, and no revision omitted from the walk between them:
+    # a migration added without chaining to its predecessor would otherwise
+    # only surface as a confusing upgrade failure in a database test.
+    assert len(chain) == len(list(scripts.walk_revisions()))
+    assert chain[-1].down_revision is None
 
 
 def test_self_training_schema_has_constrained_single_active_deployment(

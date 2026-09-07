@@ -83,7 +83,7 @@ def test_bilingual_sheet_extracts_architecture_flow_evidence_and_nonclaims(tmp_p
         "does not reproduce the original thesis",
         "does not execute a real bank transfer",
         "Platt calibration candidate",
-        "never promoted",
+        "gated automatic activation",
         "does not retrain the TGNN",
         "single-organization Fabric 2.5.16",
         "Circom/Groth16",
@@ -142,7 +142,7 @@ def test_english_brief_extracts_question_method_results_limits_and_next_step(tmp
         "does not reproduce the original thesis",
         "controlled actual-outcome feedback",
         "Platt calibration candidate",
-        "never promoted",
+        "gated automatic activation",
         "does not trigger on drift",
         "single-organization Fabric 2.5.16",
         "Circom/Groth16",
@@ -251,15 +251,36 @@ def test_committed_sources_are_ascii_hyphen_only_and_pdfs_match_sources():
         )
 
 
+def test_defense_sources_distinguish_wiring_from_cryptographic_verification():
+    for source_name, _ in DOCUMENTS:
+        source = (ROOT / "docs" / source_name).read_text(encoding="utf-8")
+        assert "wired into trade confirmation" in source
+        assert "not cryptographic validity" in source
+        assert "not held-out outcomes" in source
+        assert "not wired into the default business flow" not in source
+
+
 def test_ci_and_defense_guides_expose_supported_runtime_and_fallback_contracts():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     demo = (ROOT / "docs/demo-script.md").read_text(encoding="utf-8")
 
-    assert workflow.count("actions/checkout@v5") == 2
-    assert workflow.count("actions/setup-python@v6") == 2
+    assert workflow.count("actions/checkout@v5") == 4
+    assert workflow.count("actions/setup-python@v6") == 3
+    assert workflow.count("actions/setup-node@v6") == 2
+    assert 'RUN_ZKP_WORKFLOW_INTEGRATION: "1"' in workflow
+    # Static analysis is a release gate, not advice: a job that lints without
+    # failing the build is indistinguishable from no job at all.
+    assert "python -m ruff check ." in workflow
+    assert "python -m mypy" in workflow
     assert "tests/test_defense_documents.py" in workflow
     assert "tests/test_defense_preflight.py" in workflow
+    # The optional Fabric and zero-knowledge components ship with their own
+    # suites; the defense claim that they are real depends on CI running them.
+    assert "advanced/fabric/chaincode" in workflow
+    assert "advanced/zkp" in workflow
+    assert "npm run verify:artifacts" in workflow
+    assert "node:24-bookworm-slim" in workflow
     for filename in (
         "docs/defense-one-page.pdf",
         "docs/research-brief-en.pdf",
