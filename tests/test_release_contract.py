@@ -205,7 +205,8 @@ def test_actual_outcome_feedback_boundary_documents_governed_activation():
 
     for document in (demo, defense, brief):
         assert "Platt" in document
-        assert "not_promoted" in document or "never promoted" in document
+        assert "gated automatic activation" in document
+        assert "never promoted" not in document
     for document in (defense, brief):
         assert "does not retrain the TGNN" in document
         assert "does not trigger on drift" in document
