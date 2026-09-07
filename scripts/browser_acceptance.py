@@ -44,7 +44,10 @@ def _select_application(page, application_id: str) -> None:
     ).wait_for()
 
 
-def _exercise_primary(page) -> str:
+def _exercise_primary(page, base_url: str | None = None) -> str:
+    global BASE_URL
+    if base_url is not None:
+        BASE_URL = base_url.rstrip("/")
     page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
     assert page.locator("html").get_attribute("lang") == "ru"

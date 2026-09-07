@@ -82,19 +82,14 @@ def test_reset_rebuilds_three_scenarios_and_identity_sequence(session_factory):
     service.seed_demo()
     service.tamper_demo_ledger()
 
-    reset = service.reset_demo()
+    with pytest.raises(RuntimeError, match="reset is retired"):
+        service.reset_demo()
 
-    assert len(reset) == 3
-    assert {item["decision"] for item in reset} == {
-        "approved",
-        "manual_review",
-        "rejected",
-    }
     with session_factory() as session:
         events = service.ledger_repository.list_recent(session, limit=20)
         verification = service.ledger_repository.verify(session)
     assert sorted(event["id"] for event in events) == list(range(1, 13))
-    assert verification["valid"] is True
+    assert verification["valid"] is False
     assert verification["event_count"] == 12
 
 

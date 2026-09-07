@@ -162,4 +162,4 @@ def test_research_and_ledger_use_distinct_role_permissions(auth_client):
     login(auth_client, "auditor.demo")
     assert auth_client.get("/api/research/status").status_code == 200
     assert auth_client.get("/api/ledger/verify").status_code == 200
-    assert auth_client.post("/api/demo/reset").status_code == 200
+    assert auth_client.post("/api/demo/reset").status_code == 410
