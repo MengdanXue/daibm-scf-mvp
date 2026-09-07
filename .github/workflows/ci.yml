@@ -141,6 +141,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/advanced/gateway:/work" \
+            -v "${{ github.workspace }}/advanced/contracts:/contracts:ro" \
             -w /work \
             node:24-bookworm-slim \
             sh -lc "npm ci --no-audit --no-fund && npm test"

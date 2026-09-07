@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { AnchorContract } = require('../lib/anchor-contract');
+const versionVectors = require('../../../contracts/anchor-version-tokens.json');
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -37,6 +38,39 @@ function context() {
 }
 
 describe('audit anchor contract', () => {
+  for (const field of ['circuitVersion', 'modelVersion', 'policyVersion']) {
+    it(`round-trips the shared ${field} contract and rejects malformed tokens`, async () => {
+      const contract = new AnchorContract();
+      for (const value of versionVectors.valid) {
+        const ctx = context();
+        const anchor = { ...VALID_ANCHOR, [field]: value };
+        const stored = await contract.CreateAnchor(ctx, JSON.stringify(anchor));
+        assert.equal(JSON.parse(stored)[field], value);
+        assert.equal(await contract.ReadAnchor(ctx, anchor.anchorId), stored);
+        assert.equal(await contract.CreateAnchor(ctx, JSON.stringify(anchor)), stored);
+      }
+      for (const value of versionVectors.invalid) {
+        const ctx = context();
+        await assert.rejects(
+          () => contract.CreateAnchor(ctx, JSON.stringify({ ...VALID_ANCHOR, [field]: value })),
+          /opaque version token/,
+        );
+        assert.equal(ctx.stub.values.size, 0);
+      }
+    });
+  }
+
+  it('does not add circuit metadata to an existing historical anchor', async () => {
+    const contract = new AnchorContract();
+    const ctx = context();
+    const before = await contract.CreateAnchor(ctx, JSON.stringify(VALID_ANCHOR));
+    await assert.rejects(
+      () => contract.CreateAnchor(ctx, JSON.stringify({ ...VALID_ANCHOR, circuitVersion: 'invoice_limit@1' })),
+      /already exists with different content/,
+    );
+    assert.equal(await contract.ReadAnchor(ctx, VALID_ANCHOR.anchorId), before);
+  });
+
   it('stores and returns a byte-stable canonical hash envelope', async () => {
     const contract = new AnchorContract();
     const ctx = context();
