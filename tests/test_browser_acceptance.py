@@ -1,9 +1,37 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from scripts.browser_acceptance import (
     _select_application,
     _wait_for_created_application,
+    _is_expected_empty_calibration_error,
 )
+
+
+@pytest.mark.parametrize(
+    "path,status,code,kind,text,expected",
+    [
+        ("calibration-deployments/active", 404, "outcome_not_found", "error", "404", True),
+        ("calibration-deployments/active", 500, "outcome_not_found", "error", "404", False),
+        ("calibration-deployments/active", 404, "unexpected", "error", "404", False),
+        ("applications", 404, "outcome_not_found", "error", "404", False),
+        ("calibration-deployments/active", 404, "outcome_not_found", "pageerror", "404", False),
+        ("calibration-deployments/active", 404, "outcome_not_found", "error", "500", False),
+    ],
+)
+def test_only_confirmed_optional_calibration_empty_state_is_expected(
+    path, status, code, kind, text, expected
+):
+    url = f"http://127.0.0.1:8010/api/v1/{path}"
+    message = (kind, f"Failed to load resource: the server responded with a status of {text} (Not Found)", url)
+    response = SimpleNamespace(
+        url=url, status=status, json=lambda: {"detail": {"code": code}}
+    )
+    assert _is_expected_empty_calibration_error(message, [response]) is expected
+    assert not _is_expected_empty_calibration_error(message, [])
 
 
 class _WorkflowPage:

@@ -40,7 +40,7 @@
 **Interfaces:** `assess(session, baseline_probability, assessment_scope)` must require scope. Produce a new artifact schema carrying disjoint ordered train/validation IDs, correction heads, cutoff and independent metrics; preserve legacy loaders without promoting old candidates.
 
 - [ ] Add RED tests proving every training timestamp precedes every validation timestamp, tied timestamps never straddle the boundary, and validation identities never enter fitting.
-- [ ] Use chronological 70/30 holdout with whole-timestamp groups, at least 20 training and 10 validation observations, at least 5 distinct training raw scores and 2 examples of each class in each partition. Persist these policy values and reject insufficient data with stable reasons. Never tune to keep historical 0.5595→0.2499.
+- [ ] Use chronological 70/30 holdout with whole-timestamp groups, at least 20 training and 10 validation observations, at least 5 distinct training raw scores, training raw-score span at least 0.05, and 2 examples of each class in each partition. Choose the boundary nearest the 70% target among timestamp boundaries satisfying partition sizes, using no labels or performance to select it; earlier boundary wins ties. If none exists, reject. Persist these policy values and reject insufficient data with stable reasons. Never tune to keep historical 0.5595→0.2499.
 - [ ] Fit coefficients using training only; compute promotion Brier/log-loss on validation only. Require neither metric regress and at least one improve beyond numeric tolerance. Legacy artifact bytes remain readable under their explicit safe scope, not newly promotable.
 - [ ] Make all active reads, rollback and inference require scope; persist fallback reason and attempted run lineage when incompatibility prevents calibration. Controlled_demo→external_verified and all mixed promotion must reject.
 - [ ] Run focused calibration, worker, workflow and API tests; commit and report.
@@ -53,6 +53,7 @@
 
 - [ ] Add observable browser tests for lifecycle commands, correction/exclusion, job status and temporal diagnostics; expose server errors without losing form context.
 - [ ] Execute normal settlement; overdue/default/recovery/write-off; restructure/settle; restructure/default; multiple restructure history and money conservation.
+- [ ] Expose NORMAL_SETTLED as the successful fully repaid closure classification (including successfully completed replacement schedules), distinct from WRITTEN_OFF. Keep historical default facts and legacy closure_reason unchanged; settlement classification must not erase an earlier default label in the immutable outcome lineage.
 - [ ] Identify the actual five contradictory historical outcomes read-only; append correction events through public APIs with precise reasons and record before/after immutable hashes. New controlled samples are marked demo and do not substitute for historical evidence.
 - [ ] Fix invoice_limit@1 circuit version compatibility without modifying old anchors; verify existing proof/browser flow survives.
 - [ ] Commit behavior and evidence.

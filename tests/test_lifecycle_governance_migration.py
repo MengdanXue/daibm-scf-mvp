@@ -11,8 +11,6 @@ from alembic.script import ScriptDirectory
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from sqlalchemy.engine import make_url
-from testcontainers.community.postgres import PostgresContainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -227,7 +225,7 @@ def test_lifecycle_governance_revision_is_single_head_and_constrained(
     assert revision.down_revision == "20260824_0009"
     recovery_revision = scripts.get_revision("20260824_0011")
     assert recovery_revision.down_revision == "20260824_0010"
-    assert scripts.get_current_head() == "20260824_0011"
+    assert scripts.get_current_head() == "20260907_0012"
 
     inspector = sa.inspect(migrated_engine)
     governed_tables = {
@@ -381,49 +379,43 @@ def test_lifecycle_governance_revision_is_single_head_and_constrained(
     ] == ["result_run_id"]
 
 
-def test_calibration_recovery_migration_roundtrips_on_real_postgresql():
-    with PostgresContainer("postgres:17-alpine") as postgres:
-        url = make_url(postgres.get_connection_url()).set(
-            drivername="postgresql+psycopg",
-            host="127.0.0.1",
-        )
-        engine = sa.create_engine(url, pool_pre_ping=True)
-        config = Config(str(ROOT / "alembic.ini"))
-        with engine.connect() as connection:
-            config.attributes["connection"] = connection
-            command.upgrade(config, "20260824_0010")
-            before = {
-                item["name"]
-                for item in sa.inspect(connection).get_unique_constraints(
-                    "calibration_runs"
-                )
-            }
-            assert "calibration_runs_dataset_sha256_key" in before
+def test_calibration_recovery_migration_roundtrips_on_real_postgresql(isolated_postgres_engine):
+    engine = isolated_postgres_engine
+    config = Config(str(ROOT / "alembic.ini"))
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "20260824_0010")
+        before = {
+            item["name"]
+            for item in sa.inspect(connection).get_unique_constraints(
+                "calibration_runs"
+            )
+        }
+        assert "calibration_runs_dataset_sha256_key" in before
 
-            command.upgrade(config, "20260824_0011")
-            upgraded = sa.inspect(connection)
-            after = {
-                item["name"]
-                for item in upgraded.get_unique_constraints("calibration_runs")
-            }
-            indexes = {
-                item["name"]: item
-                for item in upgraded.get_indexes("calibration_runs")
-            }
-            assert "calibration_runs_dataset_sha256_key" not in after
-            assert indexes["ix_calibration_runs_scope_dataset"][
-                "column_names"
-            ] == ["deployment_scope", "dataset_sha256"]
+        command.upgrade(config, "20260824_0011")
+        upgraded = sa.inspect(connection)
+        after = {
+            item["name"]
+            for item in upgraded.get_unique_constraints("calibration_runs")
+        }
+        indexes = {
+            item["name"]: item
+            for item in upgraded.get_indexes("calibration_runs")
+        }
+        assert "calibration_runs_dataset_sha256_key" not in after
+        assert indexes["ix_calibration_runs_scope_dataset"][
+            "column_names"
+        ] == ["deployment_scope", "dataset_sha256"]
 
-            command.downgrade(config, "20260824_0010")
-            restored = {
-                item["name"]
-                for item in sa.inspect(connection).get_unique_constraints(
-                    "calibration_runs"
-                )
-            }
-            assert "calibration_runs_dataset_sha256_key" in restored
-        engine.dispose()
+        command.downgrade(config, "20260824_0010")
+        restored = {
+            item["name"]
+            for item in sa.inspect(connection).get_unique_constraints(
+                "calibration_runs"
+            )
+        }
+        assert "calibration_runs_dataset_sha256_key" in restored
 
 
 def test_database_rejects_two_active_runs_in_the_same_scope(migrated_engine):

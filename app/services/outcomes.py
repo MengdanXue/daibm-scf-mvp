@@ -39,21 +39,18 @@ from app.services.adaptive_risk import (
     evaluate_activation_gate,
     is_strictly_newer_candidate,
     load_verified_calibration,
-    resolve_deployment_scope,
 )
 from app.services.outcome_calibration import (
+    UnmeasuredCalibrationDataset,
     CalibrationCandidate,
-    CalibrationDatasetSummary,
     CalibrationObservation,
     CalibrationTrainingConfig,
     StagedCalibrationArtifact,
     build_calibration_candidate,
     canonical_training_configuration,
     discard_staged_artifact,
-    publish_candidate_artifact,
     recover_candidate_artifact,
     stage_candidate_artifact,
-    summarize_calibration_observations,
 )
 
 
@@ -255,6 +252,7 @@ class OutcomeService:
             if application is None:
                 raise OutcomeConflict("Facility request lineage is missing")
             facts = self._validate_lifecycle_snapshot(session, facility)
+            assert facility.closed_at is not None
             return {
                 "facility_id": str(facility.facility_id),
                 "defaulted": facts.defaulted,
@@ -603,6 +601,7 @@ class OutcomeService:
         payload: ActualOutcomeCreate,
     ) -> tuple[DerivedOutcomeFacts, FinancingRequestModel, dict[str, Any]]:
         facts = self._validate_lifecycle_snapshot(session, facility)
+        assert facility.closed_at is not None
         if payload.observed_at < facility.closed_at:
             raise OutcomeConflict("observed_at cannot precede facility closure")
         application = session.scalar(
@@ -670,6 +669,7 @@ class OutcomeService:
         if self._provenance(application.assessment_scope) != outcome.provenance:
             raise OutcomeConflict("Outcome provenance lineage is inconsistent")
         facts = self._validate_lifecycle_snapshot(session, facility)
+        assert facility.closed_at is not None
         lineage = self._prediction_lineage(session, application)
         if (
             facts.defaulted != outcome.defaulted
@@ -983,6 +983,7 @@ class OutcomeService:
             self._acquire_run_lock(session, scope)
             job = self.repository.get_job_for_update(session, job_id)
             self.repository._require_job_owner(job, worker_id)
+            assert job is not None  # Validated by _require_job_owner.
             if job.deployment_scope != scope:
                 raise RuntimeError("calibration job and run scopes differ")
             fenced_now = self._now()
@@ -1075,6 +1076,7 @@ class OutcomeService:
         if run.deployment_status != "not_deployed":
             return
         scope = run.deployment_scope
+        payload: dict[str, Any]
         if decision.deployment_scope != scope:
             run.deployment_status = "rejected"
             run.activation_reason = "deployment_scope_mismatch"
@@ -1275,18 +1277,17 @@ class OutcomeService:
     @staticmethod
     def _fallback_summary(
         observations: tuple[CalibrationObservation, ...],
-    ) -> CalibrationDatasetSummary:
+    ) -> UnmeasuredCalibrationDataset:
         ordered = tuple(sorted(observations, key=lambda item: item.outcome_id))
         payload = [asdict(item) for item in ordered]
         positive_count = sum(int(item.defaulted) for item in ordered)
-        return CalibrationDatasetSummary(
+        return UnmeasuredCalibrationDataset(
             dataset_sha256=hashlib.sha256(
                 canonical_json(payload).encode("utf-8")
             ).hexdigest(),
             sample_count=len(ordered),
             positive_count=positive_count,
             negative_count=len(ordered) - positive_count,
-            metrics_before=None,
         )
 
     @staticmethod

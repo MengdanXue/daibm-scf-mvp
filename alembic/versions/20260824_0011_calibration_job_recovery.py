@@ -16,6 +16,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    from app.migration_compatibility import reconcile_lifecycle
+
+    reconcile_lifecycle(op.get_bind())
     op.drop_constraint(
         "calibration_runs_dataset_sha256_key",
         "calibration_runs",

@@ -9,7 +9,8 @@
   "scripts": {
     "build": "node scripts/build-artifacts.mjs",
     "verify:artifacts": "node scripts/verify-artifacts.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "start": "node src/index.mjs"
   },
   "dependencies": {
     "circomlib": "2.0.5",

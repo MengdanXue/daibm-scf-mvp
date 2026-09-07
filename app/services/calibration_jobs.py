@@ -218,6 +218,7 @@ class CalibrationJobService:
                 raise CalibrationClaimDeferred("contended")
             job = self.repository.get_job_for_update(session, claim.job_id)
             self.repository._require_job_owner(job, claim.worker_id)
+            assert job is not None  # Validated by _require_job_owner.
             if job.deployment_scope != claim.deployment_scope:
                 raise RuntimeError("calibration job scope changed after claim")
             fenced_now = self._now()
@@ -560,6 +561,7 @@ class CalibrationJobService:
                 raise CalibrationClaimDeferred("contended")
             job = self.repository.get_job_for_update(session, claim.job_id)
             self.repository._require_job_owner(job, claim.worker_id)
+            assert job is not None  # Validated by _require_job_owner.
             fenced_now = self._now()
             if job.leased_until is None or job.leased_until <= fenced_now:
                 self.repository.release_claim_without_attempt(

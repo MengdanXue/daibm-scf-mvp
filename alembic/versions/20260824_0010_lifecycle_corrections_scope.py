@@ -93,6 +93,14 @@ def _create_immutable_trigger(table_name: str) -> None:
 
 
 def upgrade() -> None:
+    from app.migration_compatibility import require_baseline
+
+    require_baseline(op.get_bind())
+    upgrade_lifecycle_schema()
+
+
+def upgrade_lifecycle_schema() -> None:
+    """Original lifecycle DDL, also used to reconcile the remote proof 0010."""
     op.add_column(
         "financing_requests",
         sa.Column(

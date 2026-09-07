@@ -32,6 +32,9 @@
       contract: "Договор", invoice: "Счёт-фактура", term: "Срок", risk: "Оценка риска", decision: "Решение",
       actionStation: "Доступное действие", noAction: "На текущем этапе действий для вашей роли нет.", comment: "Комментарий к передаче",
       commentPlaceholder: "Кратко зафиксируйте основание действия…", edit: "Изменить черновик", submit: "Подать заявку",
+      payableCeiling: "Подтверждаемый предел задолженности", payableCeilingHint: "Не ниже суммы счёта. Публичная граница доказательства.",
+      payableConfirmed: "Подтверждённый предел", proofEvidence: "Доказательство лимита счёта", proofCircuit: "Схема", proofDigest: "Хеш доказательства",
+      proofCommitment: "Обязательство к сумме", proofAbsent: "Доказательство не приложено", proofFallbackPrefix: "Причина",
       confirmTrade: "Подтвердить сделку", returnTrade: "Вернуть поставщику", assessRisk: "Выполнить оценку риска",
       approve: "Одобрить", manualReview: "Ручная проверка", reject: "Отклонить", applyControl: "Зафиксировать контроль",
       auditReview: "Завершить аудит", created: "Черновик сохранён", updated: "Изменения сохранены", actionComplete: "Действие выполнено",
@@ -96,6 +99,9 @@
       noApplications: "当前角色暂无可查看的申请。", version: "版本", supplier: "供应商", core: "核心企业", contract: "合同",
       invoice: "发票", term: "期限", risk: "风险评分", decision: "决策", actionStation: "当前可执行操作",
       noAction: "当前阶段没有该角色可执行的操作。", comment: "交接备注", commentPlaceholder: "简要记录操作依据……",
+      payableCeiling: "确认的应付上限", payableCeilingHint: "不得低于发票金额；它是证明的公开上界。",
+      payableConfirmed: "已确认应付上限", proofEvidence: "发票额度证明", proofCircuit: "电路", proofDigest: "证明哈希",
+      proofCommitment: "金额承诺", proofAbsent: "未附带证明", proofFallbackPrefix: "原因",
       edit: "修改草稿", submit: "提交申请", confirmTrade: "确认交易", returnTrade: "退回供应商", assessRisk: "执行风险评估",
       approve: "批准", manualReview: "人工复核", reject: "拒绝", applyControl: "记录控制措施", auditReview: "完成审计",
       created: "草稿已保存", updated: "修改已保存", actionComplete: "操作已完成", sessionExpired: "会话已结束，请重新登录。",
@@ -579,6 +585,17 @@
     ) ? `${riskEvidence.raw_score.toFixed(4)} → ${riskEvidence.final_score.toFixed(4)}` : "—";
     const calibrationLineage = riskEvidence?.calibration_fallback_code
       || compactHash(riskEvidence?.calibration_run_id || riskEvidence?.input_sha256);
+    const proof = application.invoice_limit_evidence;
+    const proofMarkup = proof
+      ? `<div class="workflow-evidence"><h3>${escapeHtml(tr("proofEvidence"))}</h3>
+      <div class="detail-fields">
+        ${detailField(tr("payableConfirmed"), money(proof.confirmed_payable_amount))}
+        ${detailField(tr("proofCircuit"), proof.circuit_version || "—")}
+        ${detailField(tr("proofDigest"), proof.proof_sha256 ? compactHash(proof.proof_sha256) : `${tr("proofAbsent")}${proof.fallback_code ? ` (${tr("proofFallbackPrefix")}: ${proof.fallback_code})` : ""}`)}
+        ${detailField(tr("proofCommitment"), proof.payable_commitment ? compactHash(proof.payable_commitment) : "—")}
+      </div>
+      <p>${escapeHtml(proof.statement)}</p>
+    </div>` : "";
     const evidenceMarkup = `<div class="workflow-evidence">
       <article><span>${escapeHtml(tr("tradeEvidence"))}</span><b title="${escapeHtml(tradeEvidence?.fingerprint_sha256)}">${escapeHtml(compactHash(tradeEvidence?.fingerprint_sha256))}</b><small>${escapeHtml(tradeEvidence ? tr("duplicateCheckPassed") : "—")}</small></article>
       <article><span>${escapeHtml(tr("businessRiskEvidence"))}</span><b title="${escapeHtml(riskEvidence?.input_sha256)}">${escapeHtml(riskEvidence?.engine_version || "—")}</b><small>${escapeHtml(scoreLineage)} · ${escapeHtml(calibrationLineage)}</small></article>
@@ -591,6 +608,7 @@
       </div>
       <div class="risk-result"><span>${escapeHtml(tr("risk"))}<strong>${escapeHtml(risk)}</strong></span><span>${escapeHtml(tr("decision"))}<strong>${escapeHtml(application.decision ? tr(application.decision) : "—")}</strong></span></div>
       ${evidenceMarkup}
+      ${proofMarkup}
       ${renderActionStation(application)}`;
   }
 
@@ -599,6 +617,10 @@
     if (!actions.length) return `<div class="action-note">${escapeHtml(tr("noAction"))}</div>`;
     const comment = actions.some((action) => ["confirm_trade","return_trade","decide","apply_control","audit"].includes(action))
       ? `<label><span>${escapeHtml(tr("comment"))}</span><textarea id="workflowComment" class="action-input" placeholder="${escapeHtml(tr("commentPlaceholder"))}"></textarea></label>` : "";
+    // The acknowledged ceiling is the public bound of the invoice-limit
+    // proof, so it is captured with the confirmation it authorises.
+    const ceiling = actions.includes("confirm_trade")
+      ? `<label><span>${escapeHtml(tr("payableCeiling"))}</span><input id="workflowPayableCeiling" class="action-input" type="number" min="${escapeHtml(String(application.amount))}" step="0.01" value="${escapeHtml(Number(application.amount).toFixed(2))}"><small>${escapeHtml(tr("payableCeilingHint"))}</small></label>` : "";
     const buttons = [];
     if (actions.includes("update")) buttons.push(`<button class="btn btn-soft" type="button" data-workflow-action="edit">${escapeHtml(tr("edit"))}</button>`);
     if (actions.includes("submit")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="submit">${escapeHtml(tr("submit"))}</button>`);
@@ -608,7 +630,7 @@
     if (actions.includes("decide")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="decision" data-decision="approved">${escapeHtml(tr("approve"))}</button><button class="btn btn-soft" type="button" data-workflow-action="decision" data-decision="manual_review">${escapeHtml(tr("manualReview"))}</button><button class="btn btn-danger" type="button" data-workflow-action="decision" data-decision="rejected">${escapeHtml(tr("reject"))}</button>`);
     if (actions.includes("apply_control")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="control">${escapeHtml(tr("applyControl"))}</button>`);
     if (actions.includes("audit")) buttons.push(`<button class="btn btn-primary" type="button" data-workflow-action="audit">${escapeHtml(tr("auditReview"))}</button>`);
-    return `<div class="action-station"><h3>${escapeHtml(tr("actionStation"))}</h3><p>${escapeHtml(tr(ROLE_META[state.user.role].mission))}</p>${comment}<div class="action-buttons">${buttons.join("")}</div></div>`;
+    return `<div class="action-station"><h3>${escapeHtml(tr("actionStation"))}</h3><p>${escapeHtml(tr(ROLE_META[state.user.role].mission))}</p>${ceiling}${comment}<div class="action-buttons">${buttons.join("")}</div></div>`;
   }
 
   function renderTimeline() {
@@ -980,7 +1002,7 @@
     const comment = document.querySelector("#workflowComment")?.value.trim() || (state.lang === "ru" ? "Подтверждено в демонстрационном процессе" : "已在演示流程中确认");
     const endpoints = {
       submit: ["/submit", { version: application.version }],
-      confirm: ["/trade-confirmation", { version: application.version, confirmed: true, comment }],
+      confirm: ["/trade-confirmation", { version: application.version, confirmed: true, comment, confirmed_payable_amount: document.querySelector("#workflowPayableCeiling")?.value || undefined }],
       return: ["/trade-confirmation", { version: application.version, confirmed: false, comment }],
       assess: ["/risk-assessment", { version: application.version }],
       decision: ["/decision", { version: application.version, decision: button.dataset.decision, comment }],
