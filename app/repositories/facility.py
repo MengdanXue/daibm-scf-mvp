@@ -260,7 +260,7 @@ class FacilityRepository:
         return session.scalar(
             select(FacilityDefaultModel).where(
                 FacilityDefaultModel.facility_id == facility_id
-            )
+            ).order_by(FacilityDefaultModel.schedule_version).limit(1)
         )
 
     def list_defaults_batch(
@@ -274,7 +274,7 @@ class FacilityRepository:
             session.scalars(
                 select(FacilityDefaultModel)
                 .where(FacilityDefaultModel.facility_id.in_(facility_ids))
-                .order_by(FacilityDefaultModel.facility_id)
+                .order_by(FacilityDefaultModel.facility_id, FacilityDefaultModel.schedule_version)
             )
         )
 

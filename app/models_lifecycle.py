@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -77,6 +77,8 @@ Index("ix_facility_restructures_recorded_at", FacilityRestructureModel.recorded_
 class FacilityDefaultModel(Base):
     __tablename__ = "facility_defaults"
     __table_args__ = (
+        UniqueConstraint("facility_id", "schedule_version", name="uq_facility_defaults_schedule"),
+        CheckConstraint("schedule_version >= 1", name="ck_facility_defaults_schedule"),
         CheckConstraint("days_past_due > 0", name="ck_facility_defaults_days"),
         CheckConstraint(_HASH_CHECK, name="ck_facility_defaults_hash"),
     )
@@ -85,9 +87,9 @@ class FacilityDefaultModel(Base):
     facility_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("financing_facilities.facility_id", ondelete="RESTRICT"),
-        unique=True,
         nullable=False,
     )
+    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     declared_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
     )

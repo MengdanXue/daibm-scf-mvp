@@ -498,6 +498,7 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
     )
     assert defaulted.status_code == 200
     assert defaulted.json()["default_event"]["days_past_due"] == 90
+    assert defaulted.json()["default_history"] == [defaulted.json()["default_event"]]
 
     _login(facility_client, "auditor.demo")
     written_off = facility_client.post(
@@ -512,6 +513,15 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
     assert written_off.status_code == 200
     assert written_off.json()["writeoff_event"]["amount"] == "1000.00"
     assert written_off.json()["outstanding_amount"] == "0.00"
+    assert written_off.json()["written_off_amount"] == "1000.00"
+    assert written_off.json()["realized_loss"] == "1000.00"
+    assert written_off.json()["recovered_amount"] == "0.00"
+    closed = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/close",
+        json=_command(written_off.json()["version"]),
+    )
+    assert closed.status_code == 200
+    assert closed.json()["settlement_classification"] == "WRITTEN_OFF"
 
     malformed = facility_client.post(
         f"/api/v1/facilities/{facility_id}/write-off",

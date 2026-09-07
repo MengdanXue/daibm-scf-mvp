@@ -68,6 +68,11 @@ def exact_money(value: Decimal) -> Decimal:
 
 _TRANSITIONS = {
     (
+        FacilityStatus.DEFAULTED,
+        FacilityAction.RESTRUCTURE,
+        Role.RISK_MANAGER,
+    ): FacilityStatus.RESTRUCTURED,
+    (
         FacilityStatus.READY,
         FacilityAction.INITIATE_DISBURSEMENT,
         Role.FINANCIER,

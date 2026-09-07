@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from facility_fixtures import confirmed_cash_rows
+
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -171,6 +173,7 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 closed_at=NOW,
             )
         )
+        session.add_all(confirmed_cash_rows(facility_id, financier_id, NOW))
     return facility_id
 
 

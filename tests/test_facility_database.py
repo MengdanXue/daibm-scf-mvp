@@ -406,6 +406,8 @@ def test_repository_reads_lifecycle_history_in_deterministic_order(session_facto
     facility = _facility(request_id=request_id, user_id=user_id)
     repository = FacilityRepository()
     now = datetime.now(timezone.utc)
+    facility.outstanding_amount = Decimal("0.00")
+    facility.status = "written_off"
     with session_factory.begin() as session:
         repository.add(session, facility)
         session.add_all(
