@@ -25,7 +25,7 @@ Each account receives an independent server session. API authorization and versi
 
 - After approval and audit: initiate disbursement -> confirm disbursement -> submit two repayments -> confirm each repayment -> close at zero balance.
 - This is a controlled financing lifecycle simulation. It does not execute a real bank transfer.
-- A closed facility may add controlled/simulated outcome lineage and a Platt calibration candidate; it is never promoted.
+- A closed facility may add controlled/simulated outcome lineage and a Platt calibration candidate, with gated automatic activation for the business baseline only.
 - Это имитация: нет процентов, комиссий, FX, бухгалтерских проводок, внешнего расчёта или сверки.
 - 这是受控融资模拟：不执行真实资金划转，也不包含利息、费用、汇兑、会计或外部结算。
 
@@ -42,9 +42,9 @@ Each account receives an independent server session. API authorization and versi
 ## Exact non-claims / Точные ограничения / 精确边界
 
 - The package does not reproduce the original thesis and does not generalize to real enterprises.
-- The default demo is not a production bank, a production Fabric network, PoA+, or an automatic retraining system.
-- Advanced evidence is bounded: single-organization Fabric 2.5.16 anchors canonical hashes; separate Circom/Groth16 proves only invoice <= limit and is not wired into the default business flow. These are demonstration modules, not production Fabric consensus or a production ZKP service.
-- Outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects.
+- The default demo is not a production bank, a production Fabric network, PoA+, or an automatic TGNN retraining system.
+- Advanced evidence is bounded: single-organization Fabric 2.5.16 anchors hashes; optional Circom/Groth16 evidence is wired into trade confirmation. Python checks structure, not cryptographic validity; Fabric stores hashes, not verification results. These are demonstration modules, not production Fabric consensus or a production ZKP service.
+- Outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects. Calibration metrics use the fitting samples, not held-out outcomes.
 - PostgreSQL provides a tamper-evident hash chain, not distributed consensus. The minimal TGNN is smaller than the thesis architecture.
 - Данные синтетические; исходные данные, код и метрики диссертации недоступны.
 - 数据为合成数据；不声称复现论文指标、真实企业效果、显著性或生产级安全性。

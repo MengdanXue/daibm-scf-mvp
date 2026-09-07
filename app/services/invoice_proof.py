@@ -3,9 +3,12 @@
 The circuit in ``advanced/zkp`` proves ``invoiceAmount <= financingLimit``
 while revealing only a Poseidon commitment to the amount. The prover runs as
 an internal-only sidecar for the same reason the Fabric gateway does: the
-application image carries no Node runtime, and proving must never become a
-hard dependency of the financing workflow. When the sidecar is absent the
-caller records a fallback code and the business transaction still commits.
+application image carries no Node runtime. In optional mode, a missing
+sidecar records a fallback code; required mode blocks trade confirmation.
+
+This client validates response structure and the public ceiling, NOT the
+Groth16 pairing equation. It trusts the internal prover. Neither this client
+nor Fabric hash anchoring constitutes independent proof verification.
 
 Only the proof and its public signals cross the boundary. This module hashes
 the proof itself so the digest written to the audit ledger is derived from
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -35,7 +39,39 @@ __all__ = [
 ]
 
 _MAX_PROVER_BODY = 64 * 1024
-_CIRCUIT_VERSION = "invoice_limit"
+_CIRCUIT_VERSION = "invoice_limit@1"
+_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+_BASE_FIELD = 21888242871839275222246405745257275088696311157297823662689037894645226208583
+
+
+def _field_element(value: Any, modulus: int) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"(0|[1-9][0-9]{0,76})", value) is not None
+        and int(value) < modulus
+    )
+
+
+def _coordinate_vector(value: Any, length: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == length
+        and all(_field_element(item, _BASE_FIELD) for item in value)
+    )
+
+
+def _groth16_shape(proof: Any) -> bool:
+    # Syntax only: well-shaped coordinates can still be a forged proof.
+    return (
+        isinstance(proof, dict)
+        and proof.get("protocol") == "groth16"
+        and proof.get("curve") == "bn128"
+        and _coordinate_vector(proof.get("pi_a"), 3)
+        and _coordinate_vector(proof.get("pi_c"), 3)
+        and isinstance(proof.get("pi_b"), list)
+        and len(proof["pi_b"]) == 3
+        and all(_coordinate_vector(row, 2) for row in proof["pi_b"])
+    )
 
 
 class ProverUnavailable(RuntimeError):
@@ -133,6 +169,9 @@ class HttpInvoiceLimitProver:
             if isinstance(error.reason, (TimeoutError, socket.timeout)):
                 raise ProverUnavailable("Prover request timed out") from error
             raise ProverUnavailable("Prover is unavailable") from error
+        except TimeoutError as error:
+            # urlopen AND response.read may raise a bare socket timeout.
+            raise ProverUnavailable("Prover request timed out") from error
 
         if (
             status_code != 200
@@ -158,12 +197,11 @@ class HttpInvoiceLimitProver:
         circuit_version = decoded.get("circuitVersion")
         if (
             not isinstance(proof, dict)
+            or not _groth16_shape(proof)
             or not isinstance(signals, list)
             or len(signals) != 2
-            or not all(isinstance(item, str) for item in signals)
-            or not isinstance(circuit_version, str)
-            or not circuit_version.startswith(_CIRCUIT_VERSION)
-            or len(circuit_version) > 64
+            or not all(_field_element(item, _SCALAR_FIELD) for item in signals)
+            or circuit_version != _CIRCUIT_VERSION
         ):
             raise ProverUnavailable("Prover returned an invalid proof")
         # The circuit publishes [commitment, financingLimit]. Re-checking the

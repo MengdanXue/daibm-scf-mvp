@@ -57,6 +57,10 @@ class PayableCeilingViolation(Exception):
     pass
 
 
+class InvoiceProofRequired(Exception):
+    """Trade confirmation requires evidence from the trusted prover."""
+
+
 class WorkflowService:
     def __init__(
         self,
@@ -66,6 +70,7 @@ class WorkflowService:
         ledger_repository: LedgerRepository | None = None,
         adaptive_risk_service: AdaptiveRiskInferenceService | None = None,
         invoice_prover: InvoiceLimitProver | None = None,
+        proof_required: bool = False,
     ) -> None:
         self.session_factory = session_factory
         self.workflow_repository = workflow_repository or WorkflowRepository()
@@ -74,9 +79,8 @@ class WorkflowService:
         self.adaptive_risk_service = (
             adaptive_risk_service or AdaptiveRiskInferenceService()
         )
-        # Proving is optional by design: without the sidecar the confirmation
-        # still commits and the event records why no proof accompanies it.
         self.invoice_prover = invoice_prover
+        self.proof_required = proof_required
 
     def create_draft(
         self,
@@ -317,13 +321,15 @@ class WorkflowService:
     ) -> dict[str, Any]:
         """Prove the invoice stays within the ceiling, or say why it did not.
 
-        The Python comparison above is authoritative; the proof exists so a
-        financier can be shown the invoice never exceeded the acknowledged
-        payable without being shown the invoice amount itself. A missing
-        sidecar therefore degrades the evidence, never the decision.
+        The Python comparison enforces the business bound. Proofs are trusted
+        sidecar evidence, not independently verified here; role APIs still
+        expose the invoice amount. Required mode fails inside the transaction
+        so the ceiling, version, workflow action, and audit event roll back.
         """
 
         if self.invoice_prover is None:
+            if self.proof_required:
+                raise InvoiceProofRequired("Prover is not configured")
             return {"proof_fallback_code": "prover_not_configured"}
         try:
             proof = self.invoice_prover.prove(
@@ -337,7 +343,9 @@ class WorkflowService:
             raise PayableCeilingViolation(
                 "The invoice-limit statement could not be proven"
             ) from None
-        except ProverUnavailable:
+        except ProverUnavailable as error:
+            if self.proof_required:
+                raise InvoiceProofRequired("Required prover is unavailable") from error
             return {"proof_fallback_code": "prover_unavailable"}
         return proof.ledger_payload()
 
@@ -900,4 +908,3 @@ class WorkflowService:
             "payable_commitment": payload.get("payable_commitment"),
             "fallback_code": payload.get("proof_fallback_code"),
         }
-

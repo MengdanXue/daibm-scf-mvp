@@ -68,9 +68,11 @@ def create_app(
     )
     integrity_service = IntegrityService(active_database.session_factory)
     identity_service = IdentityService(active_database.session_factory)
+    prover_settings = ZkpProverSettings.from_env()
     workflow_service = WorkflowService(
         active_database.session_factory,
-        invoice_prover=HttpInvoiceLimitProver(ZkpProverSettings.from_env()),
+        invoice_prover=HttpInvoiceLimitProver(prover_settings),
+        proof_required=prover_settings.required,
     )
     facility_service = FacilityService(active_database.session_factory)
     anchor_dispatch_service = AnchorDispatchService(

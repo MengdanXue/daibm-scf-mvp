@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { createProverServer, CIRCUIT_VERSION } from '../src/server.mjs';
 import { verifyInvoiceLimit } from '../index.mjs';
+import { checkProver } from '../src/preflight.mjs';
 
 async function withServer(run) {
   const server = createProverServer();
@@ -19,6 +20,33 @@ const post = (base, body, headers = { 'content-type': 'application/json' }) =>
   fetch(`${base}/proofs/invoice-limit`, { method: 'POST', headers, body });
 
 test('prover server', async (t) => {
+  await t.test('preflight verifies a real proof, not only process health', async () => {
+    await withServer(async (base) => {
+      const result = await checkProver(base);
+      assert.equal(result.proof_verified, true);
+      assert.equal(result.provenance, 'SYNTHETIC_PREFLIGHT');
+      assert.equal(result.circuit_version, CIRCUIT_VERSION);
+    });
+  });
+
+  await t.test('preflight rejects a fake proof behind a healthy endpoint', async () => {
+    const transport = async (url) => new Response(JSON.stringify(
+      url.endsWith('/health')
+        ? { status: 'ready', circuitVersion: CIRCUIT_VERSION }
+        : { circuitVersion: CIRCUIT_VERSION, proof: {}, publicSignals: ['7', '2'] }
+    ), { status: 200, headers: { 'content-type': 'application/json' } });
+    await assert.rejects(checkProver('http://fake.invalid', transport), /verification failed/);
+  });
+
+  await t.test('preflight refuses unready or wrong-circuit health', async () => {
+    for (const health of [
+      { status: 'starting', circuitVersion: CIRCUIT_VERSION },
+      { status: 'ready', circuitVersion: 'invoice_limit@2' },
+    ]) {
+      await assert.rejects(checkProver('http://fake.invalid',
+        async () => new Response(JSON.stringify(health))), /not ready/);
+    }
+  });
   await t.test('proves an invoice within the acknowledged ceiling', async () => {
     await withServer(async (base) => {
       const response = await post(base, JSON.stringify({ invoiceAmount: '45000000', financingLimit: '50000000' }));

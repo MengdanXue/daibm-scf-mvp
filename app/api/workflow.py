@@ -22,6 +22,7 @@ from app.services.workflow import (
     ApplicationNotFound,
     DuplicateInvoiceClaim,
     ForbiddenWorkflow,
+    InvoiceProofRequired,
     PayableCeilingViolation,
     StaleApplication,
 )
@@ -66,6 +67,14 @@ def _execute(operation: Callable[[], Any]):
             detail={
                 "code": "duplicate_invoice_claim",
                 "message": "This invoice is already used by an application",
+            },
+        ) from error
+    except InvoiceProofRequired as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "invoice_proof_required",
+                "message": "Required invoice proof is unavailable; retry after prover recovery",
             },
         ) from error
     except PayableCeilingViolation as error:
