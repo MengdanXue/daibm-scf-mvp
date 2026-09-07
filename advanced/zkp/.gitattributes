@@ -1,1 +1,4 @@
 artifacts/** -text
+# These sources are hashed byte-for-byte by the artifact manifest.
+circuits/*.circom text eol=lf
+package-lock.json text eol=lf
