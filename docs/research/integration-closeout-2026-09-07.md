@@ -1,6 +1,6 @@
 # 生命周期、纠正链与校准范围收口验收
 
-状态：已完成本轮实现、原卷迁移、历史纠正、浏览器验收和 CI 收口。最终 head `7ad180b`（代码修复 `7c3f7cd`）；私有草稿 PR：[PR 5](https://github.com/MengdanXue/daibm-scf-mvp/pull/5)。
+状态：已完成本轮实现、原卷迁移、历史纠正、浏览器验收和 CI 收口。最终提交号以该分支当前 `HEAD` 为准；私有草稿 PR：[PR 5](https://github.com/MengdanXue/daibm-scf-mvp/pull/5)。
 
 工作树：`D:/毕业论文/daibm-scf-mvp/.worktrees/lifecycle-corrections-scope`；分支：`integration/lifecycle-scope-20260907`。保留既有工作树和历史提交，未改主检出目录、未直接合并 main。
 
@@ -70,12 +70,11 @@ Task 3 提交 `433de4b`：已知失败复现 14/14、生命周期/服务/API/out
 
 应用 reset 退役和 outcome UI/job 轮询提交为 `32e8735`、`6b3b830`。相关 API、认证、服务、schema、UI/release 合约测试 73 项通过；Ruff 通过。浏览器验收在隔离服务 `8017` 完成登录、建案、支付、关闭、503 重试、幂等键、异步 calibration job 轮询、RU/ZH 和移动视图；脚本通过且无页面错误，输出截图为 `output/outcome-feedback-acceptance.png`。
 
+补充的 `facility_browser_acceptance.py` 在隔离克隆服务 `8018` 通过，覆盖四角色权限、建案、放款、两次还款、正常结清、账本完整性和中文页面；验收脚本已修正 financier/risk 的 overdue 权限断言，并将无 active calibration 时的预期 404 与真正网络错误分开处理。输出截图为 `output/facility-lifecycle-clone-acceptance.png`。
+
 为补齐本地研究环境，已安装 `xgboost 3.4.1`、`onnx 1.22.0`、`onnxscript 0.7.1`；并修正 sklearn 1.9 的曲线绘图兼容性。研究测试 63 项通过；完整 pytest 回归已跑到 100% 无失败（本机需临时加入 `tests` 包和 `PYTHONPATH`，以避开已安装的同名第三方包）。
 
-最终 head `7ad180b` 的两个 Actions run 均通过：
-
-- [34136196925](https://github.com/MengdanXue/daibm-scf-mvp/actions/runs/34136196925)
-- [34136201331](https://github.com/MengdanXue/daibm-scf-mvp/actions/runs/34136201331)
+最终提交对应的两个 Actions workflow checks 均通过；提交后的最新状态以 [PR 5 checks](https://github.com/MengdanXue/daibm-scf-mvp/pull/5) 为准。
 
 ## 仍然适用的边界
 

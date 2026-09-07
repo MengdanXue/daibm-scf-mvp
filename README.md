@@ -194,7 +194,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe scripts\facility_browser_acceptance.py
 ```
 
-Итоговый русско-китайский снимок: `output/facility-lifecycle-acceptance.png`. / 最终中文界面截图保存为 `output/facility-lifecycle-acceptance.png`。
+Итоговый русско-китайский снимок: `output/facility-lifecycle-clone-acceptance.png`. / 最终中文界面截图保存为 `output/facility-lifecycle-clone-acceptance.png`。
 
 ## Воспроизводимость Research Core / 科研核心复现
 

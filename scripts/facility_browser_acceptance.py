@@ -117,11 +117,19 @@ def _wait_for_status(page: Any, status: str) -> None:
     )
 
 
+def _expected_no_active_deployment(response: Any) -> bool:
+    return (
+        response.status == 404
+        and "/api/v1/calibration-deployments/active" in response.url
+    )
+
+
 def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
     from playwright.sync_api import sync_playwright
 
     screenshot = screenshot.resolve()
     browser_messages: list[str] = []
+    http_errors: list[str] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         contexts = {
@@ -140,11 +148,25 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
                     f"console:{message.type}:{message.text}"
                 )
                 if message.type in {"error", "warning"}
+                and not (
+                    message.type == "error"
+                    and message.text
+                    == "Failed to load resource: the server responded with a status of 404 (Not Found)"
+                )
                 else None,
             )
             page.on(
                 "pageerror",
                 lambda error: browser_messages.append(f"pageerror:{error}"),
+            )
+            page.on(
+                "response",
+                lambda response: http_errors.append(
+                    f"{response.status} {response.url}"
+                )
+                if response.status >= 400
+                and not _expected_no_active_deployment(response)
+                else None,
             )
 
         try:
@@ -200,12 +222,19 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
             ).click()
             _wait_for_status(financier, "active")
 
+            # Financier owns the overdue action; risk manager can review the
+            # active facility but must not receive the mutation control.
+            _open_facility(financier, facility_id)
+            _wait_for_status(financier, "active")
+            assert financier.locator(
+                '[data-facility-action="mark_overdue"]'
+            ).count() == 1
             risk = pages["risk"]
             _open_facility(risk, facility_id)
             _wait_for_status(risk, "active")
             assert risk.locator(
                 '[data-facility-action="mark_overdue"]'
-            ).count() == 1
+            ).count() == 0
 
             supplier = pages["supplier"]
             payment_ids: list[str] = []
@@ -302,6 +331,7 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
             screenshot.parent.mkdir(parents=True, exist_ok=True)
             auditor.screenshot(path=str(screenshot), full_page=True)
             assert browser_messages == [], browser_messages
+            assert http_errors == [], http_errors
         finally:
             for context in contexts.values():
                 context.close()
