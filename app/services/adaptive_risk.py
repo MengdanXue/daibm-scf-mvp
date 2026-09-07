@@ -226,7 +226,7 @@ def evaluate_activation_gate(
         isinstance(value, (int, float)) and math.isfinite(float(value)) for value in metric_values
     ):
         return ActivationDecision(False, "metrics_nonfinite", scope)
-    tolerance = 1e-12
+    tolerance = float(TEMPORAL_POLICY["metric_tolerance"])
     if candidate.metrics_after["brier_score"] > candidate.metrics_before["brier_score"] + tolerance:
         return ActivationDecision(False, "brier_regression", scope)
     if candidate.metrics_after["log_loss"] > candidate.metrics_before["log_loss"] + tolerance:
