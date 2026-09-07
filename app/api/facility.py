@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import current_user
@@ -84,6 +84,7 @@ class FacilityDefaultResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     default_id: str
+    schedule_version: int
     declared_by_user_id: str
     defaulted_at: str
     days_past_due: int
@@ -112,6 +113,19 @@ class FacilityResponse(BaseModel):
     request_id: str
     principal: str
     outstanding_amount: str
+    outstanding_balance: str = Field(
+        description="Principal balance still outstanding on the facility."
+    )
+    recovered_amount: str = Field(
+        description="Cumulative confirmed principal cash repayments across all schedules."
+    )
+    written_off_amount: str = Field(
+        description="Principal formally written off on the facility."
+    )
+    realized_loss: str = Field(
+        description="Realized principal loss, equal to the written-off amount."
+    )
+    settlement_classification: Literal["NORMAL_SETTLED", "WRITTEN_OFF"] | None
     currency: str
     status: str
     version: int
@@ -131,6 +145,7 @@ class FacilityResponse(BaseModel):
     delinquencies: list[FacilityDelinquencyResponse]
     restructures: list[FacilityRestructureResponse]
     default_event: FacilityDefaultResponse | None
+    default_history: list[FacilityDefaultResponse]
     writeoff_event: FacilityWriteOffResponse | None
 
 

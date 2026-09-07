@@ -22,7 +22,7 @@ def test_integration_has_no_duplicate_revision_identity():
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
     revisions = list(scripts.walk_revisions())
     assert len({item.revision for item in revisions}) == len(revisions)
-    assert scripts.get_current_head() == "20260907_0012"
+    assert scripts.get_current_head() == "20260907_0013"
 
 
 @pytest.fixture

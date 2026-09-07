@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from facility_fixtures import confirmed_cash_rows
+
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -125,6 +127,7 @@ def _seed_jobs(
                     ),
                 ]
             )
+            rows.extend(confirmed_cash_rows(facility_id, financier.user_id, recorded_at))
             jobs.append(
                 CalibrationJobModel(
                     job_id=uuid.uuid4(),

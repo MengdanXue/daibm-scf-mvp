@@ -760,8 +760,11 @@ class FacilityService:
                 return replay
             self._check_version(facility, command.version)
             target = self._next(facility, FacilityAction.DECLARE_DEFAULT, user)
-            if self.repository.get_default(session, facility.facility_id) is not None:
-                raise FacilityConflict("Facility default has already been declared")
+            if any(
+                item.schedule_version == facility.current_schedule_version
+                for item in self.repository.list_defaults_batch(session, [facility.facility_id])
+            ):
+                raise FacilityConflict("Current schedule default has already been declared")
             delinquencies = self.repository.list_delinquencies(
                 session, facility.facility_id
             )
@@ -774,6 +777,7 @@ class FacilityService:
                 FacilityDefaultModel(
                     default_id=uuid.uuid4(),
                     facility_id=facility.facility_id,
+                    schedule_version=facility.current_schedule_version,
                     declared_by_user_id=user.user_id,
                     defaulted_at=command.defaulted_at,
                     days_past_due=command.days_past_due,
@@ -1220,8 +1224,8 @@ class FacilityService:
             restructures = self.repository.list_restructures(
                 session, facility.facility_id
             )
-            default_event = self.repository.get_default(
-                session, facility.facility_id
+            default_history = self.repository.list_defaults_batch(
+                session, [facility.facility_id]
             )
             writeoff_event = self.repository.get_writeoff(
                 session, facility.facility_id
@@ -1232,13 +1236,30 @@ class FacilityService:
             payments = related["payments"].get(facility_id, [])
             delinquencies = related["delinquencies"].get(facility_id, [])
             restructures = related["restructures"].get(facility_id, [])
-            default_event = related["defaults"].get(facility_id)
+            default_history = related["defaults"].get(facility_id, [])
             writeoff_event = related["writeoffs"].get(facility_id)
+        default_event = default_history[0] if default_history else None
+        recovered = sum(
+            (Decimal(item.amount) for item in payments if item.status == PaymentStatus.CONFIRMED.value),
+            Decimal("0.00"),
+        )
+        written_off = Decimal(writeoff_event.amount) if writeoff_event else Decimal("0.00")
+        if Decimal(facility.principal) != Decimal(facility.outstanding_amount) + recovered + written_off:
+            raise FacilityConflict("Facility principal conservation failed")
         return {
             "facility_id": str(facility.facility_id),
             "request_id": str(facility.request_id),
             "principal": self._money(facility.principal),
             "outstanding_amount": self._money(facility.outstanding_amount),
+            "outstanding_balance": self._money(facility.outstanding_amount),
+            "recovered_amount": self._money(recovered),
+            "written_off_amount": self._money(written_off),
+            "realized_loss": self._money(written_off),
+            "settlement_classification": (
+                ("WRITTEN_OFF" if writeoff_event else "NORMAL_SETTLED")
+                if facility.status == FacilityStatus.CLOSED.value else None
+            ),
+            "default_history": [self._serialize_default(item) for item in default_history],
             "currency": facility.currency,
             "status": facility.status,
             "version": facility.version,
@@ -1308,20 +1329,7 @@ class FacilityService:
                 for item in restructures
             ],
             "default_event": (
-                {
-                    "default_id": str(default_event.default_id),
-                    "declared_by_user_id": str(
-                        default_event.declared_by_user_id
-                    ),
-                    "defaulted_at": canonical_timestamp(
-                        default_event.defaulted_at
-                    ),
-                    "days_past_due": default_event.days_past_due,
-                    "reason_code": default_event.reason_code,
-                    "comment": default_event.comment,
-                    "evidence_sha256": default_event.evidence_sha256,
-                    "recorded_at": canonical_timestamp(default_event.recorded_at),
-                }
+                self._serialize_default(default_event)
                 if default_event is not None
                 else None
             ),
@@ -1368,7 +1376,7 @@ class FacilityService:
             "restructures": grouped(
                 self.repository.list_restructures_batch(session, facility_ids)
             ),
-            "defaults": {row.facility_id: row for row in defaults},
+            "defaults": grouped(defaults),
             "writeoffs": {row.facility_id: row for row in writeoffs},
         }
 
@@ -1412,6 +1420,10 @@ class FacilityService:
         }:
             return [FacilityAction.SUBMIT_PAYMENT.value]
         if user.role == Role.RISK_MANAGER.value:
+            if status == FacilityStatus.DEFAULTED:
+                return [] if any(
+                    item.status == PaymentStatus.SUBMITTED.value for item in payments
+                ) else [FacilityAction.RESTRUCTURE.value]
             if status == FacilityStatus.OVERDUE:
                 return [
                     FacilityAction.RESTRUCTURE.value,
@@ -1430,6 +1442,20 @@ class FacilityService:
             if status in {FacilityStatus.REPAID, FacilityStatus.WRITTEN_OFF}:
                 return [FacilityAction.CLOSE.value]
         return []
+
+    @staticmethod
+    def _serialize_default(item: FacilityDefaultModel) -> dict[str, Any]:
+        return {
+            "default_id": str(item.default_id),
+            "schedule_version": item.schedule_version,
+            "declared_by_user_id": str(item.declared_by_user_id),
+            "defaulted_at": canonical_timestamp(item.defaulted_at),
+            "days_past_due": item.days_past_due,
+            "reason_code": item.reason_code,
+            "comment": item.comment,
+            "evidence_sha256": item.evidence_sha256,
+            "recorded_at": canonical_timestamp(item.recorded_at),
+        }
 
     def _now(self) -> datetime:
         now = self.clock()

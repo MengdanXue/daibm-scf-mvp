@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from facility_fixtures import confirmed_cash_rows
+
 import hashlib
 import json
 import math
@@ -128,6 +130,10 @@ def _seed_closed_facility(
             closure_reason=closure_reason,
             created_by_user_id=financier.user_id, created_at=NOW, updated_at=NOW,
             closed_at=NOW,
+        ))
+        session.add_all(confirmed_cash_rows(
+            ids["facility"], financier.user_id, NOW,
+            "300.00" if lifecycle == "written_off" else "1000.00",
         ))
         if lifecycle in {"settled_after_default", "written_off"}:
             session.add(FacilityDelinquencyModel(
@@ -931,6 +937,7 @@ def _seed_pending_v4_run(
                     closed_at=NOW,
                 )
             )
+            session.add_all(confirmed_cash_rows(facility_id, creator_id, NOW))
             session.add(
                 ActualOutcomeModel(
                     outcome_id=uuid.uuid4(),

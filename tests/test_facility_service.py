@@ -843,6 +843,118 @@ def test_restructure_preserves_paid_history_and_replaces_exact_outstanding(
     assert result["delinquencies"][0]["days_past_due"] == 45
 
 
+def test_database_rejects_unfunded_balance_reduction(facility_context):
+    service, users, request_id = facility_context
+    facility = _activate(service, users, request_id)
+    with pytest.raises(DBAPIError, match="principal conservation"):
+        with service.session_factory.begin() as session:
+            session.execute(text(
+                "UPDATE financing_facilities SET outstanding_amount = 900.00 "
+                "WHERE facility_id = :id"
+            ), {"id": facility["facility_id"]})
+    assert service.get(facility["facility_id"], users["financier.demo"])["outstanding_amount"] == "1000.00"
+
+
+def test_default_restructure_rejects_pending_and_stale_without_mutation(facility_context):
+    service, users, request_id = facility_context
+    facility = _defaulted(service, users, request_id)
+    before = _persistence_snapshot(service, facility["facility_id"])
+    with pytest.raises(FacilityConflict, match="version"):
+        service.restructure(facility["facility_id"], _restructure(facility["version"] - 1, total="1000.00"), users["risk.demo"])
+    assert _persistence_snapshot(service, facility["facility_id"]) == before
+    facility = service.submit_payment(facility["facility_id"], _submit(facility, 0, "100.00", "pending"), users["supplier.demo"])
+    before = _persistence_snapshot(service, facility["facility_id"])
+    with pytest.raises(FacilityConflict, match="Pending payment"):
+        service.restructure(facility["facility_id"], _restructure(facility["version"], total="1000.00"), users["risk.demo"])
+    assert _persistence_snapshot(service, facility["facility_id"]) == before
+
+
+def test_cash_writer_invalidates_repeatable_read_snapshot(facility_context):
+    service, users, request_id = facility_context
+    facility = _activate(service, users, request_id)
+    for reference in ("cash-a", "cash-b"):
+        facility = service.submit_payment(facility["facility_id"], _submit(facility, 0, "100.00", reference), users["supplier.demo"])
+    engine = service.session_factory.kw["bind"]
+    with engine.connect().execution_options(isolation_level="REPEATABLE READ") as stale:
+        transaction = stale.begin()
+        stale.execute(text("SELECT count(*) FROM facility_payments"))
+        with engine.begin() as first:
+            first.execute(text("UPDATE facility_payments SET status='confirmed' WHERE payment_id=:id"), {"id": facility["payments"][0]["payment_id"]})
+            first.execute(text("UPDATE financing_facilities SET outstanding_amount=900.00 WHERE facility_id=:id"), {"id": facility["facility_id"]})
+        with pytest.raises(DBAPIError) as captured:
+            stale.execute(text("UPDATE facility_payments SET status='confirmed' WHERE payment_id=:id"), {"id": facility["payments"][1]["payment_id"]})
+        assert captured.value.orig.sqlstate == "40001"
+        transaction.rollback()
+    result = service.get(facility["facility_id"], users["financier.demo"])
+    assert result["recovered_amount"] == "100.00"
+    assert result["outstanding_balance"] == "900.00"
+
+
+def test_default_restructure_recovery_preserves_episode_and_conserves_cash(facility_context):
+    service, users, request_id = facility_context
+    facility = _defaulted(service, users, request_id)
+    original = facility["default_event"]
+    facility = service.restructure(
+        facility["facility_id"], _restructure(facility["version"], total="1000.00"),
+        users["risk.demo"],
+    )
+    assert facility["default_history"] == [original]
+    facility = service.submit_payment(
+        facility["facility_id"], _submit(facility, 2, "1000.00", "replacement-cash"),
+        users["supplier.demo"],
+    )
+    assert facility["recovered_amount"] == "0.00"
+    facility = service.decide_payment(
+        facility["facility_id"], facility["payments"][-1]["payment_id"],
+        _decision(facility["version"]), users["financier.demo"],
+    )
+    closed = service.close(
+        facility["facility_id"], _command(facility["version"]), users["auditor.demo"],
+    )
+    assert closed["settlement_classification"] == "NORMAL_SETTLED"
+    assert closed["closure_reason"] == "settled_after_default"
+    assert closed["default_history"] == [original]
+    assert closed["outstanding_balance"] == "0.00"
+    assert closed["recovered_amount"] == "1000.00"
+    assert closed["written_off_amount"] == closed["realized_loss"] == "0.00"
+
+
+def test_replacement_schedule_can_default_again_and_restructure_again(facility_context):
+    service, users, request_id = facility_context
+    facility = _defaulted(service, users, request_id)
+    original = facility["default_event"]
+    facility = service.restructure(
+        facility["facility_id"], _restructure(facility["version"], total="1000.00"),
+        users["risk.demo"],
+    )
+    service.clock = lambda: datetime(2027, 2, 1, tzinfo=timezone.utc)
+    facility = _mark_overdue(service, users, facility, installment_index=2)
+    facility = service.declare_default(
+        facility["facility_id"], _declare_default(facility["version"]), users["risk.demo"],
+    )
+    assert [row["schedule_version"] for row in facility["default_history"]] == [1, 2]
+    assert facility["default_history"][0] == original
+    assert facility["default_event"] == original
+    from app.services.outcomes import derive_outcome_facts
+    with service.session_factory() as session:
+        row = session.get(FinancingFacilityModel, uuid.UUID(facility["facility_id"]))
+        facts = derive_outcome_facts(session, row)
+        assert facts.defaulted is True
+        assert facts.loss_amount == Decimal("0.00")
+    facility = service.restructure(
+        facility["facility_id"],
+        _restructure(facility["version"], total="1000.00", due_date="2028-01-01"),
+        users["risk.demo"],
+    )
+    assert facility["current_schedule_version"] == 3
+    assert len(facility["restructures"]) == 2
+    assert [row["status"] for row in facility["installments"]] == [
+        "superseded", "superseded", "superseded", "scheduled",
+    ]
+    listed = service.list_for_user(users["risk.demo"])
+    assert listed[0]["default_history"] == facility["default_history"]
+
+
 def test_default_recovery_and_close_retain_default_evidence(facility_context):
     service, users, request_id = facility_context
     facility = _mark_overdue(service, users, _activate(service, users, request_id))
@@ -1065,6 +1177,8 @@ def test_partial_default_recovery_writes_off_exact_remaining_balance(
         users["auditor.demo"],
     )
     assert written_off["writeoff_event"]["amount"] == "600.00"
+    assert written_off["recovered_amount"] == "400.00"
+    assert written_off["realized_loss"] == written_off["written_off_amount"] == "600.00"
     assert written_off["outstanding_amount"] == "0.00"
     assert written_off["payments"][0]["status"] == "confirmed"
 
@@ -1140,6 +1254,7 @@ def test_allowed_actions_role_state_and_pending_payment_matrix(session_factory):
         },
         "defaulted": {
             "supplier.demo": ["submit_payment"],
+            "risk.demo": ["restructure"],
             "auditor.demo": ["write_off"],
         },
         "repaid": {"auditor.demo": ["close"]},
