@@ -12,6 +12,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # their manifest hashes before the first proof is produced, so they are
 # copied verbatim rather than rebuilt inside this image.
 COPY --chown=node:node artifacts ./artifacts
+COPY --chown=node:node circuits ./circuits
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node index.mjs ./index.mjs
 COPY --chown=node:node src ./src
