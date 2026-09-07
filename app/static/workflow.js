@@ -761,6 +761,15 @@
       };
       const result = await wfApi(`/api/v1/facilities/${facility.facility_id}/actual-outcome`, { method: "POST", body: JSON.stringify(payload) });
       state.outcomes = [result.outcome, ...state.outcomes.filter((item) => item.outcome_id !== result.outcome.outcome_id)];
+      const jobId = result.calibration_job?.job_id;
+      if (jobId) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const job = await wfApi(`/api/v1/calibration-jobs/${jobId}`);
+          if (["completed", "failed"].includes(job.status)) break;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        await refreshOutcomes();
+      }
       notify(tr("outcomeRecorded"));
       renderFacilityDetail();
     } catch (error) {
