@@ -160,7 +160,7 @@ def test_invalid_active_calibration_falls_back_with_persisted_audit_lineage(
     users = demo_users(session_factory)
 
     class CorruptActiveCalibration:
-        def assess(self, _session, baseline_score):
+        def assess(self, _session, baseline_score, assessment_scope):
             return AdaptiveRiskResult(
                 raw_score=baseline_score,
                 final_score=baseline_score,
@@ -192,19 +192,14 @@ def test_invalid_active_calibration_falls_back_with_persisted_audit_lineage(
 
     assert assessed["raw_risk_score"] == assessed["risk_score"]
     assert assessed["risk_evidence"]["calibration_run_id"] is None
-    assert (
-        assessed["risk_evidence"]["calibration_fallback_code"]
-        == "active_artifact_invalid"
-    )
+    assert assessed["risk_evidence"]["calibration_fallback_code"] == "active_artifact_invalid"
     with session_factory() as session:
         stored = session.get(
             FinancingRequestModel,
             uuid.UUID(assessed["request_id"]),
         )
         event_types = list(
-            session.scalars(
-                select(LedgerEventModel.event_type).order_by(LedgerEventModel.id)
-            )
+            session.scalars(select(LedgerEventModel.event_type).order_by(LedgerEventModel.id))
         )
     assert stored is not None
     assert stored.calibration_fallback_code == "active_artifact_invalid"
@@ -212,6 +207,52 @@ def test_invalid_active_calibration_falls_back_with_persisted_audit_lineage(
         "RISK_ASSESSMENT",
         "RISK_CALIBRATION_FALLBACK",
     ]
+
+
+def test_external_request_never_uses_demo_deployment_and_records_attempt(session_factory, tmp_path):
+    from tests.test_outcome_service import (
+        _seed_closed_facility,
+        _submission,
+        _active_run_with_membership,
+    )
+    from app.services.outcomes import OutcomeService
+
+    facility_id, auditor = _seed_closed_facility(session_factory)
+    outcome_service = OutcomeService(session_factory, artifact_root=tmp_path)
+    submitted_outcome = outcome_service.submit(facility_id, _submission(), auditor)
+    attempted = _active_run_with_membership(
+        session_factory, uuid.UUID(submitted_outcome["outcome"]["outcome_id"]), "controlled_demo"
+    )
+    users = demo_users(session_factory)
+    service = WorkflowService(session_factory)
+    draft = service.create_draft(draft_payload(), users["supplier"])
+    # Trusted server-side declaration, never an application request-body field.
+    with session_factory.begin() as session:
+        session.get(
+            FinancingRequestModel, uuid.UUID(draft["request_id"])
+        ).assessment_scope = "external_verified"
+    submitted = service.submit(draft["request_id"], 1, users["supplier"])
+    confirmed = service.confirm_trade(
+        draft["request_id"],
+        submitted["version"],
+        confirmed=True,
+        comment="Verified",
+        user=users["core_enterprise"],
+        confirmed_payable_amount=Decimal("1500000.00"),
+    )
+    assessed = service.assess_risk(draft["request_id"], confirmed["version"], users["financier"])
+    assert assessed["risk_score"] == assessed["raw_risk_score"]
+    assert assessed["risk_evidence"]["calibration_run_id"] is None
+    assert assessed["risk_evidence"]["calibration_fallback_code"] == "calibration_scope_mismatch"
+    with session_factory() as session:
+        event = session.scalar(
+            select(LedgerEventModel).where(
+                LedgerEventModel.entity_id == uuid.UUID(draft["request_id"]),
+                LedgerEventModel.event_type == "RISK_CALIBRATION_FALLBACK",
+            )
+        )
+    assert event.payload["attempted_calibration_run_id"] == str(attempted)
+    assert event.payload["assessment_scope"] == "external_verified"
 
 
 def test_duplicate_invoice_claim_is_rejected_case_insensitively(session_factory):

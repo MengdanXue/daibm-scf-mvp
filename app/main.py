@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from app.services.integrity import (
 )
 from app.services.anchor_dispatch import AnchorDispatchService, FabricGatewayClient
 from app.services.outcomes import OutcomeService
+from app.services.calibration_jobs import CalibrationJobService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -47,6 +49,7 @@ def create_app(
     *,
     research_settings: ResearchSettings | None = None,
     calibration_artifact_dir: Path | None = None,
+    calibration_worker_enabled: bool = True,
 ) -> FastAPI:
     owns_database = database is None
     active_database = database or Database.create(
@@ -89,6 +92,10 @@ def create_app(
             / "calibration"
         ),
     )
+    calibration_job_service = CalibrationJobService(
+        active_database.session_factory,
+        outcome_service=outcome_service,
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -103,12 +110,23 @@ def create_app(
         application.state.facility_service = facility_service
         application.state.anchor_dispatch_service = anchor_dispatch_service
         application.state.outcome_service = outcome_service
+        application.state.calibration_job_service = calibration_job_service
         identity_service.seed_demo_accounts()
         research_service.initialize()
         outcome_service.reconcile_deployments()
-        yield
-        if owns_database:
-            active_database.dispose()
+        stop_event: asyncio.Event | None = None
+        worker_task: asyncio.Task[None] | None = None
+        if calibration_worker_enabled:
+            stop_event = asyncio.Event()
+            worker_task = asyncio.create_task(calibration_job_service.run(stop_event))
+        try:
+            yield
+        finally:
+            if stop_event is not None and worker_task is not None:
+                stop_event.set()
+                await worker_task
+            if owns_database:
+                active_database.dispose()
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
@@ -244,7 +262,13 @@ def create_app(
         request: Request,
         _user=Depends(require_roles("auditor")),
     ):
-        return request.app.state.service.reset_demo()
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "demo_reset_retired",
+                "message": "Destructive demo reset is retired; governed history is preserved.",
+            },
+        )
 
     @application.post("/api/demo/tamper")
     def tamper_demo(

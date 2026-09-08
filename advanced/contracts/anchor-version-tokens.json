@@ -1,0 +1,4 @@
+{
+  "valid": ["v1", "invoice-limit-v1", "invoice_limit@1", "tgnn@2.1", "policy-v1.0", "12345678-1234-4567-89ab-1234567890ab", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@1"],
+  "invalid": ["", "@1", "invoice_limit@", "invoice@@1", "invoice@1@2", "invoice@-1", " invoice@1", "invoice@1 ", "invoice@1\n", "invoice@1\r\n", "invoice@1\t", "invoice@1/secret", "invoice@1\\secret", "invoice@1:secret", "invoice@1?x", "发票@1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@1", null, 1, true, [], {}]
+}

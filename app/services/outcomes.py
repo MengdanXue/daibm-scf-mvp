@@ -1,51 +1,57 @@
 from __future__ import annotations
 
-import logging
-
 import hashlib
 import json
 import math
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.domain.facility import derive_closure_reason
 from app.identity import AuthenticatedUser
 from app.ledger import canonical_json, canonical_timestamp
-from app.models import FinancingRequestModel
+from app.models import FinancingRequestModel, LedgerEventModel
+from app.models_facility import FinancingFacilityModel
+from app.models_governance import (
+    CalibrationJobModel,
+    CalibrationRunObservationModel,
+    OutcomeCorrectionModel,
+)
+from app.models_lifecycle import (
+    FacilityDefaultModel,
+    FacilityDelinquencyModel,
+    FacilityWriteOffModel,
+)
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel, RiskAssessmentModel
 from app.repositories.ledger import LedgerRepository
 from app.repositories.outcomes import OutcomeRepository
-from app.schemas_outcome import ActualOutcomeCreate
+from app.schemas_outcome import ActualOutcomeCreate, OutcomeCorrectionCreate
 from app.services.adaptive_risk import (
+    ActivationDecision,
     evaluate_activation_gate,
     is_strictly_newer_candidate,
     load_verified_calibration,
-    resolve_deployment_scope,
 )
 from app.services.outcome_calibration import (
-    CalibrationDatasetSummary,
     UnmeasuredCalibrationDataset,
     CalibrationCandidate,
     CalibrationObservation,
     CalibrationTrainingConfig,
     StagedCalibrationArtifact,
     build_calibration_candidate,
+    canonical_training_configuration,
     discard_staged_artifact,
-    publish_candidate_artifact,
     recover_candidate_artifact,
     stage_candidate_artifact,
-    summarize_calibration_observations,
 )
-
-
-_logger = logging.getLogger(__name__)
 
 
 class OutcomeError(Exception):
@@ -69,6 +75,55 @@ BUSINESS_BASELINE_ENGINE = "transparent_logistic_baseline_v0.1"
 
 Trainer = Callable[..., CalibrationCandidate]
 ArtifactWriter = Callable[[Path, CalibrationCandidate], StagedCalibrationArtifact]
+
+
+@dataclass(frozen=True)
+class DerivedOutcomeFacts:
+    defaulted: bool
+    days_past_due: int
+    loss_amount: Decimal
+
+
+def derive_outcome_facts(
+    session: Session,
+    facility: FinancingFacilityModel,
+) -> DerivedOutcomeFacts:
+    """Derive immutable outcome facts only from governed lifecycle evidence."""
+    delinquencies = tuple(
+        session.scalars(
+            select(FacilityDelinquencyModel).where(
+                FacilityDelinquencyModel.facility_id == facility.facility_id
+            )
+        )
+    )
+    defaults = tuple(
+        session.scalars(
+            select(FacilityDefaultModel).where(
+                FacilityDefaultModel.facility_id == facility.facility_id
+            )
+        )
+    )
+    writeoff = session.scalar(
+        select(FacilityWriteOffModel).where(
+            FacilityWriteOffModel.facility_id == facility.facility_id
+        )
+    )
+    days_past_due = max(
+        [
+            0,
+            *(row.days_past_due for row in delinquencies),
+            *(row.days_past_due for row in defaults),
+        ]
+    )
+    return DerivedOutcomeFacts(
+        defaulted=bool(defaults),
+        days_past_due=days_past_due,
+        loss_amount=(
+            Decimal(writeoff.amount).quantize(Decimal("0.01"))
+            if writeoff is not None
+            else Decimal("0.00")
+        ),
+    )
 
 
 class OutcomeService:
@@ -101,259 +156,251 @@ class OutcomeService:
         payload: ActualOutcomeCreate,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
+        return self._submit_governed(facility_id, payload, user)
+
+    def _submit_governed(
+        self,
+        facility_id: str | uuid.UUID,
+        payload: ActualOutcomeCreate,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
         self._require_auditor(user)
         normalized_id = self._uuid(facility_id)
         request_sha256 = self._request_sha256(normalized_id, payload)
-        staged: StagedCalibrationArtifact | None = None
-        outcome_id: uuid.UUID | None = None
-        run_id: uuid.UUID | None = None
-        try:
-            with self.session_factory.begin() as session:
-                self.repository.acquire_training_lock(session)
-                replay = self.repository.get_by_idempotency_key(
-                    session, payload.idempotency_key
-                )
-                if replay is not None:
-                    return self._replay(
-                        session, replay, normalized_id, request_sha256
-                    )
+        with self.session_factory.begin() as session:
+            replay = self.repository.get_by_idempotency_key(
+                session, payload.idempotency_key
+            )
+            if replay is not None:
+                return self._replay(session, replay, normalized_id, request_sha256)
 
-                facility = self.repository.get_facility_for_update(
-                    session, normalized_id
-                )
-                if facility is None:
-                    raise OutcomeNotFound(str(normalized_id))
-                existing = self.repository.get_by_facility(session, normalized_id)
-                if existing is not None:
-                    if existing.request_sha256 != request_sha256:
-                        raise OutcomeConflict(
-                            "Facility already has a different actual outcome"
-                        )
-                    return self._result(session, existing)
-                if facility.status != "closed" or Decimal(
-                    facility.outstanding_amount
-                ) != Decimal("0.00"):
-                    raise OutcomeConflict(
-                        "Actual outcomes require a closed facility with zero balance"
-                    )
-                if payload.loss_amount > Decimal(facility.principal):
-                    raise OutcomeConflict(
-                        "Actual outcome loss amount cannot exceed principal"
-                    )
-                if facility.closed_at is None or payload.observed_at < facility.closed_at:
-                    raise OutcomeConflict("observed_at cannot precede facility closure")
+            facility = self.repository.get_facility_for_update(session, normalized_id)
+            if facility is None:
+                raise OutcomeNotFound(str(normalized_id))
+            replay = self.repository.get_by_idempotency_key(
+                session, payload.idempotency_key
+            )
+            if replay is not None:
+                return self._replay(session, replay, normalized_id, request_sha256)
+            existing = self.repository.get_by_facility(session, normalized_id)
+            if existing is not None:
+                raise OutcomeConflict("Facility already has an immutable actual outcome")
 
-                application = session.get(FinancingRequestModel, facility.request_id)
-                if (
-                    application is None
-                    or application.risk_assessment_id is None
-                    or application.risk_score is None
-                    or not application.risk_input_sha256
-                    or not application.risk_engine_version
-                    or application.risk_assessed_at is None
-                ):
-                    raise OutcomeConflict(
-                        "Facility request prediction lineage is incomplete"
-                    )
-                assessment = session.get(
-                    RiskAssessmentModel, application.risk_assessment_id
-                )
-                if assessment is None:
-                    if application.risk_engine_version != BUSINESS_BASELINE_ENGINE:
-                        raise OutcomeConflict(
-                            "Unregistered prediction engine lineage is not supported"
-                        )
-                    model_version_id = None
-                    original_risk_score = float(
-                        application.raw_risk_score
-                        if application.raw_risk_score is not None
-                        else application.risk_score
-                    )
-                    risk_input_sha256 = application.risk_input_sha256
-                else:
-                    model_version = session.get(
-                        ModelVersionModel, assessment.model_version_id
-                    )
-                    if model_version is None:
-                        raise OutcomeConflict("Model-version lineage is missing")
-                    expected_engine_version = (
-                        f"{model_version.model_name}@{model_version.semantic_version}"
-                    )
-                    if application.risk_engine_version != expected_engine_version:
-                        raise OutcomeConflict(
-                            "Request engine lineage disagrees with assessed model version"
-                        )
-                    if not math.isclose(
-                        float(application.risk_score),
-                        float(assessment.risk_score),
-                        rel_tol=0.0,
-                        abs_tol=1e-12,
-                    ):
-                        raise OutcomeConflict("Request and assessment scores disagree")
-                    if application.risk_input_sha256 != assessment.input_sha256:
-                        raise OutcomeConflict(
-                            "Request and assessment input lineage disagree"
-                        )
-                    model_version_id = assessment.model_version_id
-                    original_risk_score = float(assessment.risk_score)
-                    risk_input_sha256 = assessment.input_sha256
+            facts, application, lineage = self._validate_submission_snapshot(
+                session, facility, payload
+            )
+            # Eligible-set writers and activation use one lock order. The
+            # facility row is unrelated to calibration ownership; no
+            # calibration path acquires it after the scope lock.
+            self.repository.acquire_scope_lock(
+                session,
+                scope=application.assessment_scope,
+            )
+            now = self._now()
+            outcome = self.repository.add_outcome(
+                session,
+                ActualOutcomeModel(
+                    outcome_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    request_id=facility.request_id,
+                    risk_assessment_id=application.risk_assessment_id,
+                    model_version_id=lineage["model_version_id"],
+                    submitted_by_user_id=user.user_id,
+                    idempotency_key=payload.idempotency_key,
+                    request_sha256=request_sha256,
+                    defaulted=facts.defaulted,
+                    days_past_due=facts.days_past_due,
+                    loss_amount=facts.loss_amount,
+                    observed_at=payload.observed_at,
+                    evidence_sha256=payload.evidence_sha256,
+                    provenance=payload.provenance,
+                    original_risk_score=lineage["original_risk_score"],
+                    risk_engine_version=application.risk_engine_version,
+                    risk_input_sha256=lineage["risk_input_sha256"],
+                    recorded_at=now,
+                ),
+            )
+            self.ledger_repository.append_many(
+                session,
+                outcome.outcome_id,
+                [("ACTUAL_OUTCOME_RECORDED", self._outcome_event(outcome))],
+            )
+            job = self.repository.add_job(
+                session,
+                self._new_job(
+                    scope=application.assessment_scope,
+                    trigger_type="outcome_submitted",
+                    idempotency_key=payload.idempotency_key,
+                    now=now,
+                    outcome_id=outcome.outcome_id,
+                ),
+            )
+            return self._result(session, outcome, job=job)
 
-                now = self._now()
-                outcome = self.repository.add_outcome(
-                    session,
-                    ActualOutcomeModel(
-                        outcome_id=uuid.uuid4(),
-                        facility_id=facility.facility_id,
-                        request_id=facility.request_id,
-                        risk_assessment_id=application.risk_assessment_id,
-                        model_version_id=model_version_id,
-                        submitted_by_user_id=user.user_id,
-                        idempotency_key=payload.idempotency_key,
-                        request_sha256=request_sha256,
-                        defaulted=payload.defaulted,
-                        days_past_due=payload.days_past_due,
-                        loss_amount=payload.loss_amount,
-                        observed_at=payload.observed_at,
-                        evidence_sha256=payload.evidence_sha256,
-                        provenance=payload.provenance,
-                        original_risk_score=original_risk_score,
-                        risk_engine_version=application.risk_engine_version,
-                        risk_input_sha256=risk_input_sha256,
-                        recorded_at=now,
+    def preview(
+        self,
+        facility_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        self._require_auditor(user)
+        normalized_id = self._uuid(facility_id)
+        with self.session_factory.begin() as session:
+            facility = self.repository.get_facility_for_update(session, normalized_id)
+            if facility is None:
+                raise OutcomeNotFound(str(normalized_id))
+            application = session.get(FinancingRequestModel, facility.request_id)
+            if application is None:
+                raise OutcomeConflict("Facility request lineage is missing")
+            facts = self._validate_lifecycle_snapshot(session, facility)
+            assert facility.closed_at is not None
+            return {
+                "facility_id": str(facility.facility_id),
+                "defaulted": facts.defaulted,
+                "days_past_due": facts.days_past_due,
+                "loss_amount": self._money(facts.loss_amount),
+                "closure_reason": facility.closure_reason,
+                "closed_at": canonical_timestamp(facility.closed_at),
+                "expected_provenance": self._provenance(application.assessment_scope),
+                "deployment_scope": application.assessment_scope,
+            }
+
+    def create_correction(
+        self,
+        outcome_id: str | uuid.UUID,
+        payload: OutcomeCorrectionCreate,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        self._require_auditor(user)
+        normalized_id = self._uuid(outcome_id)
+        request_sha256 = self._correction_sha256(normalized_id, payload)
+        with self.session_factory.begin() as session:
+            replay = self.repository.get_correction_by_idempotency_key(
+                session, payload.idempotency_key
+            )
+            if replay is not None:
+                return self._replay_correction(
+                    session, replay, normalized_id, request_sha256
+                )
+
+            # Global governed-write lock order: immutable identity/provenance read,
+            # scope advisory xact lock, outcome row, correction head, ordered runs,
+            # then append-only correction/ledger/job writes.
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
+                raise OutcomeNotFound(str(normalized_id))
+            scope = self._scope_for_provenance(outcome.provenance)
+            self.repository.acquire_scope_lock(session, scope=scope)
+            outcome = self.repository.get_outcome_for_update(session, normalized_id)
+            if outcome is None:
+                raise OutcomeNotFound(str(normalized_id))
+            if self._scope_for_provenance(outcome.provenance) != scope:
+                raise OutcomeConflict("Outcome provenance changed during correction")
+            replay = self.repository.get_correction_by_idempotency_key(
+                session, payload.idempotency_key
+            )
+            if replay is not None:
+                return self._replay_correction(
+                    session, replay, normalized_id, request_sha256
+                )
+            head = self.repository.get_correction_head(
+                session, normalized_id, for_update=True
+            )
+            eligible = head is None or head.action == "REINSTATE"
+            if payload.action == "EXCLUDE" and not eligible:
+                raise OutcomeConflict("Outcome is already excluded from training")
+            if payload.action == "REINSTATE" and eligible:
+                raise OutcomeConflict("Outcome is already eligible for training")
+
+            application = session.get(FinancingRequestModel, outcome.request_id)
+            facility = session.get(FinancingFacilityModel, outcome.facility_id)
+            if application is None or facility is None:
+                raise OutcomeConflict("Outcome lifecycle lineage is missing")
+            if payload.action == "REINSTATE":
+                self._validate_existing_outcome(session, facility, application, outcome)
+
+            now = self._now()
+            if head is not None and now <= head.recorded_at:
+                now = head.recorded_at + timedelta(microseconds=1)
+            correction = OutcomeCorrectionModel(
+                correction_id=uuid.uuid4(), outcome_id=outcome.outcome_id,
+                action=payload.action, reason_code=payload.reason_code,
+                comment=payload.comment, evidence_sha256=payload.evidence_sha256,
+                auditor_user_id=user.user_id,
+                idempotency_key=payload.idempotency_key,
+                request_sha256=request_sha256, recorded_at=now,
+            )
+            invalidated = (
+                self.repository.invalidate_active_runs_containing(
+                    session, outcome.outcome_id,
+                    scope=scope, now=now,
+                )
+                if payload.action == "EXCLUDE"
+                else []
+            )
+            self.repository.add_correction(session, correction)
+            events: list[tuple[str, dict[str, Any]]] = [
+                (
+                    "OUTCOME_TRAINING_EXCLUDED"
+                    if payload.action == "EXCLUDE"
+                    else "OUTCOME_TRAINING_REINSTATED",
+                    {
+                        "outcome_id": str(outcome.outcome_id),
+                        "correction_id": str(correction.correction_id),
+                        "action": correction.action,
+                        "reason_code": correction.reason_code,
+                        "evidence_sha256": correction.evidence_sha256,
+                        "deployment_scope": scope,
+                    },
+                )
+            ]
+            events.extend(
+                (
+                    "CALIBRATION_DEPLOYMENT_INVALIDATED",
+                    {
+                        "outcome_id": str(outcome.outcome_id),
+                        "correction_id": str(correction.correction_id),
+                        "calibration_run_id": str(run.calibration_run_id),
+                        "deployment_scope": scope,
+                        "reason": "outcome_excluded",
+                    },
+                )
+                for run in invalidated
+            )
+            self.ledger_repository.append_many(session, outcome.outcome_id, events)
+            job = self.repository.add_job(
+                session,
+                self._new_job(
+                    scope=scope,
+                    trigger_type=(
+                        "correction_exclude"
+                        if payload.action == "EXCLUDE"
+                        else "correction_reinstate"
                     ),
-                )
-                observations = tuple(
-                    self._observation(item)
-                    for item in self.repository.list_all_outcomes(session)
-                )
-                provenances = tuple(item.provenance for item in observations)
-                deployment_scope = resolve_deployment_scope(provenances)
-                summary: CalibrationDatasetSummary | UnmeasuredCalibrationDataset = (
-                    self._fallback_summary(observations)
-                )
-                candidate: CalibrationCandidate | None = None
-                failure_code: str | None = None
-                try:
-                    summary = summarize_calibration_observations(
-                        observations,
-                        config=self.training_config,
-                    )
-                    candidate = self.trainer(
-                        observations, config=self.training_config
-                    )
-                except Exception:
-                    # A calibration run is recorded either way, so without
-                    # this the only trace of a defect in the trainer is a
-                    # run row reading "failed" with no cause attached.
-                    _logger.exception(
-                        "Calibration candidate training failed for outcome %s",
-                        outcome.outcome_id,
-                    )
-                    failure_code = "candidate_training_failed"
-                if candidate is not None:
-                    try:
-                        staged = self.artifact_writer(
-                            self.artifact_root, candidate
-                        )
-                    except Exception:
-                        _logger.exception(
-                            "Staging the calibration artifact failed "
-                            "under %s",
-                            self.artifact_root,
-                        )
-                        failure_code = "artifact_write_failed"
-                        staged = None
+                    idempotency_key=payload.idempotency_key,
+                    now=now,
+                    correction_id=correction.correction_id,
+                ),
+            )
+            return self._correction_result(
+                correction, job, invalidated_run_ids=[
+                    run.calibration_run_id for run in invalidated
+                ]
+            )
 
-                completed_at = self._now()
-                configuration = self._configuration()
-                run = self.repository.add_run(
-                    session,
-                    CalibrationRunModel(
-                        calibration_run_id=uuid.uuid4(),
-                        trigger_outcome_id=outcome.outcome_id,
-                        dataset_sha256=summary.dataset_sha256,
-                        sample_count=summary.sample_count,
-                        positive_count=summary.positive_count,
-                        negative_count=summary.negative_count,
-                        metrics_before=summary.metrics_before,
-                        metrics_after=(
-                            candidate.metrics_after
-                            if candidate is not None and failure_code is None
-                            else None
-                        ),
-                        configuration=configuration,
-                        status=(
-                            candidate.status
-                            if candidate is not None and failure_code is None
-                            else "failed"
-                        ),
-                        artifact_locator=(
-                            str(staged.path.resolve())
-                            if staged is not None and failure_code is None
-                            else None
-                        ),
-                        artifact_sha256=(
-                            staged.sha256
-                            if staged is not None and failure_code is None
-                            else None
-                        ),
-                        failure_code=failure_code,
-                        deployment_status="not_deployed",
-                        deployment_scope=deployment_scope,
-                        activation_mode=None,
-                        activated_at=None,
-                        deactivated_at=None,
-                        previous_active_run_id=None,
-                        activation_reason=(
-                            "not_evaluated"
-                            if candidate is not None and failure_code is None
-                            else failure_code or "training_failed"
-                        ),
-                        started_at=now,
-                        completed_at=completed_at,
-                    ),
-                )
-                self.ledger_repository.append_many(
-                    session,
-                    outcome.outcome_id,
-                    self._events(
-                        outcome,
-                        run,
-                        request_risk_engine_version=application.risk_engine_version,
-                    ),
-                )
-                outcome_id = outcome.outcome_id
-                run_id = run.calibration_run_id
-        except Exception:
-            discard_staged_artifact(staged)
-            raise
-
-        if staged is not None:
-            try:
-                publish_candidate_artifact(staged)
-            except Exception:
-                _logger.exception(
-                    "Publishing the calibration artifact failed for run %s",
-                    run_id,
-                )
-                assert outcome_id is not None and run_id is not None
-                self._mark_publication_failed(outcome_id, run_id)
-                self._discard_failed_publication(staged)
-            else:
-                assert candidate is not None
-                self._evaluate_deployment(
-                    run_id,
-                    candidate,
-                    provenances=provenances,
-                )
-
-        assert outcome_id is not None and run_id is not None
+    def list_corrections(
+        self,
+        outcome_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> list[dict[str, Any]]:
+        self._require_auditor(user)
+        normalized_id = self._uuid(outcome_id)
         with self.session_factory() as session:
-            committed_outcome = self.repository.get_outcome(session, outcome_id)
-            committed_run = self.repository.get_run(session, run_id)
-            if committed_outcome is None or committed_run is None:
-                raise RuntimeError("Committed outcome calibration result is missing")
-            return self._result(session, committed_outcome, committed_run)
+            if self.repository.get_outcome(session, normalized_id) is None:
+                raise OutcomeNotFound(str(normalized_id))
+            return [
+                self._serialize_correction(item)
+                for item in self.repository.list_corrections(session, normalized_id)
+            ]
 
     def get_outcome(
         self,
@@ -365,7 +412,12 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, self._uuid(outcome_id))
             if outcome is None:
                 raise OutcomeNotFound(str(outcome_id))
-            return self._serialize_outcome(outcome)
+            return self._serialize_outcome(
+                outcome,
+                effective_training_eligible=self._is_eligible(
+                    session, outcome.outcome_id
+                ),
+            )
 
     def list_outcomes(
         self,
@@ -378,8 +430,11 @@ class OutcomeService:
         self._page(limit, offset)
         with self.session_factory() as session:
             return [
-                self._serialize_outcome(item)
-                for item in self.repository.list_outcomes(
+                self._serialize_outcome(
+                    item,
+                    effective_training_eligible=eligible,
+                )
+                for item, eligible in self.repository.list_outcomes_with_eligibility(
                     session, limit=limit, offset=offset
                 )
             ]
@@ -394,7 +449,19 @@ class OutcomeService:
             run = self.repository.get_run(session, self._uuid(run_id))
             if run is None:
                 raise OutcomeNotFound(str(run_id))
-            return self._serialize_run(run)
+            return self._serialize_run(run, session=session)
+
+    def get_job(
+        self,
+        job_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        self._require_auditor(user)
+        with self.session_factory() as session:
+            job = self.repository.get_job(session, self._uuid(job_id))
+            if job is None:
+                raise OutcomeNotFound(str(job_id))
+            return self._serialize_job(job)
 
     def list_runs(
         self,
@@ -407,7 +474,7 @@ class OutcomeService:
         self._page(limit, offset)
         with self.session_factory() as session:
             return [
-                self._serialize_run(item)
+                self._serialize_run(item, session=session)
                 for item in self.repository.list_runs(
                     session, limit=limit, offset=offset
                 )
@@ -425,7 +492,23 @@ class OutcomeService:
                     run = self.repository.get_run(session, run_id)
                     if run is None:
                         continue
-                    candidate = self._candidate_from_run(run)
+                    if run.trigger_job_id is not None:
+                        job = self.repository.get_job(session, run.trigger_job_id)
+                        if job is not None and job.status == "failed":
+                            self._reject_unrecoverable_deployment(
+                                run_id,
+                                reason="job_failed",
+                            )
+                        continue
+                    memberships = tuple(session.scalars(
+                        select(CalibrationRunObservationModel)
+                        .where(
+                            CalibrationRunObservationModel.calibration_run_id
+                            == run_id
+                        )
+                        .order_by(CalibrationRunObservationModel.outcome_id)
+                    ))
+                    candidate = self._candidate_from_run(run, memberships)
                     dataset = candidate.artifact.get("dataset")
                     if not isinstance(dataset, dict):
                         raise ValueError("calibration dataset manifest is invalid")
@@ -445,24 +528,26 @@ class OutcomeService:
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                 self._reject_unrecoverable_deployment(run_id)
 
-    def get_active_deployment(self, user: AuthenticatedUser) -> dict[str, Any]:
+    def get_active_deployment(self, user: AuthenticatedUser, *, scope: str) -> dict[str, Any]:
         self._require_auditor(user)
         with self.session_factory() as session:
-            run = self.repository.get_active_run(session)
+            run = self.repository.get_active_run(session, scope=scope)
             if run is None:
                 raise OutcomeNotFound("active calibration deployment")
-            return self._serialize_run(run)
+            return self._serialize_run(run, session=session)
 
     def rollback(
         self,
         expected_active_run_id: str | uuid.UUID,
         user: AuthenticatedUser,
+        *,
+        scope: str,
     ) -> dict[str, Any]:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
         with self.session_factory.begin() as session:
-            self.repository.acquire_training_lock(session)
-            current = self.repository.get_active_run(session, for_update=True)
+            self.repository.acquire_scope_lock(session, scope=scope)
+            current = self.repository.get_active_run(session, scope=scope, for_update=True)
             if current is None:
                 raise OutcomeNotFound("active calibration deployment")
             if current.calibration_run_id != expected_id:
@@ -475,6 +560,21 @@ class OutcomeService:
             )
             if restored is None or restored.deployment_status != "superseded":
                 raise OutcomeConflict("rollback predecessor is unavailable")
+            if restored.deployment_scope != scope:
+                raise OutcomeConflict("rollback predecessor scope is inconsistent")
+            if not self.repository.run_membership_is_eligible(
+                session, restored.calibration_run_id, scope=scope
+            ):
+                raise OutcomeConflict("rollback predecessor membership is no longer eligible")
+            try:
+                self._candidate_from_run(
+                    restored,
+                    tuple(
+                        self.repository.list_run_membership(session, restored.calibration_run_id)
+                    ),
+                )
+            except (OSError, TypeError, KeyError, ValueError) as error:
+                raise OutcomeConflict("rollback predecessor artifact is invalid") from error
 
             now = self._now()
             current.deployment_status = "superseded"
@@ -501,7 +601,187 @@ class OutcomeService:
                     )
                 ],
             )
-            return self._serialize_run(restored)
+            return self._serialize_run(restored, session=session)
+
+    def _validate_submission_snapshot(
+        self,
+        session: Session,
+        facility: FinancingFacilityModel,
+        payload: ActualOutcomeCreate,
+    ) -> tuple[DerivedOutcomeFacts, FinancingRequestModel, dict[str, Any]]:
+        facts = self._validate_lifecycle_snapshot(session, facility)
+        assert facility.closed_at is not None
+        if payload.observed_at < facility.closed_at:
+            raise OutcomeConflict("observed_at cannot precede facility closure")
+        application = session.scalar(
+            select(FinancingRequestModel)
+            .where(FinancingRequestModel.request_id == facility.request_id)
+            .with_for_update(read=True)
+        )
+        if application is None:
+            raise OutcomeConflict("Facility request lineage is missing")
+        expected_provenance = self._provenance(application.assessment_scope)
+        if payload.provenance != expected_provenance:
+            raise OutcomeConflict(
+                "Outcome provenance must match the authorized assessment scope"
+            )
+        return facts, application, self._prediction_lineage(session, application)
+
+    def _validate_lifecycle_snapshot(
+        self,
+        session: Session,
+        facility: FinancingFacilityModel,
+    ) -> DerivedOutcomeFacts:
+        if (
+            facility.status != "closed"
+            or Decimal(facility.outstanding_amount) != Decimal("0.00")
+            or facility.closed_at is None
+            or facility.closure_reason is None
+        ):
+            raise OutcomeConflict(
+                "Actual outcomes require a closed facility with zero balance"
+            )
+        facts = derive_outcome_facts(session, facility)
+        writeoff = session.scalar(
+            select(FacilityWriteOffModel).where(
+                FacilityWriteOffModel.facility_id == facility.facility_id
+            )
+        )
+        try:
+            expected_reason = derive_closure_reason(
+                has_default=facts.defaulted,
+                has_writeoff=writeoff is not None,
+            )
+        except ValueError as error:
+            raise OutcomeConflict(str(error)) from error
+        if facility.closure_reason != expected_reason:
+            raise OutcomeConflict("Facility closure lineage is inconsistent")
+        if facts.loss_amount > Decimal(facility.principal):
+            raise OutcomeConflict("Derived loss amount cannot exceed principal")
+        return facts
+
+    def _validate_existing_outcome(
+        self,
+        session: Session,
+        facility: FinancingFacilityModel,
+        application: FinancingRequestModel,
+        outcome: ActualOutcomeModel,
+    ) -> None:
+        if (
+            facility.facility_id != outcome.facility_id
+            or facility.request_id != outcome.request_id
+            or application.request_id != outcome.request_id
+        ):
+            raise OutcomeConflict("Outcome request/facility association is inconsistent")
+        if application.risk_assessment_id != outcome.risk_assessment_id:
+            raise OutcomeConflict("Outcome assessment identity is inconsistent")
+        if self._provenance(application.assessment_scope) != outcome.provenance:
+            raise OutcomeConflict("Outcome provenance lineage is inconsistent")
+        facts = self._validate_lifecycle_snapshot(session, facility)
+        assert facility.closed_at is not None
+        lineage = self._prediction_lineage(session, application)
+        if (
+            facts.defaulted != outcome.defaulted
+            or facts.days_past_due != outcome.days_past_due
+            or facts.loss_amount != Decimal(outcome.loss_amount)
+            or lineage["model_version_id"] != outcome.model_version_id
+            or lineage["risk_input_sha256"] != outcome.risk_input_sha256
+            or not math.isclose(
+                lineage["original_risk_score"],
+                outcome.original_risk_score,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise OutcomeConflict("Outcome facts or prediction lineage are inconsistent")
+
+    @staticmethod
+    def _prediction_lineage(
+        session: Session,
+        application: FinancingRequestModel,
+    ) -> dict[str, Any]:
+        if (
+            application.risk_assessment_id is None
+            or application.risk_score is None
+            or not application.risk_input_sha256
+            or not application.risk_engine_version
+            or application.risk_assessed_at is None
+        ):
+            raise OutcomeConflict("Facility request prediction lineage is incomplete")
+        assessment = session.get(RiskAssessmentModel, application.risk_assessment_id)
+        if assessment is None:
+            if application.risk_engine_version != BUSINESS_BASELINE_ENGINE:
+                raise OutcomeConflict(
+                    "Unregistered prediction engine lineage is not supported"
+                )
+            return {
+                "model_version_id": None,
+                "original_risk_score": float(
+                    application.raw_risk_score
+                    if application.raw_risk_score is not None
+                    else application.risk_score
+                ),
+                "risk_input_sha256": application.risk_input_sha256,
+            }
+        model_version = session.get(ModelVersionModel, assessment.model_version_id)
+        if model_version is None:
+            raise OutcomeConflict("Model-version lineage is missing")
+        expected_engine = f"{model_version.model_name}@{model_version.semantic_version}"
+        if application.risk_engine_version != expected_engine:
+            raise OutcomeConflict(
+                "Request engine lineage disagrees with assessed model version"
+            )
+        if not math.isclose(
+            float(application.risk_score), float(assessment.risk_score),
+            rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise OutcomeConflict("Request and assessment scores disagree")
+        if application.risk_input_sha256 != assessment.input_sha256:
+            raise OutcomeConflict("Request and assessment input lineage disagree")
+        return {
+            "model_version_id": assessment.model_version_id,
+            "original_risk_score": float(assessment.risk_score),
+            "risk_input_sha256": assessment.input_sha256,
+        }
+
+    @staticmethod
+    def _new_job(
+        *,
+        scope: str,
+        trigger_type: str,
+        idempotency_key: uuid.UUID,
+        now: datetime,
+        outcome_id: uuid.UUID | None = None,
+        correction_id: uuid.UUID | None = None,
+    ) -> CalibrationJobModel:
+        return CalibrationJobModel(
+            job_id=uuid.uuid4(), deployment_scope=scope,
+            trigger_type=trigger_type, trigger_outcome_id=outcome_id,
+            trigger_correction_id=correction_id,
+            idempotency_key=idempotency_key, status="queued", attempt_count=0,
+            lease_owner=None, leased_until=None, failure_code=None,
+            result_run_id=None, created_at=now, started_at=None, completed_at=None,
+        )
+
+    @staticmethod
+    def _outcome_event(outcome: ActualOutcomeModel) -> dict[str, Any]:
+        return {
+            "outcome_id": str(outcome.outcome_id),
+            "facility_id": str(outcome.facility_id),
+            "request_id": str(outcome.request_id),
+            "risk_assessment_id": str(outcome.risk_assessment_id),
+            "model_version_id": (
+                str(outcome.model_version_id)
+                if outcome.model_version_id is not None else None
+            ),
+            "request_risk_engine_version": outcome.risk_engine_version,
+            "original_risk_score": outcome.original_risk_score,
+            "defaulted": outcome.defaulted,
+            "days_past_due": outcome.days_past_due,
+            "loss_amount": OutcomeService._money(outcome.loss_amount),
+            "evidence_sha256": outcome.evidence_sha256,
+            "provenance": outcome.provenance,
+        }
 
     def _replay(
         self,
@@ -521,23 +801,86 @@ class OutcomeService:
         session: Session,
         outcome: ActualOutcomeModel,
         run: CalibrationRunModel | None = None,
+        *,
+        job: CalibrationJobModel | None = None,
     ) -> dict[str, Any]:
-        active_run = run or self.repository.get_run_by_outcome(
+        calibration_job = job or self.repository.get_job_by_outcome(
             session, outcome.outcome_id
         )
-        if active_run is None:
-            raise RuntimeError("Outcome calibration run is missing")
+        if calibration_job is None:
+            raise RuntimeError("Outcome calibration job is missing")
         return {
-            "outcome": self._serialize_outcome(outcome),
-            "calibration_run": self._serialize_run(active_run),
+            "outcome": self._serialize_outcome(
+                outcome,
+                effective_training_eligible=self._is_eligible(session, outcome.outcome_id),
+            ),
+            "calibration_job": self._serialize_job(calibration_job),
         }
+
+    def _replay_correction(
+        self,
+        session: Session,
+        correction: OutcomeCorrectionModel,
+        outcome_id: uuid.UUID,
+        request_sha256: str,
+    ) -> dict[str, Any]:
+        if (
+            correction.outcome_id != outcome_id
+            or correction.request_sha256 != request_sha256
+        ):
+            raise OutcomeConflict(
+                "Idempotency key was already used for different correction semantics"
+            )
+        job = self.repository.get_job_by_correction(session, correction.correction_id)
+        if job is None:
+            raise RuntimeError("Correction calibration job is missing")
+        invalidated_ids = [
+            uuid.UUID(event.payload["calibration_run_id"])
+            for event in session.scalars(
+                select(LedgerEventModel)
+                .where(
+                    LedgerEventModel.entity_id == outcome_id,
+                    LedgerEventModel.event_type
+                    == "CALIBRATION_DEPLOYMENT_INVALIDATED",
+                )
+                .order_by(LedgerEventModel.id)
+            )
+            if event.payload.get("correction_id") == str(correction.correction_id)
+        ]
+        return self._correction_result(
+            correction, job,
+            invalidated_run_ids=(
+                invalidated_ids if correction.action == "EXCLUDE" else []
+            ),
+        )
+
+    def _correction_result(
+        self,
+        correction: OutcomeCorrectionModel,
+        job: CalibrationJobModel,
+        *,
+        invalidated_run_ids: list[uuid.UUID],
+    ) -> dict[str, Any]:
+        return {
+            "correction": self._serialize_correction(correction),
+            "effective_training_eligible": correction.action == "REINSTATE",
+            "invalidated_run_ids": [str(item) for item in invalidated_run_ids],
+            "calibration_job": self._serialize_job(job),
+        }
+
+    def _is_eligible(self, session: Session, outcome_id: uuid.UUID) -> bool:
+        head = self.repository.get_correction_head(session, outcome_id)
+        return head is None or head.action == "REINSTATE"
 
     def _mark_publication_failed(
         self,
-        outcome_id: uuid.UUID,
         run_id: uuid.UUID,
     ) -> datetime:
         with self.session_factory.begin() as session:
+            unlocked = self.repository.get_run(session, run_id)
+            if unlocked is None:
+                raise RuntimeError("Committed calibration run is missing")
+            self._acquire_run_lock(session, unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
@@ -555,7 +898,7 @@ class OutcomeService:
             run.completed_at = self._now()
             self.ledger_repository.append_many(
                 session,
-                outcome_id,
+                run.calibration_run_id,
                 [
                     (
                         "CALIBRATION_CANDIDATE_FAILED",
@@ -583,13 +926,134 @@ class OutcomeService:
         *,
         provenances: tuple[str, ...],
     ) -> None:
+        scope, integrity, decision = self._deployment_decision(
+            run_id,
+            candidate,
+            provenances=provenances,
+        )
         with self.session_factory.begin() as session:
-            self.repository.acquire_training_lock(session)
+            self._acquire_run_lock(session, scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None:
                 raise RuntimeError("Committed calibration run is missing")
-            if run.deployment_status != "not_deployed":
+            if (
+                run.status not in ("exploratory_candidate", "eligible_candidate")
+                or run.failure_code is not None
+                or run.artifact_locator is None
+                or run.artifact_sha256 is None
+                or run.deployment_status not in ("not_deployed", "active")
+            ):
+                raise RuntimeError("calibration run is no longer deployable")
+            if not self.repository.run_membership_matches_eligible_snapshot(
+                session,
+                run_id,
+                scope=scope,
+            ):
+                if run.deployment_status == "not_deployed":
+                    run.deployment_status = "rejected"
+                    run.activation_reason = "dataset_snapshot_changed"
+                    self.ledger_repository.append_many(
+                        session,
+                        run.calibration_run_id,
+                        [("CALIBRATION_AUTO_REJECTED", {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "deployment_scope": scope,
+                            "activation_reason": run.activation_reason,
+                            "artifact_integrity": integrity,
+                        })],
+                    )
                 return
+            self._apply_deployment_decision(
+                session,
+                run,
+                decision=decision,
+                integrity=integrity,
+            )
+
+    def _complete_claimed_deployment(
+        self,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        run_id: uuid.UUID,
+        candidate: CalibrationCandidate,
+        provenances: tuple[str, ...],
+        now: datetime,
+    ) -> None:
+        # The caller timestamp is diagnostic/backward-compatible only. Lease
+        # fencing must sample time after both advisory and row locks are held.
+        del now
+        scope, integrity, decision = self._deployment_decision(
+            run_id,
+            candidate,
+            provenances=provenances,
+        )
+        with self.session_factory.begin() as session:
+            self._acquire_run_lock(session, scope)
+            job = self.repository.get_job_for_update(session, job_id)
+            self.repository._require_job_owner(job, worker_id)
+            assert job is not None  # Validated by _require_job_owner.
+            if job.deployment_scope != scope:
+                raise RuntimeError("calibration job and run scopes differ")
+            fenced_now = self._now()
+            if job.leased_until is None or job.leased_until <= fenced_now:
+                raise RuntimeError("calibration job lease expired")
+            run = self.repository.get_run_for_update(session, run_id)
+            if run is None:
+                raise RuntimeError("Committed calibration run is missing")
+            if (
+                run.status not in ("exploratory_candidate", "eligible_candidate")
+                or run.failure_code is not None
+                or run.artifact_locator is None
+                or run.artifact_sha256 is None
+                or run.deployment_status not in ("not_deployed", "active")
+            ):
+                raise RuntimeError("calibration run is no longer deployable")
+            if not self.repository.run_membership_matches_eligible_snapshot(
+                session,
+                run_id,
+                scope=scope,
+            ):
+                if run.deployment_status == "not_deployed":
+                    run.deployment_status = "rejected"
+                    run.activation_reason = "dataset_snapshot_changed"
+                    self.ledger_repository.append_many(
+                        session,
+                        run.calibration_run_id,
+                        [("CALIBRATION_AUTO_REJECTED", {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "deployment_scope": scope,
+                            "activation_reason": run.activation_reason,
+                            "artifact_integrity": integrity,
+                        })],
+                    )
+            else:
+                self._apply_deployment_decision(
+                    session,
+                    run,
+                    decision=decision,
+                    integrity=integrity,
+                )
+            self.repository.complete_job(
+                session,
+                job_id=job_id,
+                worker_id=worker_id,
+                result_run_id=run_id,
+                now=fenced_now,
+            )
+
+    def _deployment_decision(
+        self,
+        run_id: uuid.UUID,
+        candidate: CalibrationCandidate,
+        *,
+        provenances: tuple[str, ...],
+    ) -> tuple[str, str, ActivationDecision]:
+        with self.session_factory() as session:
+            run = self.repository.get_run(session, run_id)
+            if run is None:
+                raise RuntimeError("Committed calibration run is missing")
+            scope = run.deployment_scope
             integrity = "not_applicable"
             if run.artifact_locator is not None and run.artifact_sha256 is not None:
                 try:
@@ -597,91 +1061,124 @@ class OutcomeService:
                         Path(run.artifact_locator),
                         expected_sha256=run.artifact_sha256,
                         run_id=str(run.calibration_run_id),
-                        deployment_scope=run.deployment_scope,
+                        deployment_scope=scope,
                         expected_dataset_sha256=run.dataset_sha256,
                     )
                     integrity = "verified"
                 except ValueError:
                     integrity = "invalid"
-            decision = evaluate_activation_gate(
-                candidate,
-                artifact_integrity=integrity,
-                provenances=provenances,
-            )
-            run.deployment_scope = decision.deployment_scope
+        decision = evaluate_activation_gate(
+            candidate,
+            artifact_integrity=integrity,
+            provenances=provenances,
+        )
+        return scope, integrity, decision
+
+    def _apply_deployment_decision(
+        self,
+        session: Session,
+        run: CalibrationRunModel,
+        *,
+        decision: ActivationDecision,
+        integrity: str,
+    ) -> None:
+        if run.deployment_status != "not_deployed":
+            return
+        scope = run.deployment_scope
+        payload: dict[str, Any]
+        if decision.deployment_scope != scope:
+            run.deployment_status = "rejected"
+            run.activation_reason = "deployment_scope_mismatch"
+            event_type = "CALIBRATION_AUTO_REJECTED"
+            payload = {
+                "calibration_run_id": str(run.calibration_run_id),
+                "deployment_scope": scope,
+                "activation_reason": run.activation_reason,
+                "artifact_integrity": integrity,
+            }
+        elif not decision.activate:
+            run.deployment_status = "rejected"
             run.activation_reason = decision.reason
-            if not decision.activate:
+            event_type = "CALIBRATION_AUTO_REJECTED"
+            payload = {
+                "calibration_run_id": str(run.calibration_run_id),
+                "deployment_scope": scope,
+                "activation_reason": decision.reason,
+                "sample_count": run.sample_count,
+                "positive_count": run.positive_count,
+                "negative_count": run.negative_count,
+                "artifact_integrity": integrity,
+            }
+        else:
+            now = self._now()
+            previous = self.repository.get_active_run(
+                session, scope=scope, for_update=True
+            )
+            if previous is not None and not is_strictly_newer_candidate(
+                run.sample_count,
+                active_sample_count=previous.sample_count,
+            ):
                 run.deployment_status = "rejected"
+                run.activation_reason = "stale_candidate"
                 event_type = "CALIBRATION_AUTO_REJECTED"
                 payload = {
                     "calibration_run_id": str(run.calibration_run_id),
-                    "deployment_scope": decision.deployment_scope,
-                    "activation_reason": decision.reason,
+                    "deployment_scope": scope,
+                    "activation_reason": run.activation_reason,
+                    "active_run_id": str(previous.calibration_run_id),
                     "sample_count": run.sample_count,
-                    "positive_count": run.positive_count,
-                    "negative_count": run.negative_count,
+                    "active_sample_count": previous.sample_count,
                     "artifact_integrity": integrity,
                 }
             else:
-                now = self._now()
-                previous = self.repository.get_active_run(session, for_update=True)
-                if previous is not None and not is_strictly_newer_candidate(
-                    run.sample_count,
-                    active_sample_count=previous.sample_count,
-                ):
-                    run.deployment_status = "rejected"
-                    run.activation_reason = "stale_candidate"
-                    event_type = "CALIBRATION_AUTO_REJECTED"
-                    payload = {
-                        "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": decision.deployment_scope,
-                        "activation_reason": run.activation_reason,
-                        "active_run_id": str(previous.calibration_run_id),
-                        "sample_count": run.sample_count,
-                        "active_sample_count": previous.sample_count,
-                        "artifact_integrity": integrity,
-                    }
-                else:
-                    if previous is not None:
-                        previous.deployment_status = "superseded"
-                        previous.deactivated_at = now
-                        session.flush()
-                    run.deployment_status = "active"
-                    run.activation_mode = "automatic"
-                    run.activated_at = now
-                    run.deactivated_at = None
-                    run.previous_active_run_id = (
-                        previous.calibration_run_id if previous is not None else None
-                    )
-                    event_type = "CALIBRATION_AUTO_ACTIVATED"
-                    payload = {
-                        "calibration_run_id": str(run.calibration_run_id),
-                        "deployment_scope": decision.deployment_scope,
-                        "activation_reason": decision.reason,
-                        "previous_active_run_id": (
-                            str(previous.calibration_run_id)
-                            if previous is not None
-                            else None
-                        ),
-                        "artifact_sha256": run.artifact_sha256,
-                        "sample_count": run.sample_count,
-                        "positive_count": run.positive_count,
-                        "negative_count": run.negative_count,
-                    }
-            self.ledger_repository.append_many(
-                session,
-                run.calibration_run_id,
-                [(event_type, payload)],
-            )
+                if previous is not None:
+                    previous.deployment_status = "superseded"
+                    previous.deactivated_at = now
+                    session.flush()
+                run.deployment_status = "active"
+                run.activation_mode = "automatic"
+                run.activation_reason = decision.reason
+                run.activated_at = now
+                run.deactivated_at = None
+                run.previous_active_run_id = (
+                    previous.calibration_run_id if previous is not None else None
+                )
+                event_type = "CALIBRATION_AUTO_ACTIVATED"
+                payload = {
+                    "calibration_run_id": str(run.calibration_run_id),
+                    "deployment_scope": scope,
+                    "activation_reason": decision.reason,
+                    "previous_active_run_id": (
+                        str(previous.calibration_run_id)
+                        if previous is not None else None
+                    ),
+                    "artifact_sha256": run.artifact_sha256,
+                    "sample_count": run.sample_count,
+                    "positive_count": run.positive_count,
+                    "negative_count": run.negative_count,
+                }
+        self.ledger_repository.append_many(
+            session,
+            run.calibration_run_id,
+            [(event_type, payload)],
+        )
 
-    def _reject_unrecoverable_deployment(self, run_id: uuid.UUID) -> None:
+    def _reject_unrecoverable_deployment(
+        self,
+        run_id: uuid.UUID,
+        *,
+        reason: str = "artifact_unverified",
+    ) -> None:
         with self.session_factory.begin() as session:
-            self.repository.acquire_training_lock(session)
+            unlocked = self.repository.get_run(session, run_id)
+            if unlocked is None:
+                return
+            self._acquire_run_lock(session, unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, run_id)
             if run is None or run.deployment_status != "not_deployed":
                 return
             run.deployment_status = "activation_failed"
-            run.activation_reason = "artifact_unverified"
+            run.activation_reason = reason
             self.ledger_repository.append_many(
                 session,
                 run.calibration_run_id,
@@ -699,7 +1196,10 @@ class OutcomeService:
             )
 
     @staticmethod
-    def _candidate_from_run(run: CalibrationRunModel) -> CalibrationCandidate:
+    def _candidate_from_run(
+        run: CalibrationRunModel,
+        memberships: tuple[CalibrationRunObservationModel, ...] = (),
+    ) -> CalibrationCandidate:
         if (
             run.artifact_locator is None
             or run.artifact_sha256 is None
@@ -712,23 +1212,52 @@ class OutcomeService:
             raise ValueError("calibration artifact cannot be recovered")
         artifact_bytes = path.read_bytes()
         artifact = json.loads(artifact_bytes)
-        coefficients = artifact["coefficients"]
+        calibration = load_verified_calibration(
+            path,
+            expected_sha256=run.artifact_sha256,
+            run_id=str(run.calibration_run_id),
+            deployment_scope=run.deployment_scope,
+            expected_dataset_sha256=run.dataset_sha256,
+        )
+        schema = artifact.get("artifact_schema")
+        dataset = artifact.get("dataset")
+        validation = artifact.get("validation")
+        if not isinstance(dataset, dict):
+            raise ValueError("calibration artifact dataset is invalid")
+        if schema in {"daibm.platt-calibration.v3", "daibm.platt-calibration.v4"}:
+            if not isinstance(validation, dict):
+                raise ValueError("calibration artifact validation is invalid")
+            distinct_score_count = int(dataset["distinct_score_count"])
+            fold_assignment_sha256 = str(validation.get("fold_assignment_sha256", ""))
+        else:
+            distinct_score_count = 0
+            fold_assignment_sha256 = ""
         return CalibrationCandidate(
             dataset_sha256=run.dataset_sha256,
             sample_count=run.sample_count,
             positive_count=run.positive_count,
             negative_count=run.negative_count,
             status=run.status,
-            slope=float(coefficients["slope"]),
-            intercept=float(coefficients["intercept"]),
-            metrics_before={
-                key: float(value) for key, value in run.metrics_before.items()
-            },
-            metrics_after={
-                key: float(value) for key, value in run.metrics_after.items()
-            },
+            slope=calibration.slope,
+            intercept=calibration.intercept,
+            metrics_before={key: float(value) for key, value in run.metrics_before.items()},
+            metrics_after={key: float(value) for key, value in run.metrics_after.items()},
             artifact=artifact,
             artifact_bytes=artifact_bytes,
+            distinct_score_count=distinct_score_count,
+            fold_assignment_sha256=fold_assignment_sha256,
+            artifact_sha256=run.artifact_sha256,
+            outcome_ids=tuple(str(item.outcome_id) for item in memberships),
+            correction_heads=tuple(
+                (
+                    str(item.outcome_id),
+                    (str(item.correction_head_id) if item.correction_head_id is not None else None),
+                )
+                for item in memberships
+            ),
+            configuration=tuple(sorted(run.configuration.items())),
+            artifact_schema=run.artifact_schema or "",
+            deployment_scope=run.deployment_scope,
         )
 
     @staticmethod
@@ -742,12 +1271,7 @@ class OutcomeService:
             pass
 
     def _configuration(self) -> dict[str, float | int]:
-        return {
-            "epochs": self.training_config.epochs,
-            "l2_penalty": self.training_config.l2_penalty,
-            "learning_rate": self.training_config.learning_rate,
-            "probability_epsilon": self.training_config.probability_epsilon,
-        }
+        return canonical_training_configuration(self.training_config)
 
     @staticmethod
     def _fallback_summary(
@@ -814,7 +1338,11 @@ class OutcomeService:
         ]
 
     @staticmethod
-    def _serialize_outcome(outcome: ActualOutcomeModel) -> dict[str, Any]:
+    def _serialize_outcome(
+        outcome: ActualOutcomeModel,
+        *,
+        effective_training_eligible: bool = True,
+    ) -> dict[str, Any]:
         return {
             "outcome_id": str(outcome.outcome_id),
             "facility_id": str(outcome.facility_id),
@@ -835,72 +1363,156 @@ class OutcomeService:
             "original_risk_score": outcome.original_risk_score,
             "risk_input_sha256": outcome.risk_input_sha256,
             "recorded_at": canonical_timestamp(outcome.recorded_at),
+            "effective_training_eligible": effective_training_eligible,
         }
 
-    def _serialize_run(self, run: CalibrationRunModel) -> dict[str, Any]:
+    @staticmethod
+    def _serialize_correction(
+        correction: OutcomeCorrectionModel,
+    ) -> dict[str, Any]:
+        return {
+            "correction_id": str(correction.correction_id),
+            "outcome_id": str(correction.outcome_id),
+            "action": correction.action,
+            "reason_code": correction.reason_code,
+            "comment": correction.comment,
+            "evidence_sha256": correction.evidence_sha256,
+            "auditor_user_id": str(correction.auditor_user_id),
+            "idempotency_key": str(correction.idempotency_key),
+            "recorded_at": canonical_timestamp(correction.recorded_at),
+            "effective_training_eligible": correction.action == "REINSTATE",
+        }
+
+    @staticmethod
+    def _serialize_job(job: CalibrationJobModel) -> dict[str, Any]:
+        return {
+            "job_id": str(job.job_id),
+            "deployment_scope": job.deployment_scope,
+            "trigger_type": job.trigger_type,
+            "trigger_outcome_id": (
+                str(job.trigger_outcome_id)
+                if job.trigger_outcome_id is not None else None
+            ),
+            "trigger_correction_id": (
+                str(job.trigger_correction_id)
+                if job.trigger_correction_id is not None else None
+            ),
+            "status": job.status,
+            "attempt_count": job.attempt_count,
+            "failure_code": job.failure_code,
+            "result_run_id": (
+                str(job.result_run_id) if job.result_run_id is not None else None
+            ),
+            "created_at": canonical_timestamp(job.created_at),
+            "started_at": (
+                canonical_timestamp(job.started_at)
+                if job.started_at is not None else None
+            ),
+            "completed_at": (
+                canonical_timestamp(job.completed_at)
+                if job.completed_at is not None else None
+            ),
+        }
+
+    def _serialize_run(
+        self,
+        run: CalibrationRunModel,
+        *,
+        session: Session | None = None,
+    ) -> dict[str, Any]:
+        fold_assignment_sha256: str | None = None
+        temporal_validation: dict[str, Any] | None = None
         if run.artifact_locator is None or run.artifact_sha256 is None:
             integrity = "not_applicable"
         else:
             artifact_path = Path(run.artifact_locator)
             try:
-                integrity = recover_candidate_artifact(
-                    artifact_path, run.artifact_sha256
-                )
+                integrity = recover_candidate_artifact(artifact_path, run.artifact_sha256)
             except OSError:
                 integrity = "unavailable"
-            if integrity != "verified" and run.deployment_status != "active":
-                staged = StagedCalibrationArtifact(
-                    path=artifact_path,
-                    staged_path=(
-                        artifact_path.parent
-                        / f".pending-{run.artifact_sha256}.json"
+            if integrity == "verified" and run.artifact_schema in {
+                "daibm.platt-calibration.v3",
+                "daibm.platt-calibration.v4",
+            }:
+                try:
+                    artifact = json.loads(artifact_path.read_bytes())
+                    validation = artifact.get("validation")
+                    if isinstance(validation, dict):
+                        if run.artifact_schema == "daibm.platt-calibration.v4":
+                            temporal_validation = validation
+                        value = validation.get("fold_assignment_sha256")
+                        if isinstance(value, str):
+                            fold_assignment_sha256 = value
+                except (OSError, TypeError, json.JSONDecodeError):
+                    fold_assignment_sha256 = None
+        evidence: dict[str, Any] = {}
+        if session is not None:
+            event = session.scalar(
+                select(LedgerEventModel)
+                .where(
+                    LedgerEventModel.entity_id == run.calibration_run_id,
+                    LedgerEventModel.event_type.in_(
+                        (
+                            "CALIBRATION_CANDIDATE_TRAINED",
+                            "CALIBRATION_CANDIDATE_FAILED",
+                        )
                     ),
-                    sha256=run.artifact_sha256,
                 )
-                completed_at = self._mark_publication_failed(
-                    run.trigger_outcome_id,
-                    run.calibration_run_id,
-                )
-                self._discard_failed_publication(staged)
-                run.status = "failed"
-                run.artifact_locator = None
-                run.artifact_sha256 = None
-                run.metrics_after = None
-                run.failure_code = "artifact_write_failed"
-                run.completed_at = completed_at
-                integrity = "not_applicable"
+                .order_by(LedgerEventModel.id.desc())
+                .limit(1)
+            )
+            if event is not None and isinstance(event.payload, dict):
+                evidence = event.payload
+        eligible_count = evidence.get("eligible_count", run.sample_count)
+        excluded_count = evidence.get("excluded_count", 0)
+        if temporal_validation is None and isinstance(evidence.get("temporal_validation"), dict):
+            temporal_validation = evidence["temporal_validation"]
+        if fold_assignment_sha256 is None:
+            value = evidence.get("fold_assignment_sha256")
+            if isinstance(value, str):
+                fold_assignment_sha256 = value
         return {
             "calibration_run_id": str(run.calibration_run_id),
-            "trigger_outcome_id": str(run.trigger_outcome_id),
+            "trigger_outcome_id": (
+                str(run.trigger_outcome_id) if run.trigger_outcome_id is not None else None
+            ),
             "dataset_sha256": run.dataset_sha256,
             "sample_count": run.sample_count,
             "positive_count": run.positive_count,
             "negative_count": run.negative_count,
             "metrics_before": run.metrics_before,
             "metrics_after": run.metrics_after,
+            "oof_metrics_before": run.metrics_before
+            if run.artifact_schema == "daibm.platt-calibration.v3"
+            else None,
+            "oof_metrics_after": run.metrics_after
+            if run.artifact_schema == "daibm.platt-calibration.v3"
+            else None,
+            "temporal_validation": temporal_validation,
+            "validation_policy": temporal_validation.get("policy")
+            if temporal_validation
+            else evidence.get("validation_policy"),
             "configuration": run.configuration,
             "status": run.status,
             "artifact_sha256": run.artifact_sha256,
+            "artifact_schema": run.artifact_schema,
             "artifact_integrity": integrity,
+            "fold_assignment_sha256": fold_assignment_sha256,
+            "eligible_count": int(eligible_count),
+            "excluded_count": int(excluded_count),
             "failure_code": run.failure_code,
             "deployment_status": run.deployment_status,
             "deployment_scope": run.deployment_scope,
             "activation_mode": run.activation_mode,
             "activation_reason": run.activation_reason,
             "activated_at": (
-                canonical_timestamp(run.activated_at)
-                if run.activated_at is not None
-                else None
+                canonical_timestamp(run.activated_at) if run.activated_at is not None else None
             ),
             "deactivated_at": (
-                canonical_timestamp(run.deactivated_at)
-                if run.deactivated_at is not None
-                else None
+                canonical_timestamp(run.deactivated_at) if run.deactivated_at is not None else None
             ),
             "previous_active_run_id": (
-                str(run.previous_active_run_id)
-                if run.previous_active_run_id is not None
-                else None
+                str(run.previous_active_run_id) if run.previous_active_run_id is not None else None
             ),
             "started_at": canonical_timestamp(run.started_at),
             "completed_at": canonical_timestamp(run.completed_at),
@@ -935,15 +1547,62 @@ class OutcomeService:
         semantic = {
             "facility_id": str(facility_id),
             "outcome": {
-                "defaulted": payload.defaulted,
-                "days_past_due": payload.days_past_due,
-                "loss_amount": f"{payload.loss_amount.quantize(Decimal('0.01')):.2f}",
                 "observed_at": canonical_timestamp(payload.observed_at),
                 "evidence_sha256": payload.evidence_sha256,
                 "provenance": payload.provenance,
             },
         }
         return hashlib.sha256(canonical_json(semantic).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _correction_sha256(
+        outcome_id: uuid.UUID,
+        payload: OutcomeCorrectionCreate,
+    ) -> str:
+        semantic = {
+            "outcome_id": str(outcome_id),
+            "correction": {
+                "action": payload.action,
+                "reason_code": payload.reason_code,
+                "comment": payload.comment,
+                "evidence_sha256": payload.evidence_sha256,
+            },
+        }
+        return hashlib.sha256(canonical_json(semantic).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _provenance(scope: str) -> str:
+        mapping = {
+            "controlled_demo": "CONTROLLED_DEMO",
+            "external_verified": "EXTERNAL_VERIFIED",
+        }
+        try:
+            return mapping[scope]
+        except KeyError as error:
+            raise OutcomeConflict("Assessment scope is not deployable") from error
+
+    @staticmethod
+    def _scope_for_provenance(provenance: str) -> str:
+        mapping = {
+            "CONTROLLED_DEMO": "controlled_demo",
+            "EXTERNAL_VERIFIED": "external_verified",
+        }
+        try:
+            return mapping[provenance]
+        except KeyError as error:
+            raise OutcomeConflict("Outcome provenance is not deployable") from error
+
+    def _acquire_run_lock(self, session: Session, scope: str) -> None:
+        if scope in {"controlled_demo", "external_verified"}:
+            self.repository.acquire_scope_lock(session, scope=scope)
+        else:
+            # Frozen-schema legacy/mixed candidates cannot collide with a governed
+            # deployable scope; retain the Task 3 dataset lock for their recovery.
+            self.repository.acquire_training_lock(session)
+
+    @staticmethod
+    def _money(value: Decimal) -> str:
+        return f"{Decimal(value).quantize(Decimal('0.01')):.2f}"
 
     def _now(self) -> datetime:
         value = self.clock()
@@ -970,8 +1629,10 @@ class OutcomeService:
 
 
 __all__ = [
+    "DerivedOutcomeFacts",
     "ForbiddenOutcome",
     "OutcomeConflict",
     "OutcomeNotFound",
     "OutcomeService",
+    "derive_outcome_facts",
 ]

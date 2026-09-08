@@ -50,7 +50,7 @@ def test_browser_acceptance_has_a_discoverable_cli() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "approved audited application" in result.stdout
-    assert "facility-lifecycle-acceptance.png" in result.stdout
+    assert "facility-lifecycle-clone-acceptance.png" in result.stdout
 
 
 def test_browser_facility_plan_preserves_workflow_cny_without_fx() -> None:

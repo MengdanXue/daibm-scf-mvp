@@ -87,7 +87,7 @@ docker compose down
 
 可选高级模式只需运行安全启动器 `start-fabric-demo.cmd`。它先启动基础项目 `daibm-scf-mvp`，再启动隔离项目 `daibm-fabric-demo`、部署链码并检查内部 Gateway；Gateway 不暴露宿主机端口。普通 `start-demo.cmd` 仍可独立运行：Fabric 不可用时，业务事务照常写入 PostgreSQL，哈希以 `pending`/待重试状态保留在 outbox。审计员页面只显示真实 API 结果，且只有 `permanent_failed` 可手动重新入队。默认保留 PostgreSQL 与 Fabric 状态；若明确要只清理 Fabric 容器和本地状态，运行 `start-fabric-demo.cmd /clean` 并准确输入 `RESET FABRIC`，不会删除 PostgreSQL 卷。
 
-Основной сценарий начинается с **«Создать заявку на финансирование»** / 主流程从 **“创建供应链融资申请”** 开始，并按“申请—评估—决策—控制—审计”完成审批、风控与审计闭环。Кнопка **«Загрузить 3 готовых кейса»** / **“载入 3 组预置案例”** 保留用于快速对比三类决策。
+Основной сценарий начинается с **«Создать заявку на финансирование»** / 主流程从 **“创建供应链融资申请”** 开始，并按“申请—评估—决策—控制—审计”完成审批、风控与审计闭环。Кнопка **«Обновить текущие кейсы»** / **“刷新当前演示案例”** лишь обновляет доступные данные и не изменяет историю。
 
 Вкладка «Финансирование» реализует точный по копейкам версионный маршрут выдачи, двух погашений и закрытия. This is a **controlled financing lifecycle simulation** and **does not execute a real bank transfer**. / “融资”页面以精确到分、带版本和审计事件的方式模拟放款、两期还款与结清；它不会发起真实银行转账。
 
@@ -145,7 +145,7 @@ Offline research pipeline
 - `GET /api/requests` — реестр заявок / 申请列表；
 - `GET /api/ledger` — журнал событий / 账本事件；
 - `GET /api/ledger/verify` — проверка цепочки / 验证哈希链；
-- `POST /api/demo/reset` — три исходных кейса / 重置三组案例；
+- `POST /api/demo/reset` — retired and returns `410 demo_reset_retired`; governed history is preserved / 已退役并返回 `410 demo_reset_retired`，受治理的历史记录保持不变；
 - `POST /api/demo/tamper` — безопасная подмена синтетического события / 模拟篡改；
 - `POST /api/demo/recover` — восстановление с сохранением доказательств инцидента / 保留异常证据的恢复；
 - `GET /api/research/status` — версии данных, графа, модели и политики / 数据、图、模型与策略版本；
@@ -194,7 +194,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe scripts\facility_browser_acceptance.py
 ```
 
-Итоговый русско-китайский снимок: `output/facility-lifecycle-acceptance.png`. / 最终中文界面截图保存为 `output/facility-lifecycle-acceptance.png`。
+Итоговый русско-китайский снимок: `output/facility-lifecycle-clone-acceptance.png`. / 最终中文界面截图保存为 `output/facility-lifecycle-clone-acceptance.png`。
 
 ## Воспроизводимость Research Core / 科研核心复现
 

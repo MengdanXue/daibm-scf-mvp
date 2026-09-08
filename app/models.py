@@ -50,9 +50,15 @@ LEDGER_EVENT_TYPES = (
     "REPAYMENT_CONFIRMED",
     "REPAYMENT_REJECTED",
     "FACILITY_MARKED_OVERDUE",
+    "FACILITY_RESTRUCTURED",
+    "FACILITY_DEFAULTED",
+    "FACILITY_WRITTEN_OFF",
     "FACILITY_REPAID",
     "FACILITY_CLOSED",
     "ACTUAL_OUTCOME_RECORDED",
+    "OUTCOME_TRAINING_EXCLUDED",
+    "OUTCOME_TRAINING_REINSTATED",
+    "CALIBRATION_DEPLOYMENT_INVALIDATED",
     "CALIBRATION_CANDIDATE_TRAINED",
     "CALIBRATION_CANDIDATE_FAILED",
     "CALIBRATION_AUTO_ACTIVATED",
@@ -104,6 +110,10 @@ class FinancingRequestModel(Base):
             name="ck_financing_requests_status",
         ),
         CheckConstraint(
+            "assessment_scope IN ('controlled_demo', 'external_verified')",
+            name="ck_financing_requests_assessment_scope",
+        ),
+        CheckConstraint(
             "version >= 1",
             name="ck_financing_requests_version",
         ),
@@ -150,6 +160,11 @@ class FinancingRequestModel(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     applicant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    assessment_scope: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="controlled_demo",
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     term_days: Mapped[int] = mapped_column(Integer, nullable=False)
     features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

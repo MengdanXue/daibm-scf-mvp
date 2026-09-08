@@ -5,7 +5,19 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Numeric,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,7 +120,7 @@ class CalibrationRunModel(Base):
         ),
         CheckConstraint(
             "deployment_status IN ('not_deployed', 'active', 'superseded', "
-            "'rejected', 'activation_failed')",
+            "'rejected', 'activation_failed', 'invalidated')",
             name="ck_calibration_runs_deployment_status",
         ),
         CheckConstraint(
@@ -122,7 +134,9 @@ class CalibrationRunModel(Base):
         ),
         CheckConstraint(
             "calibration_run_id IS DISTINCT FROM previous_active_run_id AND ("
-            "(deployment_status = 'active' AND status = 'eligible_candidate' "
+            "(deployment_status = 'active' AND deployment_scope IN "
+            "('controlled_demo', 'external_verified') "
+            "AND status = 'eligible_candidate' "
             "AND activation_mode IS NOT NULL "
             "AND activated_at IS NOT NULL AND deactivated_at IS NULL) OR "
             "(deployment_status = 'superseded' AND status = 'eligible_candidate' "
@@ -130,21 +144,36 @@ class CalibrationRunModel(Base):
             "AND activated_at IS NOT NULL AND deactivated_at IS NOT NULL) OR "
             "(deployment_status IN ('not_deployed', 'rejected', 'activation_failed') "
             "AND activation_mode IS NULL AND activated_at IS NULL "
-            "AND deactivated_at IS NULL AND previous_active_run_id IS NULL))",
+            "AND deactivated_at IS NULL AND previous_active_run_id IS NULL) OR "
+            "(deployment_status = 'invalidated' AND status = 'eligible_candidate' "
+            "AND activation_mode IS NOT NULL AND activated_at IS NOT NULL "
+            "AND deactivated_at IS NOT NULL))",
             name="ck_calibration_runs_deployment_contract",
+        ),
+        ForeignKeyConstraint(
+            ["trigger_job_id"],
+            ["calibration_jobs.job_id"],
+            name="fk_calibration_runs_trigger_job",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        UniqueConstraint(
+            "trigger_job_id",
+            name="uq_calibration_runs_trigger_job_id",
         ),
     )
 
     calibration_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True
     )
-    trigger_outcome_id: Mapped[uuid.UUID] = mapped_column(
+    trigger_outcome_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("actual_outcomes.outcome_id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         unique=True,
     )
-    dataset_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    trigger_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    dataset_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
     positive_count: Mapped[int] = mapped_column(Integer, nullable=False)
     negative_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -158,6 +187,7 @@ class CalibrationRunModel(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     artifact_locator: Mapped[str | None] = mapped_column(Text)
     artifact_sha256: Mapped[str | None] = mapped_column(Text)
+    artifact_schema: Mapped[str | None] = mapped_column(Text)
     failure_code: Mapped[str | None] = mapped_column(Text)
     deployment_status: Mapped[str] = mapped_column(
         Text,
@@ -190,10 +220,17 @@ Index(
     CalibrationRunModel.previous_active_run_id,
 )
 Index(
-    "uq_calibration_runs_single_active",
-    CalibrationRunModel.deployment_status,
+    "uq_calibration_runs_active_scope",
+    CalibrationRunModel.deployment_scope,
     unique=True,
     postgresql_where=text("deployment_status = 'active'"),
+)
+Index("ix_calibration_runs_trigger_outcome_id", CalibrationRunModel.trigger_outcome_id)
+Index("ix_calibration_runs_trigger_job_id", CalibrationRunModel.trigger_job_id)
+Index(
+    "ix_calibration_runs_scope_dataset",
+    CalibrationRunModel.deployment_scope,
+    CalibrationRunModel.dataset_sha256,
 )
 
 

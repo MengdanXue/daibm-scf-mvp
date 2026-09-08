@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -252,16 +253,19 @@ def _curve_figure(
             interpolated = np.interp(grid, x, y)
             curves.append(interpolated)
             style = STYLES[model]
-            display.plot(
-                ax=ax,
-                name=raw_label,
-                curve_kwargs={
-                    "color": style["color"],
-                    "linestyle": style["linestyle"],
-                    "linewidth": 0.7,
-                    "alpha": 0.22,
-                },
-            )
+            curve_style = {
+                "color": style["color"],
+                "linestyle": style["linestyle"],
+                "linewidth": 0.7,
+                "alpha": 0.22,
+            }
+            # scikit-learn 1.9 exposes ``curve_kwargs`` on both displays;
+            # older PrecisionRecallDisplay versions only accept line options
+            # through deprecated ``**kwargs``.
+            if "curve_kwargs" in inspect.signature(display.plot).parameters:
+                display.plot(ax=ax, name=raw_label, curve_kwargs=curve_style)
+            else:
+                display.plot(ax=ax, name=raw_label, **curve_style)
             display.line_.set_label("_individual seed")
             if ax.legend_ is not None:
                 ax.legend_.remove()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from facility_fixtures import confirmed_cash_rows
+
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -36,6 +38,7 @@ def outcome_client(migrated_engine, session_factory, tmp_path):
             required=True,
         ),
         calibration_artifact_dir=tmp_path,
+        calibration_worker_enabled=False,
     )
     with TestClient(application) as client:
         yield client
@@ -139,6 +142,7 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 created_at=NOW,
                 updated_at=NOW,
                 applicant_id="E0001",
+                assessment_scope="controlled_demo",
                 amount=Decimal("1000.00"),
                 term_days=30,
                 features={},
@@ -161,12 +165,15 @@ def _seed_closed_facility(session_factory) -> uuid.UUID:
                 currency="CNY",
                 status="closed",
                 version=7,
+                current_schedule_version=1,
+                closure_reason="repaid",
                 created_by_user_id=financier_id,
                 created_at=NOW,
                 updated_at=NOW,
                 closed_at=NOW,
             )
         )
+        session.add_all(confirmed_cash_rows(facility_id, financier_id, NOW))
     return facility_id
 
 
@@ -181,9 +188,6 @@ def _login(client: TestClient, username: str) -> None:
 def _payload(key: uuid.UUID | None = None) -> dict:
     return {
         "idempotency_key": str(key or uuid.uuid4()),
-        "defaulted": False,
-        "days_past_due": 0,
-        "loss_amount": "0.00",
         "observed_at": "2026-08-24T12:00:00Z",
         "evidence_sha256": "a" * 64,
         "provenance": "CONTROLLED_DEMO",
@@ -192,6 +196,65 @@ def _payload(key: uuid.UUID | None = None) -> dict:
 
 def _command(version: int) -> dict:
     return {"version": version, "idempotency_key": str(uuid.uuid4())}
+
+
+def test_deployment_api_requires_exact_scope_and_exposes_temporal_evidence(
+    outcome_client, session_factory, tmp_path
+):
+    from tests.test_outcome_service import _seed_pending_v4_run
+
+    service, run_id = _seed_pending_v4_run(session_factory, tmp_path)
+    service.reconcile_deployments()
+    _login(outcome_client, "auditor.demo")
+    assert outcome_client.get("/api/v1/calibration-deployments/active").status_code == 422
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active?scope=mixed").status_code == 422
+    )
+    assert (
+        outcome_client.get(
+            "/api/v1/calibration-deployments/active?scope=external_verified"
+        ).status_code
+        == 404
+    )
+    result = outcome_client.get("/api/v1/calibration-deployments/active?scope=controlled_demo")
+    assert result.status_code == 200
+    data = result.json()
+    assert data["calibration_run_id"] == str(run_id)
+    evidence = data["temporal_validation"]
+    assert evidence["training_cutoff"] < evidence["validation_start"]
+    assert len(evidence["training_outcome_ids"]) == 28
+    assert len(evidence["validation_outcome_ids"]) == 12
+    assert data["metrics_after"] == evidence["metrics_after"]
+    assert data["oof_metrics_after"] is None
+    assert (
+        outcome_client.post(
+            "/api/v1/calibration-deployments/rollback",
+            json={
+                "expected_active_run_id": str(run_id),
+                "deployment_scope": "external_verified",
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        outcome_client.post(
+            "/api/v1/calibration-deployments/rollback",
+            json={
+                "expected_active_run_id": str(run_id),
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_browser_cannot_declare_external_verified_application(outcome_client):
+    from tests.test_workflow_service import draft_payload
+
+    _login(outcome_client, "supplier.demo")
+    payload = draft_payload().model_dump()
+    payload["assessment_scope"] = "external_verified"
+    response = outcome_client.post("/api/v1/applications", json=payload)
+    assert response.status_code == 422
 
 
 def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_client):
@@ -321,21 +384,33 @@ def test_real_business_workflow_closes_and_records_baseline_outcome(outcome_clie
         "transparent_logistic_baseline_v0.1"
     )
     assert body["outcome"]["model_version_id"] is None
-    assert body["calibration_run"]["artifact_integrity"] == "verified"
+    assert body["outcome"]["defaulted"] is False
+    assert body["outcome"]["loss_amount"] == "0.00"
+    assert body["calibration_job"]["status"] == "queued"
 
 
 def test_outcome_routes_are_auditor_only(outcome_client, session_factory):
     facility_id = _seed_closed_facility(session_factory)
     assert outcome_client.get("/api/v1/outcomes").status_code == 401
+    assert outcome_client.get("/api/v1/calibration-runs").status_code == 401
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        == 401
+    )
 
     _login(outcome_client, "financier.demo")
     assert outcome_client.get("/api/v1/outcomes").status_code == 403
+    assert outcome_client.get("/api/v1/calibration-runs").status_code == 403
+    assert (
+        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        == 403
+    )
     assert outcome_client.post(
         f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
     ).status_code == 403
 
 
-def test_auditor_submits_and_queries_outcome_and_candidate_run(
+def test_auditor_submits_and_queries_derived_outcome_and_queued_job(
     outcome_client,
     session_factory,
 ):
@@ -351,24 +426,18 @@ def test_auditor_submits_and_queries_outcome_and_candidate_run(
     assert created.status_code == 201
     body = created.json()
     assert body["outcome"]["facility_id"] == str(facility_id)
-    assert body["calibration_run"]["status"] == "exploratory_candidate"
-    assert body["calibration_run"]["deployment_status"] == "rejected"
-    assert body["calibration_run"]["activation_reason"] == "training_not_eligible"
+    assert body["outcome"]["effective_training_eligible"] is True
+    assert body["calibration_job"]["status"] == "queued"
+    assert body["calibration_job"]["deployment_scope"] == "controlled_demo"
     assert "artifact_locator" not in created.text
     outcome_id = body["outcome"]["outcome_id"]
-    run_id = body["calibration_run"]["calibration_run_id"]
     assert outcome_client.get("/api/v1/outcomes").json() == [body["outcome"]]
-    assert outcome_client.get(f"/api/v1/outcomes/{outcome_id}").json() == body[
-        "outcome"
-    ]
-    assert outcome_client.get("/api/v1/calibration-runs").json() == [
-        body["calibration_run"]
-    ]
-    assert outcome_client.get(f"/api/v1/calibration-runs/{run_id}").json() == body[
-        "calibration_run"
-    ]
+    assert outcome_client.get(f"/api/v1/outcomes/{outcome_id}").json() == body["outcome"]
+    assert outcome_client.get("/api/v1/calibration-runs").json() == []
     assert (
-        outcome_client.get("/api/v1/calibration-deployments/active").status_code
+        outcome_client.get(
+            "/api/v1/calibration-deployments/active?scope=controlled_demo"
+        ).status_code
         == 404
     )
 
@@ -397,7 +466,7 @@ def test_outcome_api_maps_validation_conflict_and_not_found_without_path_leaks(
         f"/api/v1/facilities/{facility_id}/actual-outcome", json=created_payload
     ).status_code == 201
     conflict = _payload(uuid.UUID(created_payload["idempotency_key"]))
-    conflict["days_past_due"] = 1
+    conflict["evidence_sha256"] = "b" * 64
     response = outcome_client.post(
         f"/api/v1/facilities/{facility_id}/actual-outcome", json=conflict
     )
@@ -409,3 +478,102 @@ def test_outcome_api_maps_validation_conflict_and_not_found_without_path_leaks(
         outcome_client.get(f"/api/v1/calibration-runs/{uuid.uuid4()}").status_code
         == 404
     )
+
+
+def test_api_rejects_client_facts_and_exposes_preview_and_corrections(
+    outcome_client, session_factory
+):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    preview = outcome_client.get(
+        f"/api/v1/facilities/{facility_id}/actual-outcome-preview"
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["loss_amount"] == "0.00"
+    assert "artifact" not in preview.text
+
+    unsafe = {**_payload(), "defaulted": False}
+    assert outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=unsafe
+    ).status_code == 422
+    created = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
+    )
+    assert created.status_code == 201, created.text
+    outcome_id = created.json()["outcome"]["outcome_id"]
+    correction = {
+        "idempotency_key": str(uuid.uuid4()),
+        "action": "EXCLUDE",
+        "reason_code": "inconsistent_lifecycle",
+        "comment": "  Verified governance discrepancy.  ",
+        "evidence_sha256": "b" * 64,
+    }
+    response = outcome_client.post(
+        f"/api/v1/outcomes/{outcome_id}/corrections", json=correction
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["effective_training_eligible"] is False
+    assert response.json()["calibration_job"]["trigger_type"] == "correction_exclude"
+    history = outcome_client.get(f"/api/v1/outcomes/{outcome_id}/corrections")
+    assert history.status_code == 200
+    assert history.json()[0]["reason_code"] == "INCONSISTENT_LIFECYCLE"
+    assert "artifact_locator" not in response.text
+
+
+def test_correction_routes_are_auditor_only(outcome_client, session_factory):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    outcome_id = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome", json=_payload()
+    ).json()["outcome"]["outcome_id"]
+    _login(outcome_client, "financier.demo")
+    assert outcome_client.get(
+        f"/api/v1/outcomes/{outcome_id}/corrections"
+    ).status_code == 403
+    assert outcome_client.post(
+        f"/api/v1/outcomes/{outcome_id}/corrections",
+        json={
+            "idempotency_key": str(uuid.uuid4()), "action": "EXCLUDE",
+            "reason_code": "INCONSISTENT_LIFECYCLE", "comment": "Verified",
+            "evidence_sha256": "b" * 64,
+        },
+    ).status_code == 403
+
+
+def test_calibration_job_endpoint_is_auditor_only_and_omits_worker_secrets(
+    outcome_client,
+    session_factory,
+):
+    facility_id = _seed_closed_facility(session_factory)
+    _login(outcome_client, "auditor.demo")
+    created = outcome_client.post(
+        f"/api/v1/facilities/{facility_id}/actual-outcome",
+        json=_payload(),
+    )
+    assert created.status_code == 201, created.text
+    expected = created.json()["calibration_job"]
+    job_id = expected["job_id"]
+
+    response = outcome_client.get(f"/api/v1/calibration-jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+    serialized = response.text.lower()
+    for forbidden in (
+        "lease_owner",
+        "leased_until",
+        "artifact_locator",
+        "staged",
+        "filesystem",
+        "exception",
+    ):
+        assert forbidden not in serialized
+
+    outcome_client.cookies.clear()
+    assert outcome_client.get(f"/api/v1/calibration-jobs/{job_id}").status_code == 401
+    _login(outcome_client, "financier.demo")
+    assert outcome_client.get(f"/api/v1/calibration-jobs/{job_id}").status_code == 403
+    _login(outcome_client, "auditor.demo")
+    missing = outcome_client.get(f"/api/v1/calibration-jobs/{uuid.uuid4()}")
+    assert missing.status_code == 404
+    assert "artifact" not in missing.text.lower()

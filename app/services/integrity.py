@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from app.models import FinancingRequestModel, LedgerEventModel
 from app.models_research import IntegrityIncidentModel
 from app.repositories.ledger import LedgerRepository
 from app.repositories.research import ResearchRepository
-from app.risk import assess
+from app.risk import assess, band_for_score
 from app.schemas import FinancingRequestCreate
 
 
@@ -219,28 +220,96 @@ class IntegrityService:
         event: LedgerEventModel,
     ) -> dict[str, Any]:
         if event.event_type != "RISK_ASSESSMENT":
-            raise RecoverySourceMismatch(
-                "Trusted source supports only the demo risk event"
-            )
+            raise RecoverySourceMismatch("Trusted source supports only the demo risk event")
+        base_fields = {"score", "band", "top_contributions", "model"}
+        lineage_fields = {
+            "assessment_scope",
+            "raw_score",
+            "calibration_run_id",
+            "calibration_fallback_code",
+            "attempted_calibration_run_id",
+        }
+        fields = set(event.payload)
+        historical = fields == base_fields | {"demo_tampered"}
+        if (
+            not historical
+            and fields != base_fields | lineage_fields | {"demo_tampered"}
+            or event.payload.get("demo_tampered") is not True
+            or event.payload.get("score") != 0.9999
+        ):
+            raise RecoverySourceMismatch("Payload is not the registered synthetic tamper shape")
         request = session.get(FinancingRequestModel, event.entity_id)
         if request is None:
-            raise RecoverySourceMismatch(
-                "Trusted financing request is missing"
-            )
-        result = assess(FinancingRequestCreate.model_validate(request.features))
+            raise RecoverySourceMismatch("Trusted financing request is missing")
+        try:
+            result = assess(FinancingRequestCreate.model_validate(request.features))
+        except (TypeError, ValueError) as error:
+            raise RecoverySourceMismatch("Trusted financing features are invalid") from error
+        expected_raw_score = request.risk_score if historical else request.raw_risk_score
         if (
-            result.score != request.risk_score
+            result.score != expected_raw_score
             or result.contributions != request.explanations
+            or request.risk_score is None
+            or not math.isfinite(request.risk_score)
+            or not 0 <= request.risk_score <= 1
         ):
             raise RecoverySourceMismatch(
                 "Trusted financing projection does not reproduce stored state"
             )
-        return {
-            "score": result.score,
-            "band": result.band,
+        payload: dict[str, Any] = {
+            "score": request.risk_score,
+            "band": band_for_score(request.risk_score),
             "top_contributions": result.contributions[:3],
             "model": "transparent_logistic_baseline_v0.1",
         }
+        if not historical:
+            # Use assessment-time projection state, never today's active calibration.
+            # Attempted-run identity exists only in the sealed event. It remains an
+            # untrusted candidate until recover() verifies the original expected hash.
+            attempted = event.payload["attempted_calibration_run_id"]
+            fallback = request.calibration_fallback_code
+            if attempted is not None:
+                try:
+                    if not isinstance(attempted, str) or str(uuid.UUID(attempted)) != attempted:
+                        raise ValueError("noncanonical attempted run")
+                except ValueError as error:
+                    raise RecoverySourceMismatch(
+                        "Attempted calibration lineage is invalid"
+                    ) from error
+            if (
+                request.assessment_scope not in {"controlled_demo", "external_verified"}
+                or (
+                    request.calibration_run_id is not None
+                    and (fallback is not None or attempted is not None)
+                )
+                or (request.calibration_run_id is None and request.risk_score != result.score)
+                or (fallback is None and attempted is not None)
+                or (
+                    fallback is not None
+                    and (
+                        fallback not in {"active_artifact_invalid", "calibration_scope_mismatch"}
+                        or attempted is None
+                    )
+                )
+            ):
+                raise RecoverySourceMismatch("Financing calibration projection is inconsistent")
+            payload.update(
+                {
+                    "assessment_scope": request.assessment_scope,
+                    "raw_score": result.score,
+                    "calibration_run_id": str(request.calibration_run_id)
+                    if request.calibration_run_id
+                    else None,
+                    "calibration_fallback_code": fallback,
+                    "attempted_calibration_run_id": attempted,
+                }
+            )
+        # The registered operation changes score and adds exactly one marker.
+        # Any other altered field must fail, even if projection could rebuild it.
+        registered_corruption = dict(payload, score=0.9999, demo_tampered=True)
+        if canonical_json(registered_corruption) != canonical_json(event.payload):
+            raise RecoverySourceMismatch("Unregistered changes to risk payload or lineage")
+        return payload
 
     @staticmethod
     def _to_domain(model: IntegrityIncidentModel) -> IntegrityIncident:

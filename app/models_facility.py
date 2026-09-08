@@ -42,8 +42,18 @@ class FinancingFacilityModel(Base):
         ),
         CheckConstraint(
             "status IN ('ready_for_disbursement', 'disbursed', 'active', "
-            "'overdue', 'repaid', 'closed')",
+            "'overdue', 'restructured', 'defaulted', 'repaid', "
+            "'written_off', 'closed')",
             name="ck_financing_facilities_status",
+        ),
+        CheckConstraint(
+            "current_schedule_version >= 1",
+            name="ck_financing_facilities_schedule_version",
+        ),
+        CheckConstraint(
+            "closure_reason IS NULL OR closure_reason IN "
+            "('repaid', 'settled_after_default', 'written_off')",
+            name="ck_financing_facilities_closure_reason",
         ),
         CheckConstraint(
             "version >= 1",
@@ -77,6 +87,12 @@ class FinancingFacilityModel(Base):
     currency: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_schedule_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+    closure_reason: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="RESTRICT"),
@@ -125,13 +141,19 @@ class InstallmentModel(Base):
             name="ck_facility_installments_paid_range",
         ),
         CheckConstraint(
-            "status IN ('scheduled', 'partially_paid', 'paid', 'overdue')",
+            "status IN ('scheduled', 'partially_paid', 'paid', 'overdue', "
+            "'superseded')",
             name="ck_facility_installments_status",
+        ),
+        CheckConstraint(
+            "schedule_version >= 1",
+            name="ck_facility_installments_schedule_version",
         ),
         UniqueConstraint(
             "facility_id",
+            "schedule_version",
             "sequence",
-            name="uq_facility_installments_facility_sequence",
+            name="uq_facility_installments_facility_schedule_sequence",
         ),
         UniqueConstraint(
             "facility_id",
@@ -150,6 +172,11 @@ class InstallmentModel(Base):
         nullable=False,
     )
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    schedule_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
@@ -256,7 +283,8 @@ class FacilityActionModel(Base):
         CheckConstraint(
             "action_type IN ('create', 'initiate_disbursement', "
             "'confirm_disbursement', 'submit_payment', 'confirm_payment', "
-            "'reject_payment', 'confirm_final_payment', 'mark_overdue', 'close')",
+            "'reject_payment', 'confirm_final_payment', 'mark_overdue', "
+            "'restructure', 'declare_default', 'write_off', 'close')",
             name="ck_facility_actions_action_type",
         ),
         CheckConstraint(

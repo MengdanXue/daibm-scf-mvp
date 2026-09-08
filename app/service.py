@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -11,14 +12,14 @@ from app.ledger import canonical_timestamp
 from app.models import FinancingRequestModel
 from app.repositories import FinancingRequestRepository, LedgerRepository
 from app.repositories.ledger import LedgerEventSpec
-from app.risk import BAND_DECISIONS, DECISION_CONTROLS, RiskResult, assess
+from app.risk import BAND_DECISIONS, DECISION_CONTROLS, RiskResult, assess, band_for_score
 from app.schemas import FinancingRequestCreate
+from app.services.adaptive_risk import AdaptiveRiskInferenceService
 
 __all__ = ["FinancingService"]
 
 DECISIONS = {
-    band: (decision, DECISION_CONTROLS[decision])
-    for band, decision in BAND_DECISIONS.items()
+    band: (decision, DECISION_CONTROLS[decision]) for band, decision in BAND_DECISIONS.items()
 }
 
 CENT = Decimal("0.01")
@@ -65,9 +66,7 @@ class FinancingService:
         ledger_repository: LedgerRepository | None = None,
     ) -> None:
         self.session_factory = session_factory
-        self.financing_repository = (
-            financing_repository or FinancingRequestRepository()
-        )
+        self.financing_repository = financing_repository or FinancingRequestRepository()
         self.ledger_repository = ledger_repository or LedgerRepository()
 
     def create_request(
@@ -106,8 +105,8 @@ class FinancingService:
 
     def dashboard(self) -> dict[str, Any]:
         with self.session_factory() as session:
-            total, average, decision_counts = (
-                self.financing_repository.dashboard_aggregates(session)
+            total, average, decision_counts = self.financing_repository.dashboard_aggregates(
+                session
             )
             verification = self.ledger_repository.verify(session)
         return {
@@ -128,19 +127,12 @@ class FinancingService:
 
         with self.session_factory.begin() as session:
             models = [
-                self._create_request_in_session(session, scenario)
-                for scenario in DEMO_SCENARIOS
+                self._create_request_in_session(session, scenario) for scenario in DEMO_SCENARIOS
             ]
         return [self._request_to_dict(model) for model in models]
 
     def reset_demo(self) -> list[dict[str, Any]]:
-        with self.session_factory.begin() as session:
-            self.ledger_repository.clear_demo_data(session)
-            models = [
-                self._create_request_in_session(session, scenario)
-                for scenario in DEMO_SCENARIOS
-            ]
-        return [self._request_to_dict(model) for model in models]
+        raise RuntimeError("Destructive demo reset is retired; governed history is preserved")
 
     def tamper_demo_ledger(self) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -162,10 +154,14 @@ class FinancingService:
         request: FinancingRequestCreate,
     ) -> FinancingRequestModel:
         canonical_amount = Decimal(str(request.amount)).quantize(CENT)
-        normalized_request = request.model_copy(
-            update={"amount": float(canonical_amount)}
-        )
+        normalized_request = request.model_copy(update={"amount": float(canonical_amount)})
         result = assess(normalized_request)
+        # This legacy public/demo workflow has no external-verification authority.
+        assessment_scope = "controlled_demo"
+        adaptive = AdaptiveRiskInferenceService().assess(session, result.score, assessment_scope)
+        result = replace(
+            result, score=adaptive.final_score, band=band_for_score(adaptive.final_score)
+        )
         decision, control_action = DECISIONS[result.band]
         created_at = datetime.now(timezone.utc)
         model = FinancingRequestModel(
@@ -177,6 +173,12 @@ class FinancingService:
             term_days=normalized_request.term_days,
             features=normalized_request.model_dump(),
             risk_score=result.score,
+            raw_risk_score=adaptive.raw_score,
+            assessment_scope=assessment_scope,
+            calibration_run_id=uuid.UUID(adaptive.calibration_run_id)
+            if adaptive.calibration_run_id
+            else None,
+            calibration_fallback_code=adaptive.fallback_code,
             decision=decision,
             explanations=result.contributions,
             control_action=control_action,
@@ -184,15 +186,20 @@ class FinancingService:
             version=1,
         )
         self.financing_repository.add(session, model)
+        events = self._event_specs(normalized_request, result, decision, control_action)
+        events[1][1].update(
+            {
+                "assessment_scope": assessment_scope,
+                "raw_score": adaptive.raw_score,
+                "calibration_run_id": adaptive.calibration_run_id,
+                "calibration_fallback_code": adaptive.fallback_code,
+                "attempted_calibration_run_id": adaptive.attempted_calibration_run_id,
+            }
+        )
         self.ledger_repository.append_many(
             session,
             model.request_id,
-            self._event_specs(
-                normalized_request,
-                result,
-                decision,
-                control_action,
-            ),
+            events,
         )
         return model
 

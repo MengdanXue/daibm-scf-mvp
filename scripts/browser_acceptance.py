@@ -44,7 +44,10 @@ def _select_application(page, application_id: str) -> None:
     ).wait_for()
 
 
-def _exercise_primary(page) -> str:
+def _exercise_primary(page, base_url: str | None = None) -> str:
+    global BASE_URL
+    if base_url is not None:
+        BASE_URL = base_url.rstrip("/")
     page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
     assert page.locator("html").get_attribute("lang") == "ru"
@@ -74,7 +77,9 @@ def _exercise_primary(page) -> str:
         page,
         values["contract_number"],
     )
-    trade_text = page.locator(".workflow-evidence").inner_text()
+    trade_text = "\n".join(
+        page.locator("#workflowDetail .workflow-evidence").all_inner_texts()
+    )
     assert "Проверка дублирования пройдена" in trade_text
     page.locator('[data-workflow-action="submit"]').click()
     page.locator('#workflowDetail [data-status="submitted"]').wait_for()
@@ -99,7 +104,9 @@ def _exercise_primary(page) -> str:
     assert application_id in page.locator("#workflowDetail").inner_text()
     page.locator('[data-workflow-action="assess"]').click()
     page.locator('#workflowDetail [data-status="risk_assessed"]').wait_for()
-    risk_text = page.locator(".workflow-evidence").inner_text()
+    risk_text = "\n".join(
+        page.locator("#workflowDetail .workflow-evidence").all_inner_texts()
+    )
     assert "transparent_logistic_baseline_v0.1" in risk_text
     assert "TGNN" in risk_text
 
@@ -244,10 +251,47 @@ def _exercise_failed_core_directory(browser) -> None:
         context.close()
 
 
-def run_acceptance(record_video=False) -> tuple[Path, Path | None]:
+def _is_active_calibration_url(url: str) -> bool:
+    endpoint = f"{BASE_URL}/api/v1/calibration-deployments/active"
+    return url in {
+        endpoint,
+        f"{endpoint}?scope=controlled_demo",
+        f"{endpoint}?scope=external_verified",
+    }
+
+
+def _is_expected_empty_calibration_error(message, responses) -> bool:
+    kind, text, url = message
+    if (
+        kind != "error"
+        or not _is_active_calibration_url(url)
+        or text != "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ):
+        return False
+    for response in responses:
+        if response.url == url and response.status == 404:
+            try:
+                payload = response.json()
+            except Exception:
+                continue  # Unreadable evidence must not suppress an error.
+            if (
+                isinstance(payload, dict)
+                and isinstance(payload.get("detail"), dict)
+                and payload["detail"].get("code") == "outcome_not_found"
+            ):
+                return True
+    return False
+
+
+def run_acceptance(
+    record_video=False, *, base_url: str | None = None, browser_channel: str | None = None
+) -> tuple[Path, Path | None]:
+    global BASE_URL
+    if base_url is not None:
+        BASE_URL = base_url.rstrip("/")
     video_path: Path | None = None
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, channel=browser_channel)
         try:
             context_options: dict[str, object] = {
                 "viewport": {"width": 1440, "height": 1100}
@@ -258,21 +302,32 @@ def run_acceptance(record_video=False) -> tuple[Path, Path | None]:
             primary_context = browser.new_context(**context_options)
             try:
                 page = primary_context.new_page()
-                browser_messages: list[str] = []
+                browser_messages: list[tuple[str, str, str]] = []
+                optional_responses = []
+                page.on(
+                    "response",
+                    lambda response: optional_responses.append(response)
+                    if _is_active_calibration_url(response.url)
+                    else None,
+                )
                 page.on(
                     "console",
                     lambda message: browser_messages.append(
-                        f"console:{message.type}:{message.text}"
+                        (message.type, message.text, message.location.get("url", ""))
                     )
                     if message.type in {"error", "warning"}
                     else None,
                 )
                 page.on(
                     "pageerror",
-                    lambda error: browser_messages.append(f"pageerror:{error}"),
+                    lambda error: browser_messages.append(("pageerror", str(error), "")),
                 )
                 _exercise_primary(page)
-                assert browser_messages == [], browser_messages
+                unexpected_messages = [
+                    message for message in browser_messages
+                    if not _is_expected_empty_calibration_error(message, optional_responses)
+                ]
+                assert unexpected_messages == [], unexpected_messages
                 video = page.video if record_video else None
             finally:
                 primary_context.close()
@@ -290,6 +345,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the five-role browser acceptance journey."
     )
+    parser.add_argument("--base-url", default=BASE_URL)
+    parser.add_argument("--browser-channel", default=None)
     parser.add_argument(
         "--record-video",
         action="store_true",
@@ -301,7 +358,9 @@ def _parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     arguments = _parse_args()
     screenshot_path, optional_video_path = run_acceptance(
-        record_video=arguments.record_video
+        record_video=arguments.record_video,
+        base_url=arguments.base_url,
+        browser_channel=arguments.browser_channel,
     )
     print(
         "browser_acceptance=passed "

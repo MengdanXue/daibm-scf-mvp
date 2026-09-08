@@ -15,12 +15,20 @@ from app.models_advanced import AnchorOutboxModel
 
 _EVENT_NAMESPACE = uuid.UUID("8d30ef6b-6a61-4f2c-a706-6f815844a6f5")
 _ANCHOR_NAMESPACE = uuid.UUID("d90883d7-5347-4dc7-9c89-ea2299e4b94c")
-_VERSION_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_VERSION_TOKEN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?$"
+)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _safe_version(value: object) -> str | None:
-    return value if isinstance(value, str) and _VERSION_TOKEN.fullmatch(value) else None
+    return (
+        value
+        if isinstance(value, str)
+        and len(value) <= 64
+        and _VERSION_TOKEN.fullmatch(value)
+        else None
+    )
 
 
 def _safe_sha256(value: object) -> str | None:

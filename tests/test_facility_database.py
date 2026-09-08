@@ -53,10 +53,11 @@ def _seed_prerequisites(session_factory):
         session.execute(
             text(
                 "INSERT INTO financing_requests "
-                "(request_id, created_at, updated_at, applicant_id, amount, "
+                "(request_id, created_at, updated_at, applicant_id, assessment_scope, amount, "
                 "term_days, features, risk_score, decision, explanations, "
                 "control_action, status, version) "
-                "VALUES (:id, :created_at, :created_at, 'supplier-test', 1000.00, "
+                "VALUES (:id, :created_at, :created_at, 'supplier-test', "
+                "'controlled_demo', 1000.00, "
                 "30, '{}'::jsonb, 0.1, 'approved', '[]'::jsonb, NULL, 'audited', 1)"
             ),
             {"id": request_id, "created_at": now},
@@ -179,7 +180,7 @@ def test_schema_declares_business_checks_and_idempotency_uniqueness(
     }
     assert ("idempotency_key",) in action_uniques
     assert ("facility_id", "payment_reference") in payment_uniques
-    assert ("facility_id", "sequence") in installment_uniques
+    assert ("facility_id", "schedule_version", "sequence") in installment_uniques
 
 
 def test_database_rejects_invalid_outstanding_and_duplicate_idempotency(
@@ -390,3 +391,134 @@ def test_get_for_update_holds_a_real_postgresql_row_lock(session_factory):
         second.rollback()
         first.close()
         second.close()
+
+
+def test_repository_reads_lifecycle_history_in_deterministic_order(session_factory):
+    from app.models_lifecycle import (
+        FacilityDefaultModel,
+        FacilityDelinquencyModel,
+        FacilityRestructureModel,
+        FacilityWriteOffModel,
+    )
+    from app.repositories.facility import FacilityRepository
+
+    request_id, user_id = _seed_prerequisites(session_factory)
+    facility = _facility(request_id=request_id, user_id=user_id)
+    repository = FacilityRepository()
+    now = datetime.now(timezone.utc)
+    facility.outstanding_amount = Decimal("0.00")
+    facility.status = "written_off"
+    with session_factory.begin() as session:
+        repository.add(session, facility)
+        session.add_all(
+            [
+                FacilityDelinquencyModel(
+                    delinquency_id=uuid.UUID(int=2),
+                    facility_id=facility.facility_id,
+                    marked_by_user_id=user_id,
+                    days_past_due=45,
+                    reason_code="PAST_DUE",
+                    comment="Second",
+                    evidence_sha256="b" * 64,
+                    recorded_at=now + timedelta(seconds=1),
+                ),
+                FacilityDelinquencyModel(
+                    delinquency_id=uuid.UUID(int=1),
+                    facility_id=facility.facility_id,
+                    marked_by_user_id=user_id,
+                    days_past_due=30,
+                    reason_code="PAST_DUE",
+                    comment="First",
+                    evidence_sha256="a" * 64,
+                    recorded_at=now,
+                ),
+                FacilityRestructureModel(
+                    restructure_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    restructured_by_user_id=user_id,
+                    old_schedule_version=1,
+                    new_schedule_version=2,
+                    reason_code="BORROWER_CASH_FLOW",
+                    comment="Revised",
+                    evidence_sha256="c" * 64,
+                    recorded_at=now,
+                ),
+                FacilityDefaultModel(
+                    default_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    declared_by_user_id=user_id,
+                    defaulted_at=now,
+                    days_past_due=45,
+                    reason_code="PAYMENT_DEFAULT",
+                    comment="Default",
+                    evidence_sha256="d" * 64,
+                    recorded_at=now,
+                ),
+                FacilityWriteOffModel(
+                    writeoff_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    amount=Decimal("1000.00"),
+                    auditor_user_id=user_id,
+                    reason_code="UNCOLLECTIBLE_BALANCE",
+                    comment="Write-off",
+                    evidence_sha256="e" * 64,
+                    recorded_at=now,
+                ),
+            ]
+        )
+
+    with session_factory() as session:
+        assert [
+            row.days_past_due
+            for row in repository.list_delinquencies(session, facility.facility_id)
+        ] == [30, 45]
+        assert [
+            row.new_schedule_version
+            for row in repository.list_restructures(session, facility.facility_id)
+        ] == [2]
+        assert (
+            repository.get_default(session, facility.facility_id).reason_code
+            == "PAYMENT_DEFAULT"
+        )
+        assert repository.get_writeoff(
+            session, facility.facility_id
+        ).amount == Decimal("1000.00")
+
+
+def test_read_model_share_lock_prevents_writer_from_tearing_snapshot(
+    session_factory,
+):
+    from app.repositories.facility import FacilityRepository
+
+    request_id, user_id = _seed_prerequisites(session_factory)
+    facility = _facility(request_id=request_id, user_id=user_id)
+    repository = FacilityRepository()
+    with session_factory.begin() as session:
+        repository.add(session, facility)
+
+    reader = session_factory()
+    writer = session_factory()
+    try:
+        locked = repository.get_visible_for_share(
+            reader,
+            facility.facility_id,
+            role="auditor",
+            organization_id=None,
+        )
+        assert locked is not None
+        assert repository.list_installments(reader, facility.facility_id) == []
+
+        writer.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(DBAPIError):
+            writer.execute(
+                text(
+                    "UPDATE financing_facilities SET version = version + 1 "
+                    "WHERE facility_id = :facility_id"
+                ),
+                {"facility_id": facility.facility_id},
+            )
+    finally:
+        reader.rollback()
+        writer.rollback()
+        reader.close()
+        writer.close()

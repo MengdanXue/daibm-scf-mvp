@@ -9,7 +9,7 @@ from typing import Any
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8010"
-DEFAULT_SCREENSHOT = Path("output/facility-lifecycle-acceptance.png")
+DEFAULT_SCREENSHOT = Path("output/facility-lifecycle-clone-acceptance.png")
 PASSWORD = "Demo123!"
 
 
@@ -28,9 +28,10 @@ def _parser() -> argparse.ArgumentParser:
         "--screenshot",
         type=Path,
         default=DEFAULT_SCREENSHOT,
-        help="Final Chinese screenshot (default: facility-lifecycle-acceptance.png)",
+        help="Final Chinese screenshot (default: facility-lifecycle-clone-acceptance.png)",
     )
     parser.add_argument("--timeout-ms", type=int, default=15_000)
+    parser.add_argument("--browser-channel", default=None)
     return parser
 
 
@@ -117,13 +118,23 @@ def _wait_for_status(page: Any, status: str) -> None:
     )
 
 
-def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
+def _expected_no_active_deployment(response: Any) -> bool:
+    return (
+        response.status == 404
+        and "/api/v1/calibration-deployments/active" in response.url
+    )
+
+
+def run(
+    base_url: str, screenshot: Path, timeout_ms: int, *, browser_channel: str | None = None
+) -> Path:
     from playwright.sync_api import sync_playwright
 
     screenshot = screenshot.resolve()
     browser_messages: list[str] = []
+    http_errors: list[str] = []
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, channel=browser_channel)
         contexts = {
             role: browser.new_context(
                 base_url=base_url,
@@ -140,11 +151,25 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
                     f"console:{message.type}:{message.text}"
                 )
                 if message.type in {"error", "warning"}
+                and not (
+                    message.type == "error"
+                    and message.text
+                    == "Failed to load resource: the server responded with a status of 404 (Not Found)"
+                )
                 else None,
             )
             page.on(
                 "pageerror",
                 lambda error: browser_messages.append(f"pageerror:{error}"),
+            )
+            page.on(
+                "response",
+                lambda response: http_errors.append(
+                    f"{response.status} {response.url}"
+                )
+                if response.status >= 400
+                and not _expected_no_active_deployment(response)
+                else None,
             )
 
         try:
@@ -200,12 +225,19 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
             ).click()
             _wait_for_status(financier, "active")
 
+            # Financier owns the overdue action; risk manager can review the
+            # active facility but must not receive the mutation control.
+            _open_facility(financier, facility_id)
+            _wait_for_status(financier, "active")
+            assert financier.locator(
+                '[data-facility-action="mark_overdue"]'
+            ).count() == 1
             risk = pages["risk"]
             _open_facility(risk, facility_id)
             _wait_for_status(risk, "active")
             assert risk.locator(
                 '[data-facility-action="mark_overdue"]'
-            ).count() == 1
+            ).count() == 0
 
             supplier = pages["supplier"]
             payment_ids: list[str] = []
@@ -302,6 +334,7 @@ def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
             screenshot.parent.mkdir(parents=True, exist_ok=True)
             auditor.screenshot(path=str(screenshot), full_page=True)
             assert browser_messages == [], browser_messages
+            assert http_errors == [], http_errors
         finally:
             for context in contexts.values():
                 context.close()
@@ -316,6 +349,7 @@ def main() -> int:
         arguments.base_url.rstrip("/"),
         arguments.screenshot,
         arguments.timeout_ms,
+        browser_channel=arguments.browser_channel,
     )
     print(f"facility_browser_acceptance=passed screenshot={screenshot}")
     return 0

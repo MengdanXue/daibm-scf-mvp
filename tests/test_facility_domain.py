@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -11,14 +11,19 @@ from app.domain.facility import (
     FacilityAction,
     FacilityStatus,
     InvalidFacilityTransition,
+    derive_closure_reason,
     next_facility_status,
 )
 from app.domain.workflow import Role
 from app.schemas_facility import (
     CreateFacilityRequest,
+    DeclareDefaultRequest,
     DecisionPaymentRequest,
+    MarkOverdueRequest,
+    RestructureFacilityRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
+    WriteOffRequest,
 )
 
 
@@ -82,7 +87,7 @@ def test_happy_path_requires_real_roles():
         (
             FacilityStatus.ACTIVE,
             FacilityAction.MARK_OVERDUE,
-            Role.FINANCIER,
+            Role.RISK_MANAGER,
         ),
         (FacilityStatus.ACTIVE, FacilityAction.CLOSE, Role.AUDITOR),
     ),
@@ -108,6 +113,192 @@ def test_payment_actions_preserve_state_until_final_confirmation():
         FacilityAction.CONFIRM_FINAL_PAYMENT,
         Role.FINANCIER,
     ) is FacilityStatus.REPAID
+
+
+def test_restructure_default_recovery_writeoff_and_close_transitions():
+    assert next_facility_status(
+        FacilityStatus.OVERDUE,
+        FacilityAction.RESTRUCTURE,
+        Role.RISK_MANAGER,
+    ) is FacilityStatus.RESTRUCTURED
+    assert next_facility_status(
+        FacilityStatus.RESTRUCTURED,
+        FacilityAction.DECLARE_DEFAULT,
+        Role.RISK_MANAGER,
+    ) is FacilityStatus.DEFAULTED
+    assert next_facility_status(
+        FacilityStatus.DEFAULTED,
+        FacilityAction.CONFIRM_PAYMENT,
+        Role.FINANCIER,
+    ) is FacilityStatus.DEFAULTED
+    assert next_facility_status(
+        FacilityStatus.DEFAULTED,
+        FacilityAction.CONFIRM_FINAL_PAYMENT,
+        Role.FINANCIER,
+    ) is FacilityStatus.REPAID
+    assert next_facility_status(
+        FacilityStatus.DEFAULTED,
+        FacilityAction.WRITE_OFF,
+        Role.AUDITOR,
+    ) is FacilityStatus.WRITTEN_OFF
+    assert next_facility_status(
+        FacilityStatus.WRITTEN_OFF,
+        FacilityAction.CLOSE,
+        Role.AUDITOR,
+    ) is FacilityStatus.CLOSED
+
+
+@pytest.mark.parametrize(
+    ("current", "action", "role", "expected"),
+    (
+        (
+            FacilityStatus.ACTIVE,
+            FacilityAction.MARK_OVERDUE,
+            Role.FINANCIER,
+            FacilityStatus.OVERDUE,
+        ),
+        (
+            FacilityStatus.RESTRUCTURED,
+            FacilityAction.MARK_OVERDUE,
+            Role.FINANCIER,
+            FacilityStatus.OVERDUE,
+        ),
+        (
+            FacilityStatus.RESTRUCTURED,
+            FacilityAction.CONFIRM_PAYMENT,
+            Role.FINANCIER,
+            FacilityStatus.RESTRUCTURED,
+        ),
+        (
+            FacilityStatus.RESTRUCTURED,
+            FacilityAction.REJECT_PAYMENT,
+            Role.FINANCIER,
+            FacilityStatus.RESTRUCTURED,
+        ),
+        (
+            FacilityStatus.DEFAULTED,
+            FacilityAction.SUBMIT_PAYMENT,
+            Role.SUPPLIER,
+            FacilityStatus.DEFAULTED,
+        ),
+    ),
+)
+def test_extended_payment_and_overdue_actions_preserve_governed_state(
+    current,
+    action,
+    role,
+    expected,
+):
+    assert next_facility_status(current, action, role) is expected
+
+
+def test_closure_reason_is_derived_from_immutable_lifecycle_history():
+    assert derive_closure_reason(has_default=False, has_writeoff=False) == "repaid"
+    assert (
+        derive_closure_reason(has_default=True, has_writeoff=False)
+        == "settled_after_default"
+    )
+    assert (
+        derive_closure_reason(has_default=True, has_writeoff=True) == "written_off"
+    )
+
+    with pytest.raises(ValueError, match="default history"):
+        derive_closure_reason(has_default=False, has_writeoff=True)
+
+
+def _evidence_payload(**overrides):
+    payload = {
+        "version": 7,
+        "idempotency_key": str(uuid.uuid4()),
+        "reason_code": "BORROWER_CASH_FLOW",
+        "comment": "Verified revised repayment capacity",
+        "evidence_sha256": "a" * 64,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_restructure_schedule_requires_contiguous_sequences_and_exposes_total():
+    payload = RestructureFacilityRequest.model_validate(
+        _evidence_payload(
+            installments=[
+                {
+                    "sequence": 1,
+                    "due_date": "2027-12-01",
+                    "amount": "400000.00",
+                },
+                {
+                    "sequence": 2,
+                    "due_date": "2028-01-01",
+                    "amount": "500000.00",
+                },
+            ]
+        )
+    )
+    assert payload.schedule_total == Decimal("900000.00")
+
+    with pytest.raises(ValidationError, match="unique and contiguous"):
+        RestructureFacilityRequest.model_validate(
+            _evidence_payload(
+                installments=[
+                    {
+                        "sequence": 1,
+                        "due_date": "2027-12-01",
+                        "amount": "400000.00",
+                    },
+                    {
+                        "sequence": 3,
+                        "due_date": "2028-01-01",
+                        "amount": "500000.00",
+                    },
+                ]
+            )
+        )
+
+
+def test_lifecycle_commands_require_stable_evidence_and_timezone_aware_default():
+    mark_overdue = MarkOverdueRequest.model_validate(
+        {
+            "version": 2,
+            "idempotency_key": uuid.uuid4(),
+            "installment_id": uuid.uuid4(),
+            "days_past_due": 1,
+            "evidence_sha256": "b" * 64,
+        }
+    )
+    assert mark_overdue.days_past_due == 1
+
+    default = DeclareDefaultRequest.model_validate(
+        _evidence_payload(
+            defaulted_at=datetime(2027, 2, 3, 12, 0, tzinfo=timezone.utc),
+            days_past_due=45,
+        )
+    )
+    assert default.defaulted_at.tzinfo is not None
+    assert default.comment == "Verified revised repayment capacity"
+    assert WriteOffRequest.model_validate(_evidence_payload()).reason_code == (
+        "BORROWER_CASH_FLOW"
+    )
+
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        DeclareDefaultRequest.model_validate(
+            _evidence_payload(
+                defaulted_at=datetime(2027, 2, 3, 12, 0),
+                days_past_due=45,
+            )
+        )
+    with pytest.raises(ValidationError):
+        MarkOverdueRequest.model_validate(
+            {
+                "version": 2,
+                "idempotency_key": uuid.uuid4(),
+                "installment_id": uuid.uuid4(),
+                "days_past_due": 0,
+                "evidence_sha256": "not-a-hash",
+            }
+        )
+    with pytest.raises(ValidationError, match="comment must not be blank"):
+        WriteOffRequest.model_validate(_evidence_payload(comment="  "))
 
 
 def test_create_facility_preserves_decimal_money_and_schedule_metadata():

@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from app.config import ZkpProverSettings
 from app.models import FinancingRequestModel, LedgerEventModel
+from app.models_advanced import AnchorOutboxModel
 from app.models_workflow import WorkflowActionModel
 from app.services.invoice_proof import HttpInvoiceLimitProver, ProverUnavailable
 from app.services.workflow import InvoiceProofRequired, WorkflowService
@@ -143,6 +144,14 @@ def test_real_proof_survives_http_workflow_and_audit(
         )
         payload = dict(event.payload)
         assert service.ledger_repository.verify(session)["valid"] is True
+        anchor = session.scalar(select(AnchorOutboxModel).where(
+            AnchorOutboxModel.ledger_event_id == event.id
+        ))
+        assert anchor is not None
+        assert anchor.circuit_version == payload["circuit_version"] == "invoice_limit@1"
+        assert anchor.proof_sha256 == payload["proof_sha256"]
+        assert anchor.event_hash == event.event_hash
+        assert anchor.status == "pending"
     from app.services.invoice_proof import InvoiceLimitProof
     evidence = InvoiceLimitProof(
         payload["circuit_version"], payload["invoice_limit_proof"],
