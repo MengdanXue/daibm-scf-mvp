@@ -74,7 +74,7 @@ def test_conference_split_is_strictly_chronological_and_normalization_is_train_o
 
 def test_validation_threshold_selection_is_explicit_and_deterministic() -> None:
     labels = np.asarray([0, 0, 0, 1, 1, 1], dtype=np.uint8)
-    probabilities = np.asarray([0.05, 0.20, 0.55, 0.45, 0.60, 0.90])
+    probabilities = np.asarray([0.05, 0.20, 0.45, 0.55, 0.60, 0.90])
 
     selected = choose_validation_threshold(
         labels,
