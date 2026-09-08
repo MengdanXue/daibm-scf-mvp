@@ -368,6 +368,7 @@ class WorkflowService:
             adaptive_result = self.adaptive_risk_service.assess(
                 session,
                 risk_result.score,
+                application.assessment_scope,
             )
             application.raw_risk_score = adaptive_result.raw_score
             application.risk_score = adaptive_result.final_score
@@ -400,6 +401,7 @@ class WorkflowService:
                     "model": "transparent_logistic_baseline_v0.1",
                     "calibration_run_id": adaptive_result.calibration_run_id,
                     "deployment_scope": adaptive_result.deployment_scope,
+                    "assessment_scope": application.assessment_scope,
                     "calibration_fallback_code": adaptive_result.fallback_code,
                     "assessment_id": str(application.risk_assessment_id),
                     "input_sha256": application.risk_input_sha256,
@@ -435,6 +437,7 @@ class WorkflowService:
                                 "raw_score": adaptive_result.raw_score,
                                 "final_score": adaptive_result.final_score,
                                 "fallback_code": adaptive_result.fallback_code,
+                                "assessment_scope": application.assessment_scope,
                                 "attempted_calibration_run_id": (
                                     adaptive_result.attempted_calibration_run_id
                                 ),

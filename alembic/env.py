@@ -14,6 +14,8 @@ import app.models_workflow  # noqa: F401  Registers workflow metadata.
 import app.models_facility  # noqa: F401  Registers facility metadata.
 import app.models_advanced  # noqa: F401  Registers advanced evidence metadata.
 import app.models_outcome  # noqa: F401  Registers outcome calibration metadata.
+import app.models_lifecycle  # noqa: F401  Registers governed lifecycle metadata.
+import app.models_governance  # noqa: F401  Registers calibration governance metadata.
 
 
 config = context.config

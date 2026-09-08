@@ -256,7 +256,7 @@ def test_defense_sources_distinguish_wiring_from_cryptographic_verification():
         source = (ROOT / "docs" / source_name).read_text(encoding="utf-8")
         assert "wired into trade confirmation" in source
         assert "not cryptographic validity" in source
-        assert "not held-out outcomes" in source
+        assert "chronological 70/30 holdout" in source
         assert "not wired into the default business flow" not in source
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -9,7 +9,17 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import require_roles
 from app.identity import AuthenticatedUser
-from app.schemas_outcome import ActualOutcomeCreate, CalibrationRollbackRequest
+from app.schemas_outcome import (
+    ActualOutcomeCreate,
+    ActualOutcomePreviewResponse,
+    ActualOutcomeResponse,
+    CalibrationJobResponse,
+    CalibrationRollbackRequest,
+    CorrectionSubmissionResponse,
+    OutcomeCorrectionCreate,
+    OutcomeCorrectionResponse,
+    OutcomeSubmissionResponse,
+)
 from app.services.outcomes import (
     ForbiddenOutcome,
     OutcomeConflict,
@@ -24,41 +34,29 @@ CurrentAuditor = Annotated[
 ]
 
 
-class ActualOutcomeResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    outcome_id: str
-    facility_id: str
-    request_id: str
-    risk_assessment_id: str
-    model_version_id: str | None
-    risk_engine_version: str
-    defaulted: bool
-    days_past_due: int
-    loss_amount: str
-    observed_at: str
-    evidence_sha256: str
-    provenance: str
-    original_risk_score: float
-    risk_input_sha256: str
-    recorded_at: str
-
-
 class CalibrationRunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     calibration_run_id: str
-    trigger_outcome_id: str
+    trigger_outcome_id: str | None
     dataset_sha256: str
     sample_count: int
     positive_count: int
     negative_count: int
     metrics_before: dict[str, float] | None
     metrics_after: dict[str, float] | None
+    oof_metrics_before: dict[str, float] | None
+    oof_metrics_after: dict[str, float] | None
+    temporal_validation: dict[str, Any] | None
+    validation_policy: dict[str, Any] | None
     configuration: dict[str, float | int]
     status: str
     artifact_sha256: str | None
+    artifact_schema: str | None
     artifact_integrity: str
+    fold_assignment_sha256: str | None
+    eligible_count: int
+    excluded_count: int
     failure_code: str | None
     deployment_status: str
     deployment_scope: str
@@ -69,13 +67,6 @@ class CalibrationRunResponse(BaseModel):
     previous_active_run_id: str | None
     started_at: str
     completed_at: str
-
-
-class OutcomeSubmissionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    outcome: ActualOutcomeResponse
-    calibration_run: CalibrationRunResponse
 
 
 def _execute(operation: Callable[[], Any]) -> Any:
@@ -120,9 +111,19 @@ def submit_actual_outcome(
     user: CurrentAuditor,
     request: Request,
 ):
-    return _execute(
-        lambda: request.app.state.outcome_service.submit(facility_id, payload, user)
-    )
+    return _execute(lambda: request.app.state.outcome_service.submit(facility_id, payload, user))
+
+
+@router.get(
+    "/api/v1/facilities/{facility_id}/actual-outcome-preview",
+    response_model=ActualOutcomePreviewResponse,
+)
+def preview_actual_outcome(
+    facility_id: str,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(lambda: request.app.state.outcome_service.preview(facility_id, user))
 
 
 @router.get("/api/v1/outcomes", response_model=list[ActualOutcomeResponse])
@@ -132,9 +133,7 @@ def list_actual_outcomes(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    return request.app.state.outcome_service.list_outcomes(
-        user, limit=limit, offset=offset
-    )
+    return request.app.state.outcome_service.list_outcomes(user, limit=limit, offset=offset)
 
 
 @router.get("/api/v1/outcomes/{outcome_id}", response_model=ActualOutcomeResponse)
@@ -143,8 +142,34 @@ def get_actual_outcome(
     user: CurrentAuditor,
     request: Request,
 ):
+    return _execute(lambda: request.app.state.outcome_service.get_outcome(outcome_id, user))
+
+
+@router.get(
+    "/api/v1/outcomes/{outcome_id}/corrections",
+    response_model=list[OutcomeCorrectionResponse],
+)
+def list_outcome_corrections(
+    outcome_id: str,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(lambda: request.app.state.outcome_service.list_corrections(outcome_id, user))
+
+
+@router.post(
+    "/api/v1/outcomes/{outcome_id}/corrections",
+    response_model=CorrectionSubmissionResponse,
+    status_code=201,
+)
+def create_outcome_correction(
+    outcome_id: str,
+    payload: OutcomeCorrectionCreate,
+    user: CurrentAuditor,
+    request: Request,
+):
     return _execute(
-        lambda: request.app.state.outcome_service.get_outcome(outcome_id, user)
+        lambda: request.app.state.outcome_service.create_correction(outcome_id, payload, user)
     )
 
 
@@ -158,9 +183,7 @@ def list_calibration_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    return request.app.state.outcome_service.list_runs(
-        user, limit=limit, offset=offset
-    )
+    return request.app.state.outcome_service.list_runs(user, limit=limit, offset=offset)
 
 
 @router.get(
@@ -176,15 +199,28 @@ def get_calibration_run(
 
 
 @router.get(
+    "/api/v1/calibration-jobs/{job_id}",
+    response_model=CalibrationJobResponse,
+)
+def get_calibration_job(
+    job_id: str,
+    user: CurrentAuditor,
+    request: Request,
+):
+    return _execute(lambda: request.app.state.outcome_service.get_job(job_id, user))
+
+
+@router.get(
     "/api/v1/calibration-deployments/active",
     response_model=CalibrationRunResponse,
 )
 def get_active_calibration_deployment(
     user: CurrentAuditor,
     request: Request,
+    scope: Literal["controlled_demo", "external_verified"],
 ):
     return _execute(
-        lambda: request.app.state.outcome_service.get_active_deployment(user)
+        lambda: request.app.state.outcome_service.get_active_deployment(user, scope=scope)
     )
 
 
@@ -201,6 +237,7 @@ def rollback_calibration_deployment(
         lambda: request.app.state.outcome_service.rollback(
             payload.expected_active_run_id,
             user,
+            scope=payload.deployment_scope,
         )
     )
 

@@ -1,7 +1,7 @@
 """Record the core-enterprise payable ceiling that the invoice-limit proof binds.
 
-Revision ID: 20260824_0010
-Revises: 20260824_0009
+Revision ID: 20260907_0012
+Revises: 20260824_0011
 Create Date: 2026-09-04
 """
 
@@ -11,13 +11,17 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260824_0010"
-down_revision: str | None = "20260824_0009"
+revision: str = "20260907_0012"
+down_revision: str | None = "20260824_0011"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    from app.migration_compatibility import proof_already_present
+
+    if proof_already_present(op.get_bind()):
+        return
     op.add_column(
         "financing_requests",
         sa.Column("confirmed_payable_amount", sa.Numeric(14, 2), nullable=True),
@@ -39,6 +43,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    # Hold the same lock as DROP COLUMN before checking for historical values.
+    # Otherwise a concurrent confirmation could add a ceiling after the count.
+    bind.execute(sa.text("LOCK TABLE financing_requests IN ACCESS EXCLUSIVE MODE"))
     confirmed = bind.scalar(
         sa.text(
             "SELECT count(*) FROM financing_requests "

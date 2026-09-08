@@ -30,17 +30,20 @@ class AnchorOutboxModel(Base):
         ),
         CheckConstraint(
             "model_version IS NULL OR "
-            "model_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'",
+            "char_length(model_version) BETWEEN 1 AND 64 AND "
+            "model_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._-]*)?$'",
             name="ck_anchor_outbox_model_version",
         ),
         CheckConstraint(
             "policy_version IS NULL OR "
-            "policy_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'",
+            "char_length(policy_version) BETWEEN 1 AND 64 AND "
+            "policy_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._-]*)?$'",
             name="ck_anchor_outbox_policy_version",
         ),
         CheckConstraint(
             "circuit_version IS NULL OR "
-            "circuit_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'",
+            "char_length(circuit_version) BETWEEN 1 AND 64 AND "
+            "circuit_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._-]*)?$'",
             name="ck_anchor_outbox_circuit_version",
         ),
         CheckConstraint(

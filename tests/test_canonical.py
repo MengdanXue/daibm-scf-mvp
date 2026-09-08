@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from dataclasses import asdict
 
 import pytest
@@ -17,10 +18,10 @@ from app.services.outcomes import OutcomeService
 def _observations(count: int = 6) -> tuple[CalibrationObservation, ...]:
     return tuple(
         CalibrationObservation(
-            outcome_id=f"outcome-{index}",
-            facility_id=f"facility-{index}",
-            request_id=f"request-{index}",
-            risk_assessment_id=f"assessment-{index}",
+            outcome_id=str(uuid.UUID(int=index + 1)),
+            facility_id=str(uuid.UUID(int=index + 101)),
+            request_id=str(uuid.UUID(int=index + 201)),
+            risk_assessment_id=str(uuid.UUID(int=index + 301)),
             model_version_id=None,
             risk_engine_version="transparent_logistic_baseline_v0.1",
             risk_input_sha256="0" * 64,

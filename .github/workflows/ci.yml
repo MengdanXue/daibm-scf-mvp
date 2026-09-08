@@ -126,6 +126,13 @@ jobs:
         working-directory: advanced/zkp
         run: npm test
 
+      - name: Verify actual read-only prover image
+        run: |
+          docker build -t daibm-zkp-ci:local advanced/zkp
+          docker run --rm --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            daibm-zkp-ci:local node scripts/container-acceptance.mjs
+
       # The gateway suite includes a container integration test that asserts the
       # entrypoint drops privileges to the unprivileged node user. It therefore
       # needs the pinned runtime image with the package mounted at /work, which
@@ -134,6 +141,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/advanced/gateway:/work" \
+            -v "${{ github.workspace }}/advanced/contracts:/contracts:ro" \
             -w /work \
             node:24-bookworm-slim \
             sh -lc "npm ci --no-audit --no-fund && npm test"

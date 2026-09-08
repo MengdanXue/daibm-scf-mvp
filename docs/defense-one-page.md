@@ -44,7 +44,7 @@ Each account receives an independent server session. API authorization and versi
 - The package does not reproduce the original thesis and does not generalize to real enterprises.
 - The default demo is not a production bank, a production Fabric network, PoA+, or an automatic TGNN retraining system.
 - Advanced evidence is bounded: single-organization Fabric 2.5.16 anchors hashes; optional Circom/Groth16 evidence is wired into trade confirmation. Python checks structure, not cryptographic validity; Fabric stores hashes, not verification results. These are demonstration modules, not production Fabric consensus or a production ZKP service.
-- Outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects. Calibration metrics use the fitting samples, not held-out outcomes.
+- Outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects. Calibration candidates use chronological 70/30 holdout evaluation; the retained corrected dataset does not pass the sample/class-support gate, so no new run is promoted in the closeout evidence.
 - PostgreSQL provides a tamper-evident hash chain, not distributed consensus. The minimal TGNN is smaller than the thesis architecture.
 - Данные синтетические; исходные данные, код и метрики диссертации недоступны.
 - 数据为合成数据；不声称复现论文指标、真实企业效果、显著性或生产级安全性。

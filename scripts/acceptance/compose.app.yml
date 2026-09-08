@@ -1,0 +1,13 @@
+# Overlay on the root docker-compose.yml with project daibm-integration-app.
+# Separate volumes/network and host port keep the existing demo available.
+services:
+  mvp:
+    image: daibm-scf-integration:local
+    ports: !override
+      - "127.0.0.1:${INTEGRATION_PORT:-8019}:8000"
+    environment:
+      ZKP_PROOF_REQUIRED: "true"
+
+networks:
+  app:
+    name: daibm-integration-app-network

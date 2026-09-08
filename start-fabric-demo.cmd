@@ -19,6 +19,9 @@ docker --context desktop-linux compose -f "%~dp0docker-compose.yml" --project-na
 if errorlevel 1 exit /b 1
 
 powershell -NoProfile -Command "$m = ConvertFrom-Json (Get-Content -Raw -Encoding utf8 'launcher-messages.json'); Write-Host ('[DAIBM-SCF] ' + $m.fabric_start_network)"
+rem Generate identities before Compose creates gateway credential bind sources.
+docker --context desktop-linux compose -f "%~dp0advanced\fabric\network\docker-compose.fabric.yml" --project-name daibm-fabric-demo run --rm --no-deps bootstrap
+if errorlevel 1 exit /b 1
 docker --context desktop-linux compose -f "%~dp0advanced\fabric\network\docker-compose.fabric.yml" --project-name daibm-fabric-demo up --build -d
 if errorlevel 1 exit /b 1
 

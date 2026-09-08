@@ -76,7 +76,7 @@
       anchorPending: "Ожидают", anchorRetry: "Повтор", anchorAnchored: "Закреплены", anchorPermanentFailed: "Постоянная ошибка", anchorRefresh: "Обновить", anchorDispatch: "Отправить одну партию", anchorRetryFailed: "Повторить", anchorRecent: "Последние записи", anchorEmpty: "Записей для якорения пока нет.", anchorAttempt: "попыток", anchorError: "ошибка", anchorNoError: "без ошибки", anchorCountsLabel: "Счётчики статусов якорения Fabric",
       outcomeEyebrow: "УПРАВЛЯЕМАЯ ОБРАТНАЯ СВЯЗЬ", outcomeTitle: "Фактический результат и адаптивная калибровка", outcomeSubtitle: "Неизменяемый результат запускает обучение; внедрение разрешается только фиксированными воротами качества и целостности.",
       outcomeDefaulted: "Зафиксирован дефолт", outcomeDaysPastDue: "Просрочка, дней", outcomeLossAmount: "Сумма потерь", outcomeObservedAt: "Наблюдалось", outcomeEvidenceReference: "Ссылка на доказательство (хешируется только в браузере)", outcomeProvenance: "Происхождение", outcomeControlledDemo: "Контролируемая симуляция", outcomeExternalVerified: "Внешне проверено", outcomeSubmit: "Зафиксировать результат", outcomeSubmitting: "Хеширование и запись…",
-      outcomeExploratory: "EXPLORATORY · исследовательский", outcomeEligible: "ELIGIBLE · ворота обучения пройдены", outcomeFailed: "FAILED · обучение не завершено", outcomeRunMissing: "NO RUN · запуск отсутствует", outcomeLineageTitle: "Линия происхождения результата", outcomeMetrics: "Brier / log loss до → после", outcomeArtifactIntegrity: "Целостность артефакта", outcomeSample: "выборка", outcomePositive: "положительных", outcomeNegative: "отрицательных", outcomeRun: "Запуск калибровки", outcomeTrainingStatus: "Статус обучения", outcomeDeploymentStatus: "Статус внедрения", outcomeActiveVersion: "Текущая активная версия", outcomeNoActiveVersion: "Активной версии пока нет", outcomeDeploymentScope: "Контур данных", outcomeActivationReason: "Решение ворот", outcomeActivatedAt: "Активировано", outcomeRollback: "Вернуть предыдущую версию", outcomeRollbackDone: "Предыдущая версия калибровки восстановлена", outcomeRecorded: "Результат зафиксирован идемпотентно", outcomeRetryIdentity: "При сетевом повторе сохраняются те же данные и idempotency key.", outcomeBoundary: "Адаптируется только слой Platt; TGNN не переобучается. Активная версия действует лишь на новые оценки и сохраняет исходный и итоговый баллы.", outcomeRequired: "Заполните ссылку на доказательство и корректные значения.", outcomeNoMetrics: "метрики недоступны"
+      outcomeExploratory: "EXPLORATORY · исследовательский", outcomeEligible: "ELIGIBLE · ворота обучения пройдены", outcomeFailed: "FAILED · обучение не завершено", outcomeRunMissing: "NO RUN · запуск отсутствует", outcomeLineageTitle: "Линия происхождения результата", outcomeMetrics: "Brier / log loss до → после", outcomeArtifactIntegrity: "Целостность артефакта", outcomeSample: "выборка", outcomePositive: "положительных", outcomeNegative: "отрицательных", outcomeRun: "Запуск калибровки", outcomeTrainingStatus: "Статус обучения", outcomeDeploymentStatus: "Статус внедрения", outcomeActiveVersion: "Текущая активная версия", outcomeNoActiveVersion: "Активной версии пока нет", outcomeDeploymentScope: "Контур данных", outcomeActivationReason: "Решение ворот", outcomeActivatedAt: "Активировано", outcomeRollback: "Вернуть предыдущую версию", outcomeRollbackDone: "Предыдущая версия калибровки восстановлена", outcomeRecorded: "Результат зафиксирован идемпотентно", outcomeRetryIdentity: "При сетевом повторе сохраняются те же данные и idempotency key.", outcomeBoundary: "Адаптируется только слой Platt; TGNN не переобучается. Активная версия действует лишь на новые оценки и сохраняет исходный и итоговый баллы.", outcomeRequired: "Заполните ссылку на доказательство и корректные значения.", outcomeNoMetrics: "метрики недоступны", outcomeDerivedFacts: "Производные факты закрытия", outcomeDerivedDefault: "дефолт подтвержден историей просрочки", outcomeDerivedSettled: "погашение подтверждено платежами"
     },
     zh: {
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
@@ -139,7 +139,7 @@
       anchorPending: "待处理", anchorRetry: "待重试", anchorAnchored: "已锚定", anchorPermanentFailed: "永久失败", anchorRefresh: "刷新", anchorDispatch: "派发一批", anchorRetryFailed: "重新入队", anchorRecent: "最近记录", anchorEmpty: "暂时没有待锚定记录。", anchorAttempt: "尝试次数", anchorError: "错误", anchorNoError: "无错误", anchorCountsLabel: "Fabric 锚定状态计数",
       outcomeEyebrow: "受控结果回流", outcomeTitle: "实际结果与自适应校准", outcomeSubtitle: "不可变结果触发训练；只有满足固定样本、质量和工件完整性门槛才允许激活。",
       outcomeDefaulted: "是否违约", outcomeDaysPastDue: "逾期天数", outcomeLossAmount: "损失金额", outcomeObservedAt: "观测时间", outcomeEvidenceReference: "证据引用（仅在浏览器内哈希）", outcomeProvenance: "来源", outcomeControlledDemo: "受控模拟", outcomeExternalVerified: "外部已核验", outcomeSubmit: "记录结果", outcomeSubmitting: "正在哈希并记录……",
-      outcomeExploratory: "EXPLORATORY · 探索性", outcomeEligible: "ELIGIBLE · 训练门槛已满足", outcomeFailed: "FAILED · 训练未完成", outcomeRunMissing: "NO RUN · 缺少校准运行", outcomeLineageTitle: "结果血缘", outcomeMetrics: "Brier / log loss 校准前 → 校准后", outcomeArtifactIntegrity: "候选工件完整性", outcomeSample: "样本", outcomePositive: "正样本", outcomeNegative: "负样本", outcomeRun: "校准运行", outcomeTrainingStatus: "训练状态", outcomeDeploymentStatus: "部署状态", outcomeActiveVersion: "当前激活版本", outcomeNoActiveVersion: "暂无激活版本", outcomeDeploymentScope: "数据范围", outcomeActivationReason: "门控结论", outcomeActivatedAt: "激活时间", outcomeRollback: "回滚到上一版本", outcomeRollbackDone: "已恢复上一校准版本", outcomeRecorded: "结果已按幂等语义记录", outcomeRetryIdentity: "网络重试会保留相同数据和 idempotency key。", outcomeBoundary: "仅自适应训练 Platt 层，不重训 TGNN。激活版本只作用于新评估，并同时保留原始分和最终分。", outcomeRequired: "请填写证据引用和有效数值。", outcomeNoMetrics: "暂无指标"
+      outcomeExploratory: "EXPLORATORY · 探索性", outcomeEligible: "ELIGIBLE · 训练门槛已满足", outcomeFailed: "FAILED · 训练未完成", outcomeRunMissing: "NO RUN · 缺少校准运行", outcomeLineageTitle: "结果血缘", outcomeMetrics: "Brier / log loss 校准前 → 校准后", outcomeArtifactIntegrity: "候选工件完整性", outcomeSample: "样本", outcomePositive: "正样本", outcomeNegative: "负样本", outcomeRun: "校准运行", outcomeTrainingStatus: "训练状态", outcomeDeploymentStatus: "部署状态", outcomeActiveVersion: "当前激活版本", outcomeNoActiveVersion: "暂无激活版本", outcomeDeploymentScope: "数据范围", outcomeActivationReason: "门控结论", outcomeActivatedAt: "激活时间", outcomeRollback: "回滚到上一版本", outcomeRollbackDone: "已恢复上一校准版本", outcomeRecorded: "结果已按幂等语义记录", outcomeRetryIdentity: "网络重试会保留相同数据和 idempotency key。", outcomeBoundary: "仅自适应训练 Platt 层，不重训 TGNN。激活版本只作用于新评估，并同时保留原始分和最终分。", outcomeRequired: "请填写证据引用和有效数值。", outcomeNoMetrics: "暂无指标", outcomeDerivedFacts: "由结清事实推导", outcomeDerivedDefault: "逾期历史确认违约", outcomeDerivedSettled: "付款记录确认已结清"
     }
   };
 
@@ -338,6 +338,7 @@
     state.activeCalibration = null;
     state.outcomeIdempotencyKeys = Object.create(null);
     document.body.classList.remove("authenticated");
+    delete document.body.dataset.workflowRole;
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
     document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
@@ -376,8 +377,11 @@
     }
   }
 
+  window.refreshLegacyForRole = refreshLegacyForRole;
+
   async function enterWorkbench() {
     const role = ROLE_META[state.user.role];
+    document.body.dataset.workflowRole = state.user.role;
     renderCurrentUser();
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
     document.querySelector("#view-facilities").style.setProperty("--role-color", role.color);
@@ -664,10 +668,11 @@
       return;
     }
     try {
+      const activeDeploymentPath = "/api/v1/calibration-deployments/active";
       [state.outcomes, state.calibrationRuns, state.activeCalibration] = await Promise.all([
         wfApi("/api/v1/outcomes?limit=50"),
         wfApi("/api/v1/calibration-runs?limit=50"),
-        wfApi("/api/v1/calibration-deployments/active").catch((error) => {
+        wfApi(`${activeDeploymentPath}?scope=controlled_demo`).catch((error) => {
           if (error.status === 404) return null;
           throw error;
         })
@@ -700,9 +705,7 @@
       return `<section id="actualOutcomePanel" class="actual-outcome-panel" aria-labelledby="actualOutcomeTitle">
         <div class="outcome-heading"><div><span>${escapeHtml(tr("outcomeEyebrow"))}</span><h3 id="actualOutcomeTitle">${escapeHtml(tr("outcomeTitle"))}</h3><p>${escapeHtml(tr("outcomeSubtitle"))}</p></div><b>PLATT · GOVERNED AUTO</b></div>
         <form id="actualOutcomeForm" class="actual-outcome-form" data-facility-id="${escapeHtml(facility.facility_id)}">
-          <label class="outcome-checkbox"><input name="defaulted" type="checkbox"><span>${escapeHtml(tr("outcomeDefaulted"))}</span></label>
-          <label><span>${escapeHtml(tr("outcomeDaysPastDue"))}</span><input name="days_past_due" type="number" min="0" value="0" required></label>
-          <label><span>${escapeHtml(tr("outcomeLossAmount"))}</span><input name="loss_amount" inputmode="decimal" value="0.00" pattern="[0-9]+([.,][0-9]{1,2})?" required></label>
+          <p class="outcome-derived-facts">${escapeHtml(tr("outcomeDerivedFacts"))}: ${escapeHtml(facility.default_history?.length ? tr("outcomeDerivedDefault") : tr("outcomeDerivedSettled"))}; ${escapeHtml(tr("outcomeLossAmount"))}: ${escapeHtml(facility.realized_loss || "0.00")}</p>
           <label><span>${escapeHtml(tr("outcomeObservedAt"))}</span><input name="observed_at" type="datetime-local" step="1" value="${localObservedAt(facility.closed_at)}" required></label>
           <label class="outcome-evidence-reference"><span>${escapeHtml(tr("outcomeEvidenceReference"))}</span><input name="evidence_reference" autocomplete="off" maxlength="500" required></label>
           <label><span>${escapeHtml(tr("outcomeProvenance"))}</span><select name="provenance"><option value="CONTROLLED_DEMO">${escapeHtml(tr("outcomeControlledDemo"))}</option><option value="EXTERNAL_VERIFIED">${escapeHtml(tr("outcomeExternalVerified"))}</option></select></label>
@@ -750,25 +753,28 @@
     if (!facility || state.outcomePending || state.user?.role !== "auditor" || facility.status !== "closed") return;
     const data = new FormData(form);
     const reference = String(data.get("evidence_reference") || "").trim();
-    const lossAmount = normalizeMoneyInput(data.get("loss_amount"));
     const observed = new Date(String(data.get("observed_at")));
     const errorElement = document.querySelector("#outcomeSubmitError");
     try {
       if (!reference || !Number.isFinite(observed.getTime())) throw new Error(tr("outcomeRequired"));
-      moneyToCents(lossAmount, true);
       setOutcomePending(true);
       const payload = {
         idempotency_key: state.outcomeIdempotencyKeys[facility.facility_id] ||= crypto.randomUUID(),
-        defaulted: data.get("defaulted") === "on",
-        days_past_due: Number(data.get("days_past_due")),
-        loss_amount: lossAmount,
         observed_at: observed.toISOString(),
         evidence_sha256: await hashEvidenceReference(reference),
         provenance: String(data.get("provenance"))
       };
       const result = await wfApi(`/api/v1/facilities/${facility.facility_id}/actual-outcome`, { method: "POST", body: JSON.stringify(payload) });
       state.outcomes = [result.outcome, ...state.outcomes.filter((item) => item.outcome_id !== result.outcome.outcome_id)];
-      state.calibrationRuns = [result.calibration_run, ...state.calibrationRuns.filter((item) => item.calibration_run_id !== result.calibration_run.calibration_run_id)];
+      const jobId = result.calibration_job?.job_id;
+      if (jobId) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const job = await wfApi(`/api/v1/calibration-jobs/${jobId}`);
+          if (["completed", "failed"].includes(job.status)) break;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        await refreshOutcomes();
+      }
       notify(tr("outcomeRecorded"));
       renderFacilityDetail();
     } catch (error) {
@@ -783,7 +789,7 @@
       setOutcomePending(true);
       await wfApi("/api/v1/calibration-deployments/rollback", {
         method: "POST",
-        body: JSON.stringify({ expected_active_run_id: expectedActiveRunId })
+        body: JSON.stringify({ expected_active_run_id: expectedActiveRunId, deployment_scope: state.activeCalibration?.deployment_scope || "controlled_demo" })
       });
       await refreshOutcomes();
       notify(tr("outcomeRollbackDone"));

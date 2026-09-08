@@ -18,6 +18,16 @@ from app.main import create_app
 ROOT = Path(__file__).parents[1]
 
 
+def test_fabric_launcher_bootstraps_before_creating_credential_mounts():
+    launcher = (ROOT / "start-fabric-demo.cmd").read_text(encoding="utf-8")
+    bootstrap = launcher.index("run --rm --no-deps bootstrap")
+    network_start = launcher.index(
+        '--project-name daibm-fabric-demo up --build -d'
+    )
+    assert bootstrap < network_start
+    assert "if errorlevel 1 exit /b 1" in launcher[bootstrap:network_start]
+
+
 @pytest.fixture
 def client(migrated_engine, session_factory, login_user):
     database = Database(
@@ -342,7 +352,8 @@ def test_traceability_uses_only_canonical_values_and_matches_implemented_work():
         "SYNTHETIC_DEMO",
         "CONFERENCE_RERUN",
     }
-    rows = [line for line in matrix.splitlines() if line.startswith("|")][2:]
+    canonical_matrix = matrix.split("## Defence execution map", 1)[0]
+    rows = [line for line in canonical_matrix.splitlines() if line.startswith("|")][2:]
     assert rows
     for row in rows:
         cells = [cell.strip() for cell in row.strip("|").split("|")]

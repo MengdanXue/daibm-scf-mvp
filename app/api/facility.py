@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any
-from uuid import UUID
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import current_user
 from app.identity import AuthenticatedUser
 from app.schemas_facility import (
     CreateFacilityRequest,
+    DeclareDefaultRequest,
     DecisionPaymentRequest,
+    MarkOverdueRequest,
+    RestructureFacilityRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
+    WriteOffRequest,
 )
 from app.services.facility import (
     FacilityConflict,
@@ -32,6 +35,7 @@ class FacilityInstallmentResponse(BaseModel):
 
     installment_id: str
     sequence: int
+    schedule_version: int
     due_date: str
     amount: str
     paid_amount: str
@@ -51,6 +55,57 @@ class FacilityPaymentResponse(BaseModel):
     decision_comment: str | None
 
 
+class FacilityDelinquencyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    delinquency_id: str
+    marked_by_user_id: str
+    days_past_due: int
+    reason_code: str
+    comment: str
+    evidence_sha256: str
+    recorded_at: str
+
+
+class FacilityRestructureResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    restructure_id: str
+    restructured_by_user_id: str
+    old_schedule_version: int
+    new_schedule_version: int
+    reason_code: str
+    comment: str
+    evidence_sha256: str
+    recorded_at: str
+
+
+class FacilityDefaultResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_id: str
+    schedule_version: int
+    declared_by_user_id: str
+    defaulted_at: str
+    days_past_due: int
+    reason_code: str
+    comment: str
+    evidence_sha256: str
+    recorded_at: str
+
+
+class FacilityWriteOffResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    writeoff_id: str
+    auditor_user_id: str
+    amount: str
+    reason_code: str
+    comment: str
+    evidence_sha256: str
+    recorded_at: str
+
+
 class FacilityResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -58,9 +113,24 @@ class FacilityResponse(BaseModel):
     request_id: str
     principal: str
     outstanding_amount: str
+    outstanding_balance: str = Field(
+        description="Principal balance still outstanding on the facility."
+    )
+    recovered_amount: str = Field(
+        description="Cumulative confirmed principal cash repayments across all schedules."
+    )
+    written_off_amount: str = Field(
+        description="Principal formally written off on the facility."
+    )
+    realized_loss: str = Field(
+        description="Realized principal loss, equal to the written-off amount."
+    )
+    settlement_classification: Literal["NORMAL_SETTLED", "WRITTEN_OFF"] | None
     currency: str
     status: str
     version: int
+    current_schedule_version: int
+    closure_reason: str | None
     disbursement_reference: str | None
     disbursement_evidence_sha256: str | None
     created_at: str
@@ -72,10 +142,11 @@ class FacilityResponse(BaseModel):
     allowed_actions: list[str]
     installments: list[FacilityInstallmentResponse]
     payments: list[FacilityPaymentResponse]
-
-
-class MarkOverdueRequest(VersionedFacilityCommand):
-    installment_id: UUID
+    delinquencies: list[FacilityDelinquencyResponse]
+    restructures: list[FacilityRestructureResponse]
+    default_event: FacilityDefaultResponse | None
+    default_history: list[FacilityDefaultResponse]
+    writeoff_event: FacilityWriteOffResponse | None
 
 
 def _execute(operation: Callable[[], Any]) -> Any:
@@ -246,14 +317,68 @@ def mark_overdue(
     user: CurrentUser,
     request: Request,
 ):
-    command = VersionedFacilityCommand.model_validate(
-        payload.model_dump(exclude={"installment_id"})
-    )
     return _execute(
         lambda: request.app.state.facility_service.mark_overdue(
             facility_id,
             payload.installment_id,
-            command,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/restructure",
+    response_model=FacilityResponse,
+)
+def restructure_facility(
+    facility_id: str,
+    payload: RestructureFacilityRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.restructure(
+            facility_id,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/declare-default",
+    response_model=FacilityResponse,
+)
+def declare_facility_default(
+    facility_id: str,
+    payload: DeclareDefaultRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.declare_default(
+            facility_id,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/write-off",
+    response_model=FacilityResponse,
+)
+def write_off_facility(
+    facility_id: str,
+    payload: WriteOffRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.write_off(
+            facility_id,
+            payload,
             user,
         )
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -16,6 +17,7 @@ from app.domain.facility import (
     InstallmentStatus,
     InvalidFacilityTransition,
     PaymentStatus,
+    derive_closure_reason,
     next_facility_status,
 )
 from app.domain.workflow import Role
@@ -29,14 +31,24 @@ from app.models_facility import (
     PaymentModel,
 )
 from app.models_identity import UserModel
+from app.models_lifecycle import (
+    FacilityDefaultModel,
+    FacilityDelinquencyModel,
+    FacilityRestructureModel,
+    FacilityWriteOffModel,
+)
 from app.repositories.facility import FacilityRepository
 from app.repositories.ledger import LedgerRepository
 from app.repositories.workflow import WorkflowRepository
 from app.schemas_facility import (
     CreateFacilityRequest,
+    DeclareDefaultRequest,
     DecisionPaymentRequest,
+    MarkOverdueRequest,
+    RestructureFacilityRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
+    WriteOffRequest,
 )
 from pydantic import BaseModel
 
@@ -324,6 +336,13 @@ class FacilityService:
                 facility.facility_id,
                 request.installment_id,
             )
+            if (
+                installment.schedule_version != facility.current_schedule_version
+                or installment.status == InstallmentStatus.SUPERSEDED.value
+            ):
+                raise FacilityConflict(
+                    "Payment must reference the current repayment schedule"
+                )
             remaining = Decimal(installment.amount) - Decimal(installment.paid_amount)
             if installment.status == InstallmentStatus.PAID.value:
                 raise FacilityConflict("The installment is already paid")
@@ -513,7 +532,7 @@ class FacilityService:
         self,
         facility_id: str | uuid.UUID,
         installment_id: str | uuid.UUID,
-        command: VersionedFacilityCommand,
+        command: MarkOverdueRequest,
         user: AuthenticatedUser,
     ) -> dict[str, Any]:
         normalized_id = self._normalize_uuid(facility_id)
@@ -532,7 +551,7 @@ class FacilityService:
             )
             if replay is not None:
                 return replay
-            self._require_role(user, Role.RISK_MANAGER)
+            self._require_role(user, Role.FINANCIER)
             facility = self._load_for_command(session, normalized_id, user)
             replay = self._replay(
                 session, command.idempotency_key, user, semantic
@@ -540,6 +559,8 @@ class FacilityService:
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
+            if normalized_installment_id != command.installment_id:
+                raise FacilityConflict("Overdue installment scope does not match")
             installment = self._load_installment(
                 session,
                 facility.facility_id,
@@ -548,11 +569,30 @@ class FacilityService:
             now = self._now()
             if installment.status == InstallmentStatus.PAID.value:
                 raise FacilityConflict("A paid installment cannot be overdue")
+            if (
+                installment.schedule_version != facility.current_schedule_version
+                or installment.status == InstallmentStatus.SUPERSEDED.value
+            ):
+                raise FacilityConflict(
+                    "Only a current-schedule installment can be overdue"
+                )
             if installment.due_date >= now.date():
                 raise FacilityConflict("The installment is not past due")
             target = self._next(facility, FacilityAction.MARK_OVERDUE, user)
             installment.status = InstallmentStatus.OVERDUE.value
             installment.updated_at = now
+            session.add(
+                FacilityDelinquencyModel(
+                    delinquency_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    marked_by_user_id=user.user_id,
+                    days_past_due=command.days_past_due,
+                    reason_code="PAST_DUE",
+                    comment="Current installment marked overdue",
+                    evidence_sha256=command.evidence_sha256,
+                    recorded_at=now,
+                )
+            )
             self._advance(facility, target, now)
             self._record(
                 session,
@@ -568,6 +608,284 @@ class FacilityService:
                         {
                             "installment_id": str(installment.installment_id),
                             "due_date": installment.due_date.isoformat(),
+                            "days_past_due": command.days_past_due,
+                            "evidence_sha256": command.evidence_sha256,
+                        },
+                    )
+                ],
+            )
+            return self._serialize(session, facility, user)
+
+    def restructure(
+        self,
+        facility_id: str | uuid.UUID,
+        command: RestructureFacilityRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.RESTRUCTURE.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
+        with self.session_factory.begin() as session:
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._require_role(user, Role.RISK_MANAGER)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._check_version(facility, command.version)
+            target = self._next(facility, FacilityAction.RESTRUCTURE, user)
+            outstanding = Decimal(facility.outstanding_amount)
+            if command.schedule_total != outstanding:
+                raise FacilityConflict(
+                    "Replacement schedule must equal the exact outstanding balance"
+                )
+            now = self._now()
+            if any(item.due_date <= now.date() for item in command.installments):
+                raise FacilityConflict(
+                    "Replacement installments must have future due dates"
+                )
+            payments = self.repository.list_payments(session, facility.facility_id)
+            if any(item.status == PaymentStatus.SUBMITTED.value for item in payments):
+                raise FacilityConflict(
+                    "Pending payment decisions must be resolved before restructuring"
+                )
+            current_rows = [
+                item
+                for item in self.repository.list_installments(
+                    session, facility.facility_id
+                )
+                if item.schedule_version == facility.current_schedule_version
+            ]
+            unpaid_rows = [
+                item
+                for item in current_rows
+                if item.status != InstallmentStatus.PAID.value
+            ]
+            unpaid_total = sum(
+                (
+                    Decimal(item.amount) - Decimal(item.paid_amount)
+                    for item in unpaid_rows
+                ),
+                Decimal("0.00"),
+            )
+            if not unpaid_rows or unpaid_total != outstanding:
+                raise FacilityConflict(
+                    "Current schedule does not reconcile to the exact outstanding balance"
+                )
+            old_version = facility.current_schedule_version
+            new_version = old_version + 1
+            for installment in unpaid_rows:
+                installment.status = InstallmentStatus.SUPERSEDED.value
+                installment.updated_at = now
+            session.add_all(
+                [
+                    InstallmentModel(
+                        installment_id=uuid.uuid4(),
+                        facility_id=facility.facility_id,
+                        sequence=item.sequence,
+                        schedule_version=new_version,
+                        due_date=item.due_date,
+                        amount=item.amount,
+                        paid_amount=Decimal("0.00"),
+                        status=InstallmentStatus.SCHEDULED.value,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    for item in command.installments
+                ]
+            )
+            session.add(
+                FacilityRestructureModel(
+                    restructure_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    restructured_by_user_id=user.user_id,
+                    old_schedule_version=old_version,
+                    new_schedule_version=new_version,
+                    reason_code=command.reason_code,
+                    comment=command.comment,
+                    evidence_sha256=command.evidence_sha256,
+                    recorded_at=now,
+                )
+            )
+            facility.current_schedule_version = new_version
+            self._advance(facility, target, now)
+            self._record(
+                session,
+                facility,
+                user,
+                action=FacilityAction.RESTRUCTURE,
+                idempotency_key=command.idempotency_key,
+                expected_version=command.version,
+                semantic=semantic,
+                event_types=[
+                    (
+                        "FACILITY_RESTRUCTURED",
+                        {
+                            "old_schedule_version": old_version,
+                            "new_schedule_version": new_version,
+                            "outstanding_amount": self._money(outstanding),
+                            "reason_code": command.reason_code,
+                            "evidence_sha256": command.evidence_sha256,
+                        },
+                    )
+                ],
+            )
+            return self._serialize(session, facility, user)
+
+    def declare_default(
+        self,
+        facility_id: str | uuid.UUID,
+        command: DeclareDefaultRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.DECLARE_DEFAULT.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
+        with self.session_factory.begin() as session:
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._require_role(user, Role.RISK_MANAGER)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._check_version(facility, command.version)
+            target = self._next(facility, FacilityAction.DECLARE_DEFAULT, user)
+            if any(
+                item.schedule_version == facility.current_schedule_version
+                for item in self.repository.list_defaults_batch(session, [facility.facility_id])
+            ):
+                raise FacilityConflict("Current schedule default has already been declared")
+            delinquencies = self.repository.list_delinquencies(
+                session, facility.facility_id
+            )
+            if not delinquencies:
+                raise FacilityConflict(
+                    "Default requires governed overdue evidence"
+                )
+            now = self._now()
+            session.add(
+                FacilityDefaultModel(
+                    default_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    schedule_version=facility.current_schedule_version,
+                    declared_by_user_id=user.user_id,
+                    defaulted_at=command.defaulted_at,
+                    days_past_due=command.days_past_due,
+                    reason_code=command.reason_code,
+                    comment=command.comment,
+                    evidence_sha256=command.evidence_sha256,
+                    recorded_at=now,
+                )
+            )
+            self._advance(facility, target, now)
+            self._record(
+                session,
+                facility,
+                user,
+                action=FacilityAction.DECLARE_DEFAULT,
+                idempotency_key=command.idempotency_key,
+                expected_version=command.version,
+                semantic=semantic,
+                event_types=[
+                    (
+                        "FACILITY_DEFAULTED",
+                        {
+                            "defaulted_at": canonical_timestamp(
+                                command.defaulted_at
+                            ),
+                            "days_past_due": command.days_past_due,
+                            "reason_code": command.reason_code,
+                            "evidence_sha256": command.evidence_sha256,
+                            "outstanding_amount": self._money(
+                                facility.outstanding_amount
+                            ),
+                        },
+                    )
+                ],
+            )
+            return self._serialize(session, facility, user)
+
+    def write_off(
+        self,
+        facility_id: str | uuid.UUID,
+        command: WriteOffRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.WRITE_OFF.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
+        with self.session_factory.begin() as session:
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._require_role(user, Role.AUDITOR)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._check_version(facility, command.version)
+            target = self._next(facility, FacilityAction.WRITE_OFF, user)
+            payments = self.repository.list_payments(
+                session, facility.facility_id
+            )
+            if any(
+                item.status == PaymentStatus.SUBMITTED.value
+                for item in payments
+            ):
+                raise FacilityConflict(
+                    "Pending payment decisions must be resolved before write-off"
+                )
+            if self.repository.get_default(session, facility.facility_id) is None:
+                raise FacilityConflict("Write-off requires immutable default history")
+            if self.repository.get_writeoff(session, facility.facility_id) is not None:
+                raise FacilityConflict("Facility balance has already been written off")
+            amount = Decimal(facility.outstanding_amount)
+            if amount <= Decimal("0.00"):
+                raise FacilityConflict("Write-off requires a positive remaining balance")
+            now = self._now()
+            session.add(
+                FacilityWriteOffModel(
+                    writeoff_id=uuid.uuid4(),
+                    facility_id=facility.facility_id,
+                    amount=amount,
+                    auditor_user_id=user.user_id,
+                    reason_code=command.reason_code,
+                    comment=command.comment,
+                    evidence_sha256=command.evidence_sha256,
+                    recorded_at=now,
+                )
+            )
+            facility.outstanding_amount = Decimal("0.00")
+            self._advance(facility, target, now)
+            self._record(
+                session,
+                facility,
+                user,
+                action=FacilityAction.WRITE_OFF,
+                idempotency_key=command.idempotency_key,
+                expected_version=command.version,
+                semantic=semantic,
+                event_types=[
+                    (
+                        "FACILITY_WRITTEN_OFF",
+                        {
+                            "amount": self._money(amount),
+                            "reason_code": command.reason_code,
+                            "evidence_sha256": command.evidence_sha256,
+                            "outstanding_amount": "0.00",
                         },
                     )
                 ],
@@ -606,8 +924,24 @@ class FacilityService:
             if not verification["valid"]:
                 raise FacilityConflict("Facility audit ledger verification failed")
             target = self._next(facility, FacilityAction.CLOSE, user)
+            default_event = self.repository.get_default(
+                session, facility.facility_id
+            )
+            writeoff_event = self.repository.get_writeoff(
+                session, facility.facility_id
+            )
+            try:
+                closure_reason = derive_closure_reason(
+                    has_default=default_event is not None,
+                    has_writeoff=writeoff_event is not None,
+                )
+            except ValueError as error:
+                raise FacilityConflict(str(error)) from error
+            if facility.closure_reason is not None:
+                raise FacilityConflict("Facility closure reason is immutable")
             now = self._now()
             facility.closed_at = now
+            facility.closure_reason = closure_reason
             self._advance(facility, target, now)
             self._record(
                 session,
@@ -620,7 +954,10 @@ class FacilityService:
                 event_types=[
                     (
                         "FACILITY_CLOSED",
-                        {"verified_ledger_head": verification["head_hash"]},
+                        {
+                            "verified_ledger_head": verification["head_hash"],
+                            "closure_reason": closure_reason,
+                        },
                     )
                 ],
             )
@@ -633,13 +970,16 @@ class FacilityService:
     ) -> dict[str, Any]:
         normalized_id = self._normalize_uuid(facility_id)
         with self.session_factory() as session:
-            facility = session.get(FinancingFacilityModel, normalized_id)
+            facility = self.repository.get_visible_for_share(
+                session,
+                normalized_id,
+                role=user.role,
+                organization_id=user.organization_id,
+            )
             if facility is None:
                 raise FacilityNotFound(str(facility_id))
-            application, creator = self._scope_models(session, facility)
-            if not self._can_view(application, creator, user):
-                raise FacilityNotFound(str(facility_id))
-            return self._serialize(session, facility, user)
+            related = self._load_related_batch(session, [facility])
+            return self._serialize(session, facility, user, related=related)
 
     def list_for_user(
         self,
@@ -651,21 +991,17 @@ class FacilityService:
         if limit < 1 or limit > 200 or offset < 0:
             raise ValueError("limit must be 1-200 and offset must be non-negative")
         with self.session_factory() as session:
-            facilities = list(
-                session.scalars(
-                    select(FinancingFacilityModel).order_by(
-                        FinancingFacilityModel.updated_at.desc()
-                    )
-                )
+            facilities = self.repository.list_visible_for_share(
+                session,
+                role=user.role,
+                organization_id=user.organization_id,
+                limit=limit,
+                offset=offset,
             )
-            visible = []
-            for facility in facilities:
-                application, creator = self._scope_models(session, facility)
-                if self._can_view(application, creator, user):
-                    visible.append(facility)
+            related = self._load_related_batch(session, facilities)
             return [
-                self._serialize(session, facility, user)
-                for facility in visible[offset : offset + limit]
+                self._serialize(session, facility, user, related=related)
+                for facility in facilities
             ]
 
     def _load_for_command(
@@ -705,7 +1041,7 @@ class FacilityService:
             raise FacilityConflict(
                 "Idempotency key was already used for different command semantics"
             )
-        facility = session.get(FinancingFacilityModel, action.facility_id)
+        facility = self.repository.get_for_update(session, action.facility_id)
         if facility is None:
             raise FacilityNotFound(str(action.facility_id))
         application, creator = self._scope_models(session, facility)
@@ -873,20 +1209,62 @@ class FacilityService:
         session: Session,
         facility: FinancingFacilityModel,
         user: AuthenticatedUser,
+        *,
+        related: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        installments = self.repository.list_installments(
-            session,
-            facility.facility_id,
+        if related is None:
+            installments = self.repository.list_installments(
+                session,
+                facility.facility_id,
+            )
+            payments = self.repository.list_payments(session, facility.facility_id)
+            delinquencies = self.repository.list_delinquencies(
+                session, facility.facility_id
+            )
+            restructures = self.repository.list_restructures(
+                session, facility.facility_id
+            )
+            default_history = self.repository.list_defaults_batch(
+                session, [facility.facility_id]
+            )
+            writeoff_event = self.repository.get_writeoff(
+                session, facility.facility_id
+            )
+        else:
+            facility_id = facility.facility_id
+            installments = related["installments"].get(facility_id, [])
+            payments = related["payments"].get(facility_id, [])
+            delinquencies = related["delinquencies"].get(facility_id, [])
+            restructures = related["restructures"].get(facility_id, [])
+            default_history = related["defaults"].get(facility_id, [])
+            writeoff_event = related["writeoffs"].get(facility_id)
+        default_event = default_history[0] if default_history else None
+        recovered = sum(
+            (Decimal(item.amount) for item in payments if item.status == PaymentStatus.CONFIRMED.value),
+            Decimal("0.00"),
         )
-        payments = self.repository.list_payments(session, facility.facility_id)
+        written_off = Decimal(writeoff_event.amount) if writeoff_event else Decimal("0.00")
+        if Decimal(facility.principal) != Decimal(facility.outstanding_amount) + recovered + written_off:
+            raise FacilityConflict("Facility principal conservation failed")
         return {
             "facility_id": str(facility.facility_id),
             "request_id": str(facility.request_id),
             "principal": self._money(facility.principal),
             "outstanding_amount": self._money(facility.outstanding_amount),
+            "outstanding_balance": self._money(facility.outstanding_amount),
+            "recovered_amount": self._money(recovered),
+            "written_off_amount": self._money(written_off),
+            "realized_loss": self._money(written_off),
+            "settlement_classification": (
+                ("WRITTEN_OFF" if writeoff_event else "NORMAL_SETTLED")
+                if facility.status == FacilityStatus.CLOSED.value else None
+            ),
+            "default_history": [self._serialize_default(item) for item in default_history],
             "currency": facility.currency,
             "status": facility.status,
             "version": facility.version,
+            "current_schedule_version": facility.current_schedule_version,
+            "closure_reason": facility.closure_reason,
             "disbursement_reference": facility.disbursement_reference,
             "disbursement_evidence_sha256": facility.disbursement_evidence_sha256,
             "created_at": canonical_timestamp(facility.created_at),
@@ -902,6 +1280,7 @@ class FacilityService:
                 {
                     "installment_id": str(item.installment_id),
                     "sequence": item.sequence,
+                    "schedule_version": item.schedule_version,
                     "due_date": item.due_date.isoformat(),
                     "amount": self._money(item.amount),
                     "paid_amount": self._money(item.paid_amount),
@@ -922,6 +1301,83 @@ class FacilityService:
                 }
                 for item in payments
             ],
+            "delinquencies": [
+                {
+                    "delinquency_id": str(item.delinquency_id),
+                    "marked_by_user_id": str(item.marked_by_user_id),
+                    "days_past_due": item.days_past_due,
+                    "reason_code": item.reason_code,
+                    "comment": item.comment,
+                    "evidence_sha256": item.evidence_sha256,
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                }
+                for item in delinquencies
+            ],
+            "restructures": [
+                {
+                    "restructure_id": str(item.restructure_id),
+                    "restructured_by_user_id": str(
+                        item.restructured_by_user_id
+                    ),
+                    "old_schedule_version": item.old_schedule_version,
+                    "new_schedule_version": item.new_schedule_version,
+                    "reason_code": item.reason_code,
+                    "comment": item.comment,
+                    "evidence_sha256": item.evidence_sha256,
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                }
+                for item in restructures
+            ],
+            "default_event": (
+                self._serialize_default(default_event)
+                if default_event is not None
+                else None
+            ),
+            "writeoff_event": (
+                {
+                    "writeoff_id": str(writeoff_event.writeoff_id),
+                    "auditor_user_id": str(writeoff_event.auditor_user_id),
+                    "amount": self._money(writeoff_event.amount),
+                    "reason_code": writeoff_event.reason_code,
+                    "comment": writeoff_event.comment,
+                    "evidence_sha256": writeoff_event.evidence_sha256,
+                    "recorded_at": canonical_timestamp(writeoff_event.recorded_at),
+                }
+                if writeoff_event is not None
+                else None
+            ),
+        }
+
+    def _load_related_batch(
+        self,
+        session: Session,
+        facilities: list[FinancingFacilityModel],
+    ) -> dict[str, Any]:
+        facility_ids = [item.facility_id for item in facilities]
+
+        def grouped(rows) -> dict[uuid.UUID, list[Any]]:
+            result: defaultdict[uuid.UUID, list[Any]] = defaultdict(list)
+            for row in rows:
+                result[row.facility_id].append(row)
+            return dict(result)
+
+        defaults = self.repository.list_defaults_batch(session, facility_ids)
+        writeoffs = self.repository.list_writeoffs_batch(session, facility_ids)
+        return {
+            "installments": grouped(
+                self.repository.list_installments_batch(session, facility_ids)
+            ),
+            "payments": grouped(
+                self.repository.list_payments_batch(session, facility_ids)
+            ),
+            "delinquencies": grouped(
+                self.repository.list_delinquencies_batch(session, facility_ids)
+            ),
+            "restructures": grouped(
+                self.repository.list_restructures_batch(session, facility_ids)
+            ),
+            "defaults": grouped(defaults),
+            "writeoffs": {row.facility_id: row for row in writeoffs},
         }
 
     @staticmethod
@@ -936,7 +1392,20 @@ class FacilityService:
                 return [FacilityAction.INITIATE_DISBURSEMENT.value]
             if status == FacilityStatus.DISBURSED:
                 return [FacilityAction.CONFIRM_DISBURSEMENT.value]
-            if status in {FacilityStatus.ACTIVE, FacilityStatus.OVERDUE} and any(
+            if status in {FacilityStatus.ACTIVE, FacilityStatus.RESTRUCTURED}:
+                actions = [FacilityAction.MARK_OVERDUE.value]
+                if any(
+                    item.status == PaymentStatus.SUBMITTED.value
+                    for item in payments
+                ):
+                    actions.extend(
+                        [
+                            FacilityAction.CONFIRM_PAYMENT.value,
+                            FacilityAction.REJECT_PAYMENT.value,
+                        ]
+                    )
+                return actions
+            if status in {FacilityStatus.OVERDUE, FacilityStatus.DEFAULTED} and any(
                 item.status == PaymentStatus.SUBMITTED.value for item in payments
             ):
                 return [
@@ -946,13 +1415,47 @@ class FacilityService:
         if user.role == Role.SUPPLIER.value and status in {
             FacilityStatus.ACTIVE,
             FacilityStatus.OVERDUE,
+            FacilityStatus.RESTRUCTURED,
+            FacilityStatus.DEFAULTED,
         }:
             return [FacilityAction.SUBMIT_PAYMENT.value]
-        if user.role == Role.RISK_MANAGER.value and status == FacilityStatus.ACTIVE:
-            return [FacilityAction.MARK_OVERDUE.value]
-        if user.role == Role.AUDITOR.value and status == FacilityStatus.REPAID:
-            return [FacilityAction.CLOSE.value]
+        if user.role == Role.RISK_MANAGER.value:
+            if status == FacilityStatus.DEFAULTED:
+                return [] if any(
+                    item.status == PaymentStatus.SUBMITTED.value for item in payments
+                ) else [FacilityAction.RESTRUCTURE.value]
+            if status == FacilityStatus.OVERDUE:
+                return [
+                    FacilityAction.RESTRUCTURE.value,
+                    FacilityAction.DECLARE_DEFAULT.value,
+                ]
+            if status == FacilityStatus.RESTRUCTURED:
+                return [FacilityAction.DECLARE_DEFAULT.value]
+        if user.role == Role.AUDITOR.value:
+            if status == FacilityStatus.DEFAULTED:
+                if any(
+                    item.status == PaymentStatus.SUBMITTED.value
+                    for item in payments
+                ):
+                    return []
+                return [FacilityAction.WRITE_OFF.value]
+            if status in {FacilityStatus.REPAID, FacilityStatus.WRITTEN_OFF}:
+                return [FacilityAction.CLOSE.value]
         return []
+
+    @staticmethod
+    def _serialize_default(item: FacilityDefaultModel) -> dict[str, Any]:
+        return {
+            "default_id": str(item.default_id),
+            "schedule_version": item.schedule_version,
+            "declared_by_user_id": str(item.declared_by_user_id),
+            "defaulted_at": canonical_timestamp(item.defaulted_at),
+            "days_past_due": item.days_past_due,
+            "reason_code": item.reason_code,
+            "comment": item.comment,
+            "evidence_sha256": item.evidence_sha256,
+            "recorded_at": canonical_timestamp(item.recorded_at),
+        }
 
     def _now(self) -> datetime:
         now = self.clock()
