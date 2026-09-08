@@ -1,0 +1,27 @@
+# Overlay on advanced/fabric/network/docker-compose.fabric.yml.
+# Use project daibm-integration-fabric after creating the integration app network.
+services:
+  orderer.example.com:
+    container_name: daibm-integration-orderer
+    ports: !reset []
+  peer0.org1.example.com:
+    container_name: daibm-integration-peer
+    ports: !reset []
+    environment:
+      CORE_PEER_ID: integration.peer0.org1.example.com
+      CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE: daibm-integration-fabric-network
+  cli:
+    container_name: daibm-integration-cli
+  zkp-prover:
+    image: daibm-integration-prover:local
+    container_name: daibm-integration-prover
+  gateway:
+    image: daibm-integration-gateway:local
+    container_name: daibm-integration-gateway
+
+networks:
+  fabric:
+    name: daibm-integration-fabric-network
+  app:
+    external: true
+    name: daibm-integration-app-network

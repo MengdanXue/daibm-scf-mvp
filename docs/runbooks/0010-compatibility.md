@@ -7,7 +7,12 @@ resolve this collision.
 
 ## Supported upgrade paths
 
-The single graph is `0009 -> 0010 -> 0011 -> 20260907_0012`.
+The historical lifecycle path continues through `20260907_0012` and
+`20260907_0013`. The independently published anchor-version revision
+`20260907_0011` still branches from `20260824_0010`. Both paths now converge at
+the single merge head `20260908_0014`; neither published parent was rewritten.
+See [the unified acceptance runbook](lifecycle-anchor-integration.md) for the
+full graph, both deployed-head upgrade checks, and the isolated stack commands.
 
 | Existing marker and verified schema | Upgrade behavior |
 | --- | --- |
@@ -15,6 +20,8 @@ The single graph is `0009 -> 0010 -> 0011 -> 20260907_0012`.
 | 0010, intact remote proof schema | Apply missing original lifecycle DDL before recovery; preserve proof column/values |
 | 0010, intact local lifecycle schema | Recovery index, then proof column/checks |
 | 0011, intact local lifecycle/recovery schema | Proof column/checks only |
+| 20260907_0013, PR #5 lifecycle head | Anchor-version checks, then merge head |
+| 20260907_0011, PR #6/#7 anchor-version head and historical proof schema | Missing lifecycle/recovery/proof/episode path, then merge head |
 
 `0012` is the historical remote proof migration under an unambiguous identity.
 It verifies an existing proof contract instead of adding the same column twice.
@@ -76,7 +83,8 @@ test fixtures truncate their test data. Migration tests create and drop only
 new random `integration_test_*` databases on that server.
 
 Run `python -m pytest tests/test_integration_migration.py
-tests/test_lifecycle_governance_migration.py tests/test_self_training_migration.py -q`.
+tests/test_lifecycle_governance_migration.py tests/test_self_training_migration.py
+tests/test_unified_migration.py -q`.
 
 Downgrade is not a data-recovery strategy. Proof downgrade locks before checking
 and refuses to drop any non-null historical payable ceiling. Lifecycle

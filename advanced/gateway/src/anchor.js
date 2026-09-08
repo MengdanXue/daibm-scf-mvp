@@ -14,7 +14,7 @@ const OPTIONAL_HASH_FIELDS = Object.freeze(['proofSha256']);
 const ALLOWED_FIELDS = new Set([...REQUIRED_FIELDS, ...OPTIONAL_VERSION_FIELDS, ...OPTIONAL_HASH_FIELDS]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
 const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
 function isCanonicalUuid(value) {
@@ -59,7 +59,7 @@ function assertAnchor(anchor) {
   if (!isValidRfc3339(anchor.recordedAt)) throw new Error('recordedAt must be a valid RFC3339 timestamp');
   if (anchor.schemaVersion !== 1) throw new Error('schemaVersion must equal 1');
   for (const name of OPTIONAL_VERSION_FIELDS) {
-    if (Object.hasOwn(anchor, name) && (typeof anchor[name] !== 'string' || !VERSION.test(anchor[name]))) {
+    if (Object.hasOwn(anchor, name) && (typeof anchor[name] !== 'string' || anchor[name].length > 64 || !VERSION.test(anchor[name]))) {
       throw new Error(`${name} must be an opaque version token`);
     }
   }

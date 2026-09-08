@@ -225,7 +225,9 @@ def test_lifecycle_governance_revision_is_single_head_and_constrained(
     assert revision.down_revision == "20260824_0009"
     recovery_revision = scripts.get_revision("20260824_0011")
     assert recovery_revision.down_revision == "20260824_0010"
-    assert scripts.get_current_head() == "20260907_0013"
+    assert "20260907_0013" in {
+        item.revision for item in scripts.iterate_revisions(scripts.get_current_head(), "base")
+    }
 
     inspector = sa.inspect(migrated_engine)
     governed_tables = {

@@ -31,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Final Chinese screenshot (default: facility-lifecycle-clone-acceptance.png)",
     )
     parser.add_argument("--timeout-ms", type=int, default=15_000)
+    parser.add_argument("--browser-channel", default=None)
     return parser
 
 
@@ -124,14 +125,16 @@ def _expected_no_active_deployment(response: Any) -> bool:
     )
 
 
-def run(base_url: str, screenshot: Path, timeout_ms: int) -> Path:
+def run(
+    base_url: str, screenshot: Path, timeout_ms: int, *, browser_channel: str | None = None
+) -> Path:
     from playwright.sync_api import sync_playwright
 
     screenshot = screenshot.resolve()
     browser_messages: list[str] = []
     http_errors: list[str] = []
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, channel=browser_channel)
         contexts = {
             role: browser.new_context(
                 base_url=base_url,
@@ -346,6 +349,7 @@ def main() -> int:
         arguments.base_url.rstrip("/"),
         arguments.screenshot,
         arguments.timeout_ms,
+        browser_channel=arguments.browser_channel,
     )
     print(f"facility_browser_acceptance=passed screenshot={screenshot}")
     return 0

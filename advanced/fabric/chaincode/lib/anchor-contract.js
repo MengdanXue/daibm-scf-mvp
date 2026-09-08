@@ -24,7 +24,7 @@ const ALLOWED_FIELDS = new Set([
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const OPAQUE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const OPAQUE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
 const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/;
 
 function assertUuid(name, value) {
@@ -80,7 +80,7 @@ function validateAnchor(anchor) {
     throw new Error('schemaVersion must equal 1');
   }
   for (const name of OPTIONAL_VERSION_FIELDS) {
-    if (Object.hasOwn(anchor, name) && (typeof anchor[name] !== 'string' || !OPAQUE_VERSION.test(anchor[name]))) {
+    if (Object.hasOwn(anchor, name) && (typeof anchor[name] !== 'string' || anchor[name].length > 64 || !OPAQUE_VERSION.test(anchor[name]))) {
       throw new Error(`${name} must be an opaque version token`);
     }
   }
