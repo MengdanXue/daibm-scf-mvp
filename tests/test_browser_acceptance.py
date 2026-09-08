@@ -15,6 +15,11 @@ from scripts.browser_acceptance import (
     "path,status,code,kind,text,expected",
     [
         ("calibration-deployments/active", 404, "outcome_not_found", "error", "404", True),
+        ("calibration-deployments/active?scope=controlled_demo", 404, "outcome_not_found", "error", "404", True),
+        ("calibration-deployments/active?scope=external_verified", 404, "outcome_not_found", "error", "404", True),
+        ("calibration-deployments/active?scope=mixed", 404, "outcome_not_found", "error", "404", False),
+        ("calibration-deployments/active?scope=controlled_demo", 404, "unexpected", "error", "404", False),
+        ("calibration-deployments/active?scope=controlled_demo", 500, "outcome_not_found", "error", "404", False),
         ("calibration-deployments/active", 500, "outcome_not_found", "error", "404", False),
         ("calibration-deployments/active", 404, "unexpected", "error", "404", False),
         ("applications", 404, "outcome_not_found", "error", "404", False),

@@ -251,11 +251,20 @@ def _exercise_failed_core_directory(browser) -> None:
         context.close()
 
 
+def _is_active_calibration_url(url: str) -> bool:
+    endpoint = f"{BASE_URL}/api/v1/calibration-deployments/active"
+    return url in {
+        endpoint,
+        f"{endpoint}?scope=controlled_demo",
+        f"{endpoint}?scope=external_verified",
+    }
+
+
 def _is_expected_empty_calibration_error(message, responses) -> bool:
     kind, text, url = message
     if (
         kind != "error"
-        or url != f"{BASE_URL}/api/v1/calibration-deployments/active"
+        or not _is_active_calibration_url(url)
         or text != "Failed to load resource: the server responded with a status of 404 (Not Found)"
     ):
         return False
@@ -274,10 +283,15 @@ def _is_expected_empty_calibration_error(message, responses) -> bool:
     return False
 
 
-def run_acceptance(record_video=False) -> tuple[Path, Path | None]:
+def run_acceptance(
+    record_video=False, *, base_url: str | None = None, browser_channel: str | None = None
+) -> tuple[Path, Path | None]:
+    global BASE_URL
+    if base_url is not None:
+        BASE_URL = base_url.rstrip("/")
     video_path: Path | None = None
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, channel=browser_channel)
         try:
             context_options: dict[str, object] = {
                 "viewport": {"width": 1440, "height": 1100}
@@ -293,7 +307,7 @@ def run_acceptance(record_video=False) -> tuple[Path, Path | None]:
                 page.on(
                     "response",
                     lambda response: optional_responses.append(response)
-                    if response.url == f"{BASE_URL}/api/v1/calibration-deployments/active"
+                    if _is_active_calibration_url(response.url)
                     else None,
                 )
                 page.on(
@@ -331,6 +345,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the five-role browser acceptance journey."
     )
+    parser.add_argument("--base-url", default=BASE_URL)
+    parser.add_argument("--browser-channel", default=None)
     parser.add_argument(
         "--record-video",
         action="store_true",
@@ -342,7 +358,9 @@ def _parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     arguments = _parse_args()
     screenshot_path, optional_video_path = run_acceptance(
-        record_video=arguments.record_video
+        record_video=arguments.record_video,
+        base_url=arguments.base_url,
+        browser_channel=arguments.browser_channel,
     )
     print(
         "browser_acceptance=passed "

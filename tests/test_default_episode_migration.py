@@ -34,6 +34,11 @@ def _bytes(engine):
         )))
 
 
+def _revisions(engine):
+    with engine.connect() as connection:
+        return set(connection.scalars(text("SELECT version_num FROM alembic_version")))
+
+
 def test_episode_migration_roundtrip_preserves_original_payload_and_ledger(isolated_postgres_engine):
     engine = isolated_postgres_engine
     _migrate(engine, "head")
@@ -57,12 +62,12 @@ def test_episode_downgrade_refuses_multiple_history_without_changes(isolated_pos
     facility = service.restructure(facility["facility_id"], _restructure(facility["version"], total="1000.00"), users["risk.demo"])
     facility = service.declare_default(facility["facility_id"], _declare_default(facility["version"]), users["risk.demo"])
     before = _bytes(engine)
+    revisions_before = _revisions(engine)
     with pytest.raises(RuntimeError, match="multiple default episodes"):
         _migrate(engine, "20260907_0012", down=True)
     assert service.get(facility["facility_id"], users["risk.demo"])["default_history"] == facility["default_history"]
     assert _bytes(engine) == before
-    with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260907_0013"
+    assert _revisions(engine) == revisions_before
 
 
 def test_conservation_preflight_refuses_inconsistent_legacy_without_repair(isolated_postgres_engine):
@@ -73,11 +78,12 @@ def test_conservation_preflight_refuses_inconsistent_legacy_without_repair(isola
     with engine.begin() as connection:
         connection.execute(text("UPDATE financing_facilities SET outstanding_amount = 900.00"))
     before = _bytes(engine)
+    revisions_before = _revisions(engine)
     with pytest.raises(RuntimeError, match="principal conservation failed for facility"):
         _migrate(engine, "head")
     with engine.connect() as connection:
         assert str(connection.scalar(text("SELECT outstanding_amount FROM financing_facilities"))) == "900.00"
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260907_0012"
+    assert _revisions(engine) == revisions_before
     assert _bytes(engine) == before
 
 

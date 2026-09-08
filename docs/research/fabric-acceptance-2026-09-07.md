@@ -1,5 +1,7 @@
 # Fabric 开发网络阶段验收（2026-09-07）
 
+后续状态（2026-09-08）：本文保留 9 月 7 日现场结果。实机 gateway 停止/恢复现已完成，见 [断连验收](fabric-outage-acceptance-2026-09-08.md)。版本字段修复与 CI 见 [版本契约验收](version-contract-acceptance-2026-09-08.md)；不代表旧 anchor 已回填。
+
 ## 范围与结论
 
 `2026_REIMPLEMENTATION` 工程验收：真实 Fabric 开发网络的部署、五角色业务流程、outbox 上链、gateway / peer CLI 交叉读回、重复请求与冲突拒绝通过。**不是高级模式全量验收通过**：实机断连恢复未执行，电路版本显式上链存在缺口。

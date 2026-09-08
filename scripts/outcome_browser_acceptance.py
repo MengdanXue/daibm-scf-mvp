@@ -67,9 +67,11 @@ def _confirm_payment(page, reference: str) -> None:
     _wait_facility_idle(page)
 
 
-def run_outcome_acceptance(base_url: str = "http://127.0.0.1:8017") -> tuple[str, Path]:
+def run_outcome_acceptance(
+    base_url: str = "http://127.0.0.1:8017", *, browser_channel: str | None = None
+) -> tuple[str, Path]:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, channel=browser_channel)
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 1100})
             errors: list[str] = []
@@ -248,8 +250,11 @@ def run_outcome_acceptance(base_url: str = "http://127.0.0.1:8017") -> tuple[str
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run isolated outcome browser acceptance")
     parser.add_argument("--base-url", default="http://127.0.0.1:8017")
+    parser.add_argument("--browser-channel", default=None)
     args = parser.parse_args()
-    accepted_facility, screenshot = run_outcome_acceptance(args.base_url)
+    accepted_facility, screenshot = run_outcome_acceptance(
+        args.base_url, browser_channel=args.browser_channel
+    )
     print(
         "outcome_browser_acceptance=passed "
         f"facility={accepted_facility} screenshot={screenshot}"
