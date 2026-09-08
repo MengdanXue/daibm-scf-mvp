@@ -352,7 +352,8 @@ def test_traceability_uses_only_canonical_values_and_matches_implemented_work():
         "SYNTHETIC_DEMO",
         "CONFERENCE_RERUN",
     }
-    rows = [line for line in matrix.splitlines() if line.startswith("|")][2:]
+    canonical_matrix = matrix.split("## Defence execution map", 1)[0]
+    rows = [line for line in canonical_matrix.splitlines() if line.startswith("|")][2:]
     assert rows
     for row in rows:
         cells = [cell.strip() for cell in row.strip("|").split("|")]

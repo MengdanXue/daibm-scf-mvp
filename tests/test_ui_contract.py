@@ -89,6 +89,15 @@ def test_research_javascript_uses_real_apis_and_non_silent_recovery():
     assert "risk_score" not in html.split("async function injectResearchRisk", 1)[1].split("}", 1)[0]
 
 
+def test_legacy_demo_refresh_does_not_call_retired_destructive_reset():
+    html = _html()
+
+    assert "'/api/demo/reset'" not in html
+    assert "'/api/demo/seed'" in html
+    assert "window.refreshLegacyForRole" in html
+    assert "document.body.dataset.workflowRole==='supplier'?'workflow':'overview'" in html
+
+
 def test_postgresql_ledger_is_not_presented_as_blockchain():
     html = _html().lower()
 
