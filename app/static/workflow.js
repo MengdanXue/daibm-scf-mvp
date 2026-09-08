@@ -338,6 +338,7 @@
     state.activeCalibration = null;
     state.outcomeIdempotencyKeys = Object.create(null);
     document.body.classList.remove("authenticated");
+    delete document.body.dataset.workflowRole;
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
     document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
@@ -376,8 +377,11 @@
     }
   }
 
+  window.refreshLegacyForRole = refreshLegacyForRole;
+
   async function enterWorkbench() {
     const role = ROLE_META[state.user.role];
+    document.body.dataset.workflowRole = state.user.role;
     renderCurrentUser();
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
     document.querySelector("#view-facilities").style.setProperty("--role-color", role.color);
