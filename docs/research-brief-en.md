@@ -38,7 +38,7 @@ How can a supply-chain finance decision connect temporal graph learning, an expl
 - This implementation does not reproduce the original thesis: original data and code are unavailable, the TGNN is smaller, and the five-seed package is exploratory.
 - Synthetic observations do not establish real-enterprise validity, causal benefit, fairness, robustness, production security, or economic value.
 - The default PostgreSQL ledger is not blockchain consensus. The financing lifecycle does not execute real bank transfers and excludes interest, fees, FX, accounting, settlement, and reconciliation.
-- Controlled/simulated outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects. Gated activation exists for the business baseline only; calibration metrics use fitting samples, not held-out outcomes.
+- Controlled/simulated outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects. Gated activation exists for the business baseline only; calibration candidates use chronological 70/30 holdout evaluation, and the retained corrected dataset is rejected before promotion because it lacks the required partition/class support.
 
 ## Next research step
 
