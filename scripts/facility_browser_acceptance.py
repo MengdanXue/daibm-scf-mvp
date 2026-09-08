@@ -9,7 +9,7 @@ from typing import Any
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8010"
-DEFAULT_SCREENSHOT = Path("output/facility-lifecycle-acceptance.png")
+DEFAULT_SCREENSHOT = Path("output/facility-lifecycle-clone-acceptance.png")
 PASSWORD = "Demo123!"
 
 
@@ -28,7 +28,7 @@ def _parser() -> argparse.ArgumentParser:
         "--screenshot",
         type=Path,
         default=DEFAULT_SCREENSHOT,
-        help="Final Chinese screenshot (default: facility-lifecycle-acceptance.png)",
+        help="Final Chinese screenshot (default: facility-lifecycle-clone-acceptance.png)",
     )
     parser.add_argument("--timeout-ms", type=int, default=15_000)
     return parser

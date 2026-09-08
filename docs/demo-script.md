@@ -40,11 +40,11 @@
 
 ### 0.3. Контролируемый фактический результат / 受控结果回流（可选 60 秒）
 
-Boundary: gated automatic activation of the Platt business-baseline calibration only; fitting-sample metrics are not held-out validation.
+Boundary: gated automatic activation of the Platt business-baseline calibration only; candidates are evaluated with a chronological 70/30 holdout, and the retained corrected dataset is rejected before promotion because it lacks the required partition/class support.
 
 После закрытия объекта останьтесь под `auditor.demo`. В карточке закрытого финансирования заполните факт дефолта, дни просрочки, убыток, время наблюдения, provenance `CONTROLLED_DEMO` и понятную ссылку на свидетельство. Браузер сам вычисляет SHA-256; исходная ссылка не отправляется. При сетевом повторе сохраняется тот же idempotency key. / 结清后继续使用 `auditor.demo`，在融资详情录入是否违约、逾期天数、损失额、观察时间、`CONTROLLED_DEMO` 来源和证据引用。浏览器本地计算 SHA-256，原始引用不会发送；网络重试复用同一幂等键。
 
-После отправки покажите immutable outcome lineage, статус запуска, число положительных/отрицательных наблюдений, Brier/log loss до и после и artifact integrity. Кандидат Platt может автоматически активироваться только для бизнес-baseline после прохождения gate; иначе сохраняется отказ или fallback. Контур не переобучает TGNN и не запускается по дрейфу. Brier/log loss рассчитаны на обучающих наблюдениях, не на независимой выборке; улучшение на реальных предприятиях не доказано. / 提交后展示不可变 outcome lineage、运行状态、正负样本数、校准前后 Brier/log loss 与工件完整性。Platt 校准候选通过 gate 后可自动激活，但只作用于业务 baseline；不满足条件则拒绝或回退。不重训 TGNN、不由漂移触发；Brier/log loss 使用拟合样本，不是独立留出评估，也不证明真实企业效果。
+После отправки покажите immutable outcome lineage, статус запуска, число положительных/отрицательных наблюдений, Brier/log loss до и после и artifact integrity. Кандидат Platt может автоматически активироваться только для бизнес-baseline после прохождения gate; иначе сохраняется отказ или fallback. Контур не переобучает TGNN и не запускается по дрейфу. Кандидаты оцениваются на независимом хронологическом holdout; в закрывающем наборе все кандидаты отклонены из-за недостаточной поддержки временных разделов/классов, поэтому улучшение на реальных предприятиях не заявляется. / 提交后展示不可变 outcome lineage、运行状态、正负样本数、校准前后 Brier/log loss 与工件完整性。Platt 校准候选通过 gate 后可自动激活，但只作用于业务 baseline；不满足条件则拒绝或回退。不重训 TGNN、不由漂移触发；候选使用独立的时间留出集评估；本次收口数据因时间分区和类别支持不足全部拒绝晋升，因此不声称真实企业效果。
 
 ## 1. Обзор системы / 系统总览（40 секунд）
 
