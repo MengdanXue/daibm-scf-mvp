@@ -109,3 +109,55 @@ original or a restored business database. `/api/health` alone does not validate
 the prover or Fabric gateway. Keep all private backups, keys and session evidence
 local. Commit only necessary code and sanitized reports, verify CI for that
 exact commit, and state which runtime stages remain incomplete.
+
+### Accept a demo that already has pending historical work
+
+Do not drain historical pending records to satisfy an acceptance script.
+`integration_anchor_acceptance.py` and `fabric_outage_acceptance.py` retain their
+isolated-empty-outbox assumptions. The public dispatch endpoint accepts only
+`limit`; adding an `anchor_ids` JSON field does **not** make it targeted.
+
+Use `scripts.maintenance_acceptance` on the newly restored clone first. It
+requires explicit loopback origin, application/gateway/CLI/prover containers,
+the private pre-maintenance snapshot and a new output directory. It verifies
+the application port and its service DNS against the selected containers, pins
+container IDs/images, and refuses optional-proof fallback. Example (replace
+every uppercase placeholder with the verified local target):
+
+```sh
+python -m scripts.maintenance_acceptance --allow-synthetic-writes \
+  --phase journey --base-url http://127.0.0.1:CLONE_PORT \
+  --app-container CLONE_APP --gateway-container CLONE_GATEWAY \
+  --cli-container CLONE_CLI --prover-container CLONE_PROVER \
+  --run-id UNIQUE_RUN --baseline-snapshot PRIVATE/before.json \
+  --output PRIVATE/new-journey
+```
+
+The two new application identifiers explicitly start with
+`SYNTHETIC-<run-id>-`. The read-only manifest binds the new application, exact
+anchor set, event/envelope hashes and pre-run anchor IDs. The maintenance-only
+repository filters the whitelist in SQL **before** acquiring claim leases; the
+existing dispatch service handles requests/retries/settlement. No business
+image, public API or global dispatcher is changed. Lost leases fail acceptance.
+The script executes the reviewed helper in the pinned application container;
+it does not start `app.main`, copy credentials, or migrate the database.
+
+Then repeat with `--phase outage --allow-local-gateway-outage`, a different
+run ID and another new output directory. Only that run's new synthetic draft
+may be dispatched. The selected gateway is restored in `finally`, including
+when stop times out. The application, peer and orderer remain running. Confirm
+restoration and retain failure evidence if anything fails; do not delete a
+partially created application or reset attempts to obtain a pass.
+
+Both phases compare **every pre-run row and original column** afterward, require
+unchanged migration revisions, and allow only new records/forward sequences.
+The journey verifies the persisted proof independently, recomputes its digest,
+rejects tampered signals, reads all new anchors through gateway and peer, and
+checks duplicate submission adds zero blocks. Session logout accepts its empty
+204 response and runs on failure too. Run without Python `-O`; an optimized
+interpreter is rejected. Keep snapshots/manifests/screenshots private. After
+the clone passes, explicitly select the original targets and repeat, then
+separately compare all original Fabric anchor JSON and historical artifacts.
+
+This is an operator maintenance tool under exclusive project write control,
+not a public filtered-dispatch feature or permission to process old business.
