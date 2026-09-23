@@ -170,6 +170,77 @@ class ResearchRepository:
         }
 
     @staticmethod
+    def load_existing_reference_registry(
+        session: Session,
+        artifact: VerifiedArtifact,
+    ) -> dict[str, uuid.UUID]:
+        """Fail closed if the published reference registry is missing or stale."""
+        manifest = artifact.manifest
+        dataset_manifest = manifest["dataset"]
+        dataset_id = reference_uuid("dataset", dataset_manifest["content_sha256"])
+        scenario_id = reference_uuid("scenario", f"{dataset_id}:reference:0")
+        snapshot_id = reference_uuid("snapshot", manifest["snapshot_sha256"])
+        run_id = reference_uuid("run", manifest["checkpoint_sha256"])
+        model_id = reference_uuid("model", manifest["artifact_sha256"])
+
+        dataset = session.get(DatasetVersionModel, dataset_id)
+        scenario = session.get(SyntheticScenarioModel, scenario_id)
+        snapshot = session.get(GraphSnapshotModel, snapshot_id)
+        run = session.get(ModelRunModel, run_id)
+        model = session.get(ModelVersionModel, model_id)
+        if any(item is None for item in (dataset, scenario, snapshot, run, model)):
+            raise ValueError("Reference registry is incomplete")
+        assert dataset is not None and scenario is not None and snapshot is not None
+        assert run is not None and model is not None
+
+        feature_hash = hashlib.sha256(
+            np.ascontiguousarray(artifact.input_x.astype("<f4")).tobytes()
+        ).hexdigest()
+        adjacency_hash = hashlib.sha256(
+            np.ascontiguousarray(artifact.input_adjacency.astype("<f4")).tobytes()
+        ).hexdigest()
+        if not all((
+            dataset.name == dataset_manifest["dataset_name"],
+            dataset.version == dataset_manifest["dataset_version"],
+            dataset.content_sha256 == dataset_manifest["content_sha256"],
+            dataset.manifest == dataset_manifest,
+            scenario.dataset_version_id == dataset_id,
+            scenario.name == "reference",
+            scenario.revision == 0,
+            scenario.overlay == {},
+            scenario.overlay_sha256 == hashlib.sha256(b"{}").hexdigest(),
+            scenario.status == "active",
+            snapshot.dataset_version_id == dataset_id,
+            snapshot.synthetic_scenario_id == scenario_id,
+            snapshot.content_sha256 == manifest["snapshot_sha256"],
+            snapshot.feature_sha256 == feature_hash,
+            snapshot.adjacency_sha256 == adjacency_hash,
+            snapshot.feature_schema_version == manifest["feature_schema"]["version"],
+            snapshot.normalization_id == manifest["normalization_id"],
+            run.dataset_version_id == dataset_id,
+            run.status == "completed",
+            run.configuration == manifest["training_configuration"],
+            model.source_run_id == run_id,
+            model.dataset_version_id == dataset_id,
+            model.model_name == manifest["model_name"],
+            model.semantic_version == manifest["semantic_version"],
+            model.model_family == manifest["model_family"],
+            model.checkpoint_sha256 == manifest["checkpoint_sha256"],
+            model.feature_schema_version == manifest["feature_schema"]["version"],
+            model.artifact_locator == f"artifacts/reference/{manifest['artifact']}",
+            model.lifecycle_status == "promoted",
+            model.deployment_slot == "default",
+        )):
+            raise ValueError("Reference registry does not match verified artifact")
+        return {
+            "dataset_version_id": dataset_id,
+            "synthetic_scenario_id": scenario_id,
+            "graph_snapshot_id": snapshot_id,
+            "model_run_id": run_id,
+            "model_version_id": model_id,
+        }
+
+    @staticmethod
     def get_model(
         session: Session, model_version_id: uuid.UUID
     ) -> ModelVersionModel | None:
