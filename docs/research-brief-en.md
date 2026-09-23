@@ -19,7 +19,7 @@ How can a supply-chain finance decision connect temporal graph learning, an expl
 - Python 3.12, PyTorch research training, XGBoost comparison, ONNX Runtime inference, FastAPI, SQLAlchemy, PostgreSQL 17, Alembic, and bilingual browser acceptance.
 - Reference dataset SHA-256: `f784faa8bdef23625888d64de75c2f29a80c0a51e266e0822652569507648353`.
 - Promoted ONNX SHA-256: `158d273db310c3f1abf4be7cb06aee78568e475ebb7564ebbeaa16d3efeeb0e5`; parity maximum absolute error `2.38e-7`.
-- Tests cover temporal leakage, graph direction and normalization, artifact verification, authorization, concurrency, rollback, stale versions, duplicate invoices, ledger integrity, and five-role browser handoffs.
+- Tests check temporal windows, split anchors, normalization boundaries, graph direction, artifact verification, authorization, concurrency, rollback, stale versions, duplicate invoices, ledger integrity, and five-role browser handoffs.
 - Outcome evidence is hashed in the browser; calibration records sample composition, metrics, artifact integrity, and gated automatic activation or fallback.
 - Optional single-organization Fabric 2.5.16 anchors hashes. Circom/Groth16 invoice <= limit evidence is wired into trade confirmation; Python checks structure, not cryptographic validity. Fabric does not verify proofs. This is not production ZKP or multi-organization consensus.
 
@@ -36,6 +36,7 @@ How can a supply-chain finance decision connect temporal graph learning, an expl
 ## Limitations
 
 - This implementation does not reproduce the original thesis: original data and code are unavailable, the TGNN is smaller, and the five-seed package is exploratory.
+- Historical TGNN checkpoint selection uses validation labels overlapping early test prediction times. Fixed-artifact replay is not strict prospective validation or a guarantee against temporal leakage.
 - Synthetic observations do not establish real-enterprise validity, causal benefit, fairness, robustness, production security, or economic value.
 - The default PostgreSQL ledger is not blockchain consensus. The financing lifecycle does not execute real bank transfers and excludes interest, fees, FX, accounting, settlement, and reconciliation.
 - Controlled/simulated outcome feedback does not retrain the TGNN, does not trigger on drift, and does not prove real-enterprise effects. Gated activation exists for the business baseline only; calibration candidates use chronological 70/30 holdout evaluation, and the retained corrected dataset is rejected before promotion because it lacks the required partition/class support.

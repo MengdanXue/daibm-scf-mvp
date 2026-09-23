@@ -19,6 +19,7 @@ from app.ledger import canonical_json
 
 _ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _MAX_GATEWAY_BODY = 16 * 1024
+_MAX_INTERNAL_ERROR_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -28,10 +29,18 @@ class GatewayResult:
 
 
 class GatewayRequestError(RuntimeError):
-    def __init__(self, *, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        retryable: bool | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
+        self.retryable = retryable
 
 
 class AnchorGateway(Protocol):
@@ -56,11 +65,14 @@ class FabricGatewayClient:
                 payload = response.read(_MAX_GATEWAY_BODY + 1)
         except HTTPError as error:
             payload = error.read(_MAX_GATEWAY_BODY + 1)
-            code = self._error_code(payload, error.code)
+            code, retryable = self._error_details(
+                payload, error.code, error.headers.get_content_type()
+            )
             raise GatewayRequestError(
                 status_code=error.code,
                 code=code,
                 message="Fabric gateway rejected the anchor request",
+                retryable=retryable,
             ) from error
         except URLError as error:
             if isinstance(error.reason, (TimeoutError, socket.timeout)):
@@ -89,20 +101,26 @@ class FabricGatewayClient:
         return GatewayResult(status_code=status_code, anchor=decoded)
 
     @staticmethod
-    def _error_code(payload: bytes, status_code: int) -> str:
-        try:
-            decoded = json.loads(payload[:_MAX_GATEWAY_BODY])
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            decoded = None
+    def _error_details(
+        payload: bytes, status_code: int, content_type: str
+    ) -> tuple[str, bool | None]:
+        decoded = None
+        if len(payload) <= _MAX_GATEWAY_BODY and content_type == "application/json":
+            try:
+                decoded = json.loads(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
         if isinstance(decoded, dict):
             code = decoded.get("code")
             if isinstance(code, str) and _ERROR_CODE.fullmatch(code):
-                return code
-        return {
+                retryable = decoded.get("retryable")
+                return code, retryable if isinstance(retryable, bool) else None
+        code = {
             409: "ANCHOR_CONFLICT",
             503: "FABRIC_UNAVAILABLE",
             504: "FABRIC_TIMEOUT",
         }.get(status_code, "GATEWAY_REQUEST_FAILED")
+        return code, None
 
 
 class AnchorDispatchService:
@@ -145,7 +163,7 @@ class AnchorDispatchService:
                 result = self.gateway.create_anchor(envelope)
             except GatewayRequestError as error:
                 error_code = self._safe_error_code(error.code)
-                if error.status_code in {503, 504}:
+                if self._should_retry_gateway_error(error, row.attempt_count):
                     self._retry(row.anchor_id, row.lease_token, error_code)
                     summary["retryable"] += 1
                 else:
@@ -173,6 +191,19 @@ class AnchorDispatchService:
     @staticmethod
     def _safe_error_code(code: str) -> str:
         return code if _ERROR_CODE.fullmatch(code) else "GATEWAY_REQUEST_FAILED"
+
+    @staticmethod
+    def _should_retry_gateway_error(
+        error: GatewayRequestError, attempt_count: int
+    ) -> bool:
+        if error.status_code in {503, 504}:
+            return True
+        return (
+            error.status_code == 500
+            and error.code == "INTERNAL_ERROR"
+            and error.retryable is True
+            and attempt_count < _MAX_INTERNAL_ERROR_ATTEMPTS
+        )
 
     def list_outbox(self, *, limit: int = 50) -> list[dict[str, Any]]:
         if not 1 <= limit <= 200:

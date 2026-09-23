@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import uuid
 from pathlib import Path
 
@@ -44,10 +45,19 @@ def _select_application(page, application_id: str) -> None:
     ).wait_for()
 
 
-def _exercise_primary(page, base_url: str | None = None) -> str:
+def synthetic_prefix(run_id: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", run_id):
+        raise ValueError("Synthetic run ID must be a short explicit identifier")
+    return f"SYNTHETIC-{run_id}-"
+
+
+def _exercise_primary(
+    page, base_url: str | None = None, *, synthetic_run_id: str | None = None
+) -> str:
     global BASE_URL
     if base_url is not None:
         BASE_URL = base_url.rstrip("/")
+    prefix = synthetic_prefix(synthetic_run_id) if synthetic_run_id is not None else None
     page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
     assert page.locator("html").get_attribute("lang") == "ru"
@@ -56,8 +66,8 @@ def _exercise_primary(page, base_url: str | None = None) -> str:
     suffix = uuid.uuid4().hex[:10].upper()
     values = {
         "core_enterprise_organization_code": "CORE-001",
-        "contract_number": f"SCF-ACCEPTANCE-{suffix}",
-        "invoice_number": f"INV-ACCEPTANCE-{suffix}",
+        "contract_number": f"{prefix or 'SCF-ACCEPTANCE-'}{suffix}",
+        "invoice_number": f"{prefix or 'INV-ACCEPTANCE-'}{suffix}",
         "amount": "1200000",
         "term_days": "90",
         "payment_delay_days": "18",
