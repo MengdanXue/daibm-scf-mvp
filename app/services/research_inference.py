@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import ResearchSettings
@@ -51,6 +52,16 @@ class ResearchInferenceService:
             return
         with self.session_factory.begin() as session:
             self.identities = self.repository.ensure_reference_registry(
+                session, self.artifact
+            )
+
+    def initialize_existing(self) -> None:
+        """Load a verified, already registered artifact without database writes."""
+        if self.artifact is None:
+            raise ResearchModelUnavailable("Reference artifact is unavailable")
+        with self.session_factory() as session:
+            session.execute(text("SET TRANSACTION READ ONLY"))
+            self.identities = self.repository.load_existing_reference_registry(
                 session, self.artifact
             )
 

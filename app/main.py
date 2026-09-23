@@ -50,6 +50,7 @@ def create_app(
     research_settings: ResearchSettings | None = None,
     calibration_artifact_dir: Path | None = None,
     calibration_worker_enabled: bool = True,
+    maintenance_mode: bool = False,
 ) -> FastAPI:
     owns_database = database is None
     active_database = database or Database.create(
@@ -111,12 +112,17 @@ def create_app(
         application.state.anchor_dispatch_service = anchor_dispatch_service
         application.state.outcome_service = outcome_service
         application.state.calibration_job_service = calibration_job_service
-        identity_service.seed_demo_accounts()
-        research_service.initialize()
-        outcome_service.reconcile_deployments()
+        if maintenance_mode:
+            # The original 8010 maintenance entrypoint must not create demo
+            # identities, register missing artifacts, or settle deployments.
+            research_service.initialize_existing()
+        else:
+            identity_service.seed_demo_accounts()
+            research_service.initialize()
+            outcome_service.reconcile_deployments()
         stop_event: asyncio.Event | None = None
         worker_task: asyncio.Task[None] | None = None
-        if calibration_worker_enabled:
+        if calibration_worker_enabled and not maintenance_mode:
             stop_event = asyncio.Event()
             worker_task = asyncio.create_task(calibration_job_service.run(stop_event))
         try:
