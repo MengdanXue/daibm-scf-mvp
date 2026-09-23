@@ -25,6 +25,7 @@ class FakeFabric {
     this.probes = [];
     this.submissions = 0;
     this.failure = null;
+    this.failAfterCommitOnce = false;
   }
 
   async probe(anchorId) {
@@ -54,6 +55,10 @@ class FakeFabric {
       throw error;
     }
     this.records.set(anchor.anchorId, JSON.parse(encoded));
+    if (this.failAfterCommitOnce) {
+      this.failAfterCommitOnce = false;
+      throw new Error('response lost after Fabric committed');
+    }
     return encoded;
   }
 }
@@ -123,6 +128,66 @@ describe('internal Fabric anchor HTTP contract', () => {
     assert.equal(retried.status, 200);
     assert.deepEqual(await json(retried), VALID_ANCHOR);
     assert.equal(fabric.submissions, 1);
+  });
+
+  it('reports an unexpected internal error as retryable and submits once after recovery', async () => {
+    const { fabric, baseUrl } = await start();
+    fabric.failure = new Error('private backend failure');
+
+    const failed = await fetch(`${baseUrl}/anchors`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(VALID_ANCHOR),
+    });
+    assert.equal(failed.status, 500);
+    assert.deepEqual(await json(failed), {
+      code: 'INTERNAL_ERROR',
+      message: 'Internal gateway error',
+      retryable: true,
+    });
+    assert.equal(fabric.submissions, 0);
+
+    fabric.failure = null;
+    for (const expectedStatus of [201, 200]) {
+      const retried = await fetch(`${baseUrl}/anchors`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(VALID_ANCHOR),
+      });
+      assert.equal(retried.status, expectedStatus);
+      assert.deepEqual(await json(retried), VALID_ANCHOR);
+    }
+    assert.equal(fabric.submissions, 1);
+    assert.equal(fabric.records.size, 1);
+  });
+
+  it('reads a committed anchor after a lost 500 response without a second submit', async () => {
+    const { fabric, baseUrl } = await start();
+    fabric.failAfterCommitOnce = true;
+
+    const first = await fetch(`${baseUrl}/anchors`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(VALID_ANCHOR),
+    });
+    assert.equal(first.status, 500);
+    assert.deepEqual(await json(first), {
+      code: 'INTERNAL_ERROR',
+      message: 'Internal gateway error',
+      retryable: true,
+    });
+    assert.equal(fabric.submissions, 1);
+    assert.equal(fabric.records.size, 1);
+
+    const retried = await fetch(`${baseUrl}/anchors`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(VALID_ANCHOR),
+    });
+    assert.equal(retried.status, 200);
+    assert.deepEqual(await json(retried), VALID_ANCHOR);
+    assert.equal(fabric.submissions, 1);
+    assert.equal(fabric.records.size, 1);
   });
 
   it('maps conflicting reuse to a stable non-retryable 409 error', async () => {

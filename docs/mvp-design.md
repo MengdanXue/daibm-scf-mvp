@@ -1,5 +1,7 @@
 # Research Core v0.4 — Frozen MVP Design
 
+This document preserves the frozen Research Core v0.4 scope, with later workflow annotations. Its original exclusions are not a current inventory of the integrated application; see [README](../README.md) and [the evidence matrix](thesis-traceability.md) for the optional local Fabric and proof components.
+
 ## Objective
 
 Demonstrate the smallest defensible research and engineering loop for the thesis:
@@ -25,7 +27,7 @@ The application constructs its connection from the five `POSTGRES_*` settings. T
 
 ### Data and graph
 
-`synthetic-scf-v1` is deterministically generated with seed `20260815` for 500 enterprises over 24 months. It contains no real enterprise records. The graph builder retains directed supplier-to-customer relationships, creates symmetric self-loop-normalized adjacency for the GCN, and uses 12-month feature windows with future 3-month labels. Temporal train, validation, and test anchors are fixed to prevent leakage.
+`synthetic-scf-v1` is deterministically generated with seed `20260815` for 500 enterprises over 24 months. It contains no real enterprise records. The graph builder retains directed supplier-to-customer relationships, creates symmetric self-loop-normalized adjacency for the GCN, and uses 12-month feature windows with future 3-month labels. Fixed train/validation/test anchors and the normalization fit boundary make the split inspectable and repeatable, not leakage-free. The historical TGNN checkpoint-selection protocol uses validation labels whose three-month horizon overlaps the earliest test prediction times. Existing checks cover windows, split anchors, and normalization boundaries; fixed-artifact replay does not establish strict prospective prediction.
 
 ### Models
 
@@ -81,6 +83,6 @@ A missing or incompatible model, unreachable database, or invalid ledger returns
 
 Implemented in the integrated application: PostgreSQL application state, Alembic schema, deterministic synthetic generator, temporal graph builder, XGBoost comparison, minimal GCN–BiLSTM TGNN, ONNX Runtime inference, model/data/graph registries, policy engine, atomic decision trace, risk injection, hash-chain verification, evidence-preserving recovery, and the simulated financing-facility lifecycle described above.
 
-Not implemented or not claimed: real enterprise data, numerical reproduction of the original thesis results, the full thesis TGNN, production credit decisioning, Hyperledger Fabric, PoA+, chaincode, ZKP, production identity infrastructure, online learning, external bank integration, actual settlement, interest, fees, or accounting.
+Not implemented or not claimed: real enterprise data, numerical reproduction of the original thesis results, the full thesis TGNN, production credit decisioning, PoA+, production identity infrastructure, online TGNN learning, external bank integration, actual settlement, interest, fees, or accounting. Hyperledger Fabric, chaincode, and ZKP were outside the frozen v0.4 core; the integrated application now has optional local single-organisation hash anchoring and one invoice-limit proof circuit, with the limits recorded in the evidence matrix.
 
 The canonical claim-to-evidence mapping is `docs/thesis-traceability.md`; no second matrix should be maintained.
