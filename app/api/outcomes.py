@@ -132,8 +132,11 @@ def list_actual_outcomes(
     request: Request,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    include_superseded: bool = Query(False),
 ):
-    return request.app.state.outcome_service.list_outcomes(user, limit=limit, offset=offset)
+    return request.app.state.outcome_service.list_outcomes(
+        user, limit=limit, offset=offset, include_superseded=include_superseded
+    )
 
 
 @router.get("/api/v1/outcomes/{outcome_id}", response_model=ActualOutcomeResponse)

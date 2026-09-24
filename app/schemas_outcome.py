@@ -97,6 +97,13 @@ class ActualOutcomeResponse(BaseModel):
     risk_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     recorded_at: datetime
     effective_training_eligible: bool
+    revision: int = Field(ge=1)
+    supersedes_outcome_id: UUID | None
+    correction_reason_code: str | None
+    review_status: (
+        Literal["CREATED", "REVIEWING", "ELIGIBLE", "TRAINING_USED", "REJECTED"] | None
+    )
+    review_reason: str | None
 
 
 class OutcomeCorrectionResponse(BaseModel):
@@ -161,3 +168,34 @@ __all__ = [
     "OutcomeCorrectionResponse",
     "OutcomeSubmissionResponse",
 ]
+
+
+class OutcomeSupersedeCreate(BaseModel):
+    """Correct an immutable outcome by appending a superseding revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: UUID
+    defaulted: bool
+    days_past_due: int = Field(ge=0, le=36500)
+    loss_amount: str = Field(pattern=r"^\d{1,12}\.\d{2}$")
+    observed_at: datetime
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{2,63}$")
+    comment: str = Field(min_length=1, max_length=500)
+
+    @field_validator("observed_at")
+    @classmethod
+    def observed_at_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        return value
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("comment must not be blank")
+        return value

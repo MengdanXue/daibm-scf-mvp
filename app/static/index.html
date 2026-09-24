@@ -297,6 +297,8 @@
       <button data-view-button="research" onclick="switchView('research')"><span class="nav-icon">⌁</span><span data-i18n="navResearch">Исследовательское ядро</span></button>
       <button data-view-button="review" onclick="switchView('review')"><span class="nav-icon">◎</span><span data-i18n="navReview">Оценка риска</span></button>
       <button data-view-button="ledger" onclick="switchView('ledger')"><span class="nav-icon">◇</span><span data-i18n="navLedger">Аудиторский реестр</span></button>
+      <button data-view-button="governance" onclick="switchView('governance')"><span class="nav-icon">⚖</span><span data-gov-i18n="navGovernance">Центр моделей</span></button>
+      <button data-view-button="feedback" onclick="switchView('feedback')"><span class="nav-icon">⟲</span><span data-gov-i18n="navFeedback">Обратная связь данных</span></button>
       <button data-view-button="model" onclick="switchView('model')"><span class="nav-icon">≋</span><span data-i18n="navModel">Методика</span></button>
     </nav>
     <div class="side-bottom"><div class="research-badge"><b data-i18n="prototype">Исследовательский прототип</b><span data-i18n="prototypeNote">Магистерская диссертация · синтетические данные · версия 0.2</span></div></div>
@@ -305,7 +307,7 @@
   <div class="content">
     <header class="topbar">
       <div class="top-title"><strong data-i18n="systemName">Интеллектуальный аудит финансирования цепей поставок</strong><span data-i18n="systemSub">Демонстрационный контур принятия решений</span></div>
-      <div class="mobile-menu"><button data-view-button="workflow" onclick="switchView('workflow')" data-wf-i18n="navWorkflow">Рабочий контур</button><button data-view-button="facilities" onclick="switchView('facilities')" data-wf-i18n="navFacilities">Финансирование</button><button data-view-button="overview" onclick="switchView('overview')" data-i18n="navOverview">Обзор</button><button data-view-button="research" onclick="switchView('research')" data-i18n="navResearch">Исследование</button><button data-view-button="review" onclick="switchView('review')" data-i18n="navReview">Оценка риска</button><button data-view-button="ledger" onclick="switchView('ledger')" data-i18n="navLedger">Реестр</button><button data-view-button="model" onclick="switchView('model')" data-i18n="navModel">Методика</button></div>
+      <div class="mobile-menu"><button data-view-button="workflow" onclick="switchView('workflow')" data-wf-i18n="navWorkflow">Рабочий контур</button><button data-view-button="facilities" onclick="switchView('facilities')" data-wf-i18n="navFacilities">Финансирование</button><button data-view-button="overview" onclick="switchView('overview')" data-i18n="navOverview">Обзор</button><button data-view-button="research" onclick="switchView('research')" data-i18n="navResearch">Исследование</button><button data-view-button="review" onclick="switchView('review')" data-i18n="navReview">Оценка риска</button><button data-view-button="ledger" onclick="switchView('ledger')" data-i18n="navLedger">Реестр</button><button data-view-button="governance" onclick="switchView('governance')" data-gov-i18n="navGovernance">Центр моделей</button><button data-view-button="feedback" onclick="switchView('feedback')" data-gov-i18n="navFeedback">Обратная связь данных</button><button data-view-button="model" onclick="switchView('model')" data-i18n="navModel">Методика</button></div>
       <div class="top-actions"><span class="live" data-i18n="online">Система доступна</span><div id="currentUser" class="current-user" hidden></div><button id="logoutButton" class="logout-button" type="button" data-wf-i18n="logout">Выйти</button><button class="icon-button" onclick="toggleFullscreen()" data-i18n-title="fullscreen" title="Полный экран">⛶</button><div class="lang"><button data-lang="ru" class="active" onclick="setLanguage('ru')">RU</button><button data-lang="zh" onclick="setLanguage('zh')">中文</button></div></div>
     </header>
 
@@ -543,6 +545,14 @@
         </div>
       </section>
 
+      <section id="view-governance" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-gov-i18n="govEyebrow">УПРАВЛЕНИЕ МОДЕЛЯМИ</span><h1 data-gov-i18n="govTitle">Центр моделей</h1><p data-gov-i18n="govSubtitle">Версии, статусы, метрики независимой проверки, история активаций и откат.</p></div><button id="refreshGovernance" class="btn btn-secondary" type="button" data-gov-i18n="refresh">Обновить</button></div>
+        <div id="governanceContent" class="governance-content"></div>
+      </section>
+      <section id="view-feedback" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-gov-i18n="fbEyebrow">УПРАВЛЕНИЕ ДАННЫМИ</span><h1 data-gov-i18n="fbTitle">Обратная связь по результатам</h1><p data-gov-i18n="fbSubtitle">Каждый результат проходит проверку пригодности до обучения.</p></div><button id="refreshFeedback" class="btn btn-secondary" type="button" data-gov-i18n="refresh">Обновить</button></div>
+        <div id="feedbackContent" class="governance-content"></div>
+      </section>
       <section id="view-model" class="view">
         <div class="page-heading"><div><h1 data-i18n="modelTitle">Методика демонстрационного прототипа</h1><p data-i18n="modelSub">Что именно подтверждает MVP и где проходят границы доказательства</p></div><button class="btn btn-soft" onclick="window.open('/docs','_blank')">OpenAPI ↗</button></div>
         <div class="model-grid">
@@ -758,5 +768,6 @@
   setLanguage(lang);
 </script>
 <script src="/static/workflow.js"></script>
+<script src="/static/governance.js"></script>
 </body>
 </html>

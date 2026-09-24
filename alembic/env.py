@@ -16,6 +16,7 @@ import app.models_advanced  # noqa: F401  Registers advanced evidence metadata.
 import app.models_outcome  # noqa: F401  Registers outcome calibration metadata.
 import app.models_lifecycle  # noqa: F401  Registers governed lifecycle metadata.
 import app.models_governance  # noqa: F401  Registers calibration governance metadata.
+import app.models_model_governance  # noqa: F401  Registers model and data governance metadata.
 
 
 config = context.config
