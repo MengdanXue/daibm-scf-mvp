@@ -416,3 +416,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .account-card,.application-item,.facility-list-item { transition: none; }
   .facility-view * { scroll-behavior: auto !important; animation: none !important; }
 }
+.facility-history-rail { margin: 0; padding: 0 0 0 14px; display: grid; gap: 8px; list-style: none; border-left: 2px solid #d8e2ef; }
+.facility-history-rail li { display: grid; gap: 2px; min-width: 0; }
+.facility-history-rail b { font-size: 13px; }
+.facility-history-rail small, .facility-history-rail em { color: #6d7890; font-size: 11px; font-style: normal; overflow-wrap: anywhere; }
