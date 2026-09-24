@@ -129,6 +129,7 @@ Offline research pipeline
 
 - `GET /api/health` — PostgreSQL и целостность реестра / PostgreSQL 与账本健康状态；
 - `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` — вход, выход и текущая роль / 登录、退出与当前角色；
+- `GET/POST /api/v1/model-versions`, `GET /api/v1/model-versions/{id}`, `POST /api/v1/model-versions/{id}/activate`, `POST /api/v1/model-versions/{id}/rollback`, `GET /api/v1/model-versions/activation-history` — версии моделей: регистрация, оценка, активация с проверкой хеша, откат и журнал / 模型版本注册表：注册、评估、校验哈希后激活、回滚与激活历史（推理按 scope 查询 ACTIVE 版本；`CALIBRATION_AUTO_PROMOTION=false` 时候选需审计员人工激活，见 [PHASE2.1_MODEL_REGISTRY_REPORT.md](PHASE2.1_MODEL_REGISTRY_REPORT.md)）；
 - `GET /api/v1/model-registry`, `POST /api/v1/model-registry/calibration/{id}/retire`, `GET /api/v1/outcome-governance/summary`, `POST /api/v1/outcomes/{id}/supersede`, `GET /api/v1/outcomes/{id}/lineage`, `GET /api/v1/applications/{id}/risk-decisions` — модельный реестр, проверка результатов и аудит решений / 模型注册表、结果资格审查与风险决策审计（见 [docs/product/model-governance.md](docs/product/model-governance.md)）；
 - `GET /api/v1/dashboard`, `GET /api/v1/tasks` — ролевые показатели и очередь задач / 角色指标与待办；
 - `GET /api/v1/organizations/core-enterprises` — доступный справочник якорных компаний из PostgreSQL / PostgreSQL 中可选核心企业目录；

@@ -561,7 +561,9 @@ def test_governance_pages_expose_model_center_feedback_and_decision_detail():
     assert html.index("/static/workflow.js") < html.index("/static/governance.js")
     for path in (
         "/api/v1/model-registry",
-        "/api/v1/calibration-deployments/rollback",
+        "/api/v1/model-versions",
+        "/api/v1/model-versions/activation-history",
+        "/${action}",
         "/retire",
         "/api/v1/outcome-governance/summary",
         "/lineage",
@@ -569,11 +571,17 @@ def test_governance_pages_expose_model_center_feedback_and_decision_detail():
         "/risk-decisions",
     ):
         assert path in governance, path
-    for key in ("navGovernance", "navFeedback", "rollback", "retire", "decisionTitle",
+    for key in ("navGovernance", "navFeedback", "rollback", "retire", "activate", "candidates",
+                "activationHistory", "activatedAt", "promotionReason", "decisionTitle",
                 "scopeCheck", "artifactHash", "ROLLED_BACK", "TRAINING_USED"):
         assert governance.count(f"{key}:") == 2, key
     assert 'id="riskDecisionDetail"' in workflow
     assert "window.governanceRiskDecision" in workflow
     # Destructive actions are offered only to auditors and only when allowed.
     assert 'auditor && model.can_rollback' in governance
-    assert 'auditor && model.can_retire' in governance
+    assert 'auditor && model.can_activate' in governance
+    assert 'auditor && retirable' in governance
+    for element in ('id="governanceActive"', 'id="modelCandidates"', 'id="activationHistory"',
+                    'id="modelRegistryTable"', 'id="activateVersionForm"',
+                    'id="rollbackVersionForm"', 'id="modelEvents"', 'id="artifactCheck"'):
+        assert element in governance, element

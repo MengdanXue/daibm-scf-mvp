@@ -149,7 +149,7 @@ class CalibrationRunModel(Base):
         ),
         CheckConstraint(
             "activation_mode IS NULL OR activation_mode IN "
-            "('automatic', 'manual_rollback')",
+            "('automatic', 'manual_rollback', 'manual_promotion')",
             name="ck_calibration_runs_activation_mode",
         ),
         CheckConstraint(

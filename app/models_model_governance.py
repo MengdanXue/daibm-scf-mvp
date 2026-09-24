@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -183,8 +184,12 @@ class RiskDecisionRecordModel(Base):
     )
     fallback_code: Mapped[str | None] = mapped_column(Text)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    model_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("risk_model_versions.id", ondelete="RESTRICT")
+    )
 
 
+Index("ix_risk_decision_records_model_version_id", RiskDecisionRecordModel.model_version_id)
 Index(
     "ix_risk_decision_records_request_id",
     RiskDecisionRecordModel.request_id,
@@ -199,4 +204,157 @@ Index(
 Index("ix_risk_decision_records_recorded_at", RiskDecisionRecordModel.recorded_at)
 
 
-__all__ = ["ModelRegistryEventModel", "OutcomeReviewEventModel", "RiskDecisionRecordModel"]
+
+
+class RiskModelVersionModel(Base):
+    """Registry of record: one governed version per calibration artifact."""
+
+    __tablename__ = "risk_model_versions"
+    __table_args__ = (
+        UniqueConstraint("model_id", "version", name="uq_risk_model_versions_model_version"),
+        UniqueConstraint("calibration_run_id", name="uq_risk_model_versions_artifact"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'EVALUATING', 'CANDIDATE', 'ACTIVE', 'ROLLED_BACK', "
+            "'RETIRED', 'REJECTED')",
+            name="ck_risk_model_versions_status",
+        ),
+        CheckConstraint("model_type IN ('platt_calibration')", name="ck_risk_model_versions_type"),
+        CheckConstraint(
+            "scope IN ('controlled_demo', 'external_verified', 'mixed')",
+            name="ck_risk_model_versions_scope",
+        ),
+        CheckConstraint(
+            "artifact_hash ~ '^[0-9a-f]{64}$' AND training_dataset_version ~ '^[0-9a-f]{64}$'",
+            name="ck_risk_model_versions_hashes",
+        ),
+        CheckConstraint(
+            "version >= 1 AND status_sequence >= 1", name="ck_risk_model_versions_counters"
+        ),
+        CheckConstraint(
+            "(evaluation IS NULL) = (evaluation_passed IS NULL) "
+            "AND (evaluation IS NULL) = (evaluated_at IS NULL)",
+            name="ck_risk_model_versions_evaluation",
+        ),
+        CheckConstraint(
+            "status <> 'ACTIVE' OR (evaluation_passed IS TRUE AND activated_at IS NOT NULL "
+            "AND promotion_reason IS NOT NULL)",
+            name="ck_risk_model_versions_active_contract",
+        ),
+        CheckConstraint(
+            "status NOT IN ('CANDIDATE', 'ACTIVE') OR evaluation_passed IS TRUE",
+            name="ck_risk_model_versions_evaluated_contract",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_type: Mapped[str] = mapped_column(Text, nullable=False)
+    calibration_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("calibration_runs.calibration_run_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    artifact_path: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    training_dataset_version: Mapped[str] = mapped_column(Text, nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    evaluation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    evaluation_passed: Mapped[bool | None] = mapped_column(Boolean)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    status_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    promotion_reason: Mapped[str | None] = mapped_column(Text)
+    previous_active_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("risk_model_versions.id", ondelete="RESTRICT")
+    )
+
+
+Index(
+    "uq_risk_model_versions_active_scope",
+    RiskModelVersionModel.scope,
+    unique=True,
+    postgresql_where=text("status = 'ACTIVE'"),
+)
+Index("ix_risk_model_versions_status", RiskModelVersionModel.status)
+Index("ix_risk_model_versions_created_by_user_id", RiskModelVersionModel.created_by_user_id)
+Index(
+    "ix_risk_model_versions_previous_active_version_id",
+    RiskModelVersionModel.previous_active_version_id,
+)
+
+
+class RiskModelVersionTransitionModel(Base):
+    __tablename__ = "risk_model_version_transitions"
+    __table_args__ = (
+        CheckConstraint(
+            "from_status IS NULL OR from_status IN ('DRAFT', 'EVALUATING', 'CANDIDATE', "
+            "'ACTIVE', 'ROLLED_BACK', 'RETIRED', 'REJECTED')",
+            name="ck_risk_model_version_transitions_from",
+        ),
+        CheckConstraint(
+            "to_status IN ('DRAFT', 'EVALUATING', 'CANDIDATE', 'ACTIVE', 'ROLLED_BACK', "
+            "'RETIRED', 'REJECTED')",
+            name="ck_risk_model_version_transitions_to",
+        ),
+        CheckConstraint(
+            "from_status IS DISTINCT FROM to_status",
+            name="ck_risk_model_version_transitions_changes",
+        ),
+        CheckConstraint(
+            "to_status <> 'ACTIVE' OR evaluation_metrics IS NOT NULL",
+            name="ck_risk_model_version_transitions_activation_evidence",
+        ),
+        UniqueConstraint(
+            "model_version_id",
+            "status_sequence",
+            name="uq_risk_model_version_transitions_sequence",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    model_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("risk_model_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    from_status: Mapped[str | None] = mapped_column(Text)
+    to_status: Mapped[str] = mapped_column(Text, nullable=False)
+    status_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT")
+    )
+    actor_label: Mapped[str] = mapped_column(Text, nullable=False)
+    evaluation_metrics: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    artifact_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
+    )
+
+
+Index(
+    "ix_risk_model_version_transitions_actor_user_id",
+    RiskModelVersionTransitionModel.actor_user_id,
+)
+Index(
+    "ix_risk_model_version_transitions_recorded_at",
+    RiskModelVersionTransitionModel.recorded_at,
+)
+
+
+__all__ = [
+    "ModelRegistryEventModel",
+    "OutcomeReviewEventModel",
+    "RiskDecisionRecordModel",
+    "RiskModelVersionModel",
+    "RiskModelVersionTransitionModel",
+]

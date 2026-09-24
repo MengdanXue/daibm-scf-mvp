@@ -178,21 +178,24 @@ def test_scope_is_required_at_inference_and_repository_boundaries():
 
 
 def test_scope_mismatch_keeps_attempted_run_lineage():
-    class Repository:
-        def get_active_run(self, session, *, scope):
+    class Registry:
+        def get_active_version(self, session, *, scope):
             return (
                 None
                 if scope == "external_verified"
                 else SimpleNamespace(
-                    calibration_run_id="demo-run", deployment_scope="controlled_demo"
+                    id="demo-version", calibration_run_id="demo-run", scope="controlled_demo"
                 )
             )
 
-    result = AdaptiveRiskInferenceService(Repository()).assess(None, 0.4, "external_verified")
+    result = AdaptiveRiskInferenceService(registry=Registry()).assess(
+        None, 0.4, "external_verified"
+    )
     assert result.final_score == 0.4
     assert result.calibration_run_id is None
     assert result.fallback_code == "calibration_scope_mismatch"
     assert result.attempted_calibration_run_id == "demo-run"
+    assert result.attempted_model_version_id == "demo-version"
 
 
 def test_rollback_body_requires_explicit_scope():

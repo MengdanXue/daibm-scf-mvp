@@ -32,7 +32,9 @@ from app.models_lifecycle import (
 from app.models_model_governance import ModelRegistryEventModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel, RiskAssessmentModel
+from app.domain.model_registry import ModelVersionStatus
 from app.repositories.ledger import LedgerRepository
+from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import (
     ActualOutcomeCreate,
@@ -58,6 +60,10 @@ from app.services.outcome_calibration import (
     recover_candidate_artifact,
     stage_candidate_artifact,
 )
+
+
+SYSTEM_ACTOR = "system:calibration-worker"
+AWAITING_PROMOTION = "awaiting_manual_promotion"
 
 
 class OutcomeError(Exception):
@@ -146,10 +152,15 @@ class OutcomeService:
         artifact_writer: ArtifactWriter = stage_candidate_artifact,
         training_config: CalibrationTrainingConfig | None = None,
         clock: Callable[[], datetime] | None = None,
+        model_registry: ModelRegistryRepository | None = None,
+        auto_promotion: bool = True,
     ) -> None:
         self.session_factory = session_factory
         self.artifact_root = Path(artifact_root)
         self.repository = repository or OutcomeRepository()
+        self.model_registry = model_registry or ModelRegistryRepository()
+        # When false, a validated candidate waits for an auditor's promotion.
+        self.auto_promotion = auto_promotion
         self.ledger_repository = ledger_repository or LedgerRepository()
         self.trainer = trainer
         self.artifact_writer = artifact_writer
@@ -759,6 +770,7 @@ class OutcomeService:
         user: AuthenticatedUser,
         *,
         scope: str,
+        reason: str = "manual_rollback",
     ) -> dict[str, Any]:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
@@ -779,6 +791,8 @@ class OutcomeService:
                 raise OutcomeConflict("rollback predecessor is unavailable")
             if restored.deployment_scope != scope:
                 raise OutcomeConflict("rollback predecessor scope is inconsistent")
+            if restored.retired_at is not None:
+                raise OutcomeConflict("rollback predecessor has been retired")
             if not self.repository.run_membership_is_eligible(
                 session, restored.calibration_run_id, scope=scope
             ):
@@ -803,7 +817,7 @@ class OutcomeService:
             restored.activation_mode = "manual_rollback"
             restored.activated_at = now
             restored.deactivated_at = None
-            restored.activation_reason = "manual_rollback"
+            restored.activation_reason = reason
             session.flush()
             self.ledger_repository.append_many(
                 session,
@@ -816,11 +830,231 @@ class OutcomeService:
                             "restored_run_id": str(restored.calibration_run_id),
                             "deployment_scope": restored.deployment_scope,
                             "expected_active_run_id": str(expected_id),
+                            **({} if reason == "manual_rollback" else {"reason": reason}),
                         },
                     )
                 ],
             )
             return self._serialize_run(restored, session=session)
+
+    def register_version(
+        self,
+        run_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> uuid.UUID:
+        """Register a published artifact that has no version and evaluate it.
+
+        Evaluation is the same independent-holdout gate the worker applies; a
+        passing version becomes CANDIDATE and waits for manual promotion.
+        """
+
+        self._require_auditor(user)
+        normalized = self._uuid(run_id)
+        with self.session_factory.begin() as session:
+            unlocked = self.repository.get_run(session, normalized)
+            if unlocked is None:
+                raise OutcomeNotFound("calibration run")
+            self._acquire_run_lock(session, unlocked.deployment_scope)
+            run = self.repository.get_run_for_update(session, normalized)
+            assert run is not None
+            if run.artifact_locator is None or run.artifact_sha256 is None:
+                raise OutcomeConflict("calibration run has no published artifact")
+            if self.model_registry.get_by_run(session, normalized) is not None:
+                raise OutcomeConflict("calibration artifact is already registered")
+            self.set_governance_actor(session, user)
+            version = self.model_registry.register(
+                session,
+                run,
+                created_by=user.username,
+                created_by_user_id=user.user_id,
+                reason="manual_registration",
+            )
+            memberships = tuple(self.repository.list_run_membership(session, normalized))
+            try:
+                candidate = self._candidate_from_run(run, memberships)
+            except (OSError, KeyError, TypeError, ValueError) as error:
+                self.model_registry.record_evaluation(
+                    session,
+                    version,
+                    evidence={"artifact_integrity": "invalid", "error": type(error).__name__},
+                    passed=False,
+                    reason="evaluation_failed:artifact_unverified",
+                )
+                return version.id
+            try:
+                self._verify_version_artifact(
+                    path=version.artifact_path,
+                    expected_sha256=version.artifact_hash,
+                    run_id=run.calibration_run_id,
+                    scope=run.deployment_scope,
+                    dataset_sha256=run.dataset_sha256,
+                )
+                integrity = "verified"
+            except OutcomeConflict:
+                integrity = "invalid"
+            member_ids = {item.outcome_id for item in memberships}
+            provenances = tuple(
+                item.provenance
+                for item in self.repository.list_all_outcomes(session)
+                if item.outcome_id in member_ids
+            )
+            decision = evaluate_activation_gate(
+                candidate, artifact_integrity=integrity, provenances=provenances
+            )
+            evidence = independent_validation_evidence(candidate)
+            reason = decision.reason
+            if decision.activate and not evidence["independent"]:
+                reason = "validation_not_independent"
+            elif decision.deployment_scope != run.deployment_scope:
+                reason = "deployment_scope_mismatch"
+            elif run.deployment_status != "not_deployed":
+                reason = f"artifact_not_deployable:{run.deployment_status}"
+            passed = reason == decision.reason and decision.activate
+            self.model_registry.record_evaluation(
+                session,
+                version,
+                evidence={
+                    **evidence,
+                    "gate_reason": decision.reason,
+                    "artifact_integrity": integrity,
+                    "artifact_sha256": run.artifact_sha256,
+                },
+                passed=passed,
+                reason="evaluation_passed" if passed else f"evaluation_failed:{reason}",
+            )
+            if passed:
+                # A manually registered candidate is never auto-activated.
+                run.activation_reason = AWAITING_PROMOTION
+            return version.id
+
+    def promote_version(
+        self,
+        version_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+        *,
+        reason: str,
+    ) -> uuid.UUID:
+        """Promote an evaluated CANDIDATE to ACTIVE after re-verifying its artifact.
+
+        The previous ACTIVE version of the scope is superseded in the same
+        transaction; the promotion transition records the reason, the
+        evaluation metrics and the verified artifact hash.
+        """
+
+        self._require_auditor(user)
+        normalized = self._uuid(version_id)
+        with self.session_factory.begin() as session:
+            unlocked = self.model_registry.get(session, normalized)
+            if unlocked is None:
+                raise OutcomeNotFound("model version")
+            scope = unlocked.scope
+            self._acquire_run_lock(session, scope)
+            version = self.model_registry.get(session, normalized, for_update=True)
+            assert version is not None
+            if version.status != ModelVersionStatus.CANDIDATE.value:
+                raise OutcomeConflict(f"model version is {version.status}, not CANDIDATE")
+            if not version.evaluation_passed or version.evaluation is None:
+                raise OutcomeConflict("model version has no passed evaluation")
+            run = self.repository.get_run_for_update(session, version.calibration_run_id)
+            if run is None or run.deployment_status != "not_deployed":
+                raise OutcomeConflict("model artifact is no longer deployable")
+            if run.status != "eligible_candidate" or scope not in (
+                "controlled_demo",
+                "external_verified",
+            ):
+                raise OutcomeConflict("model scope is not deployable")
+            if not self.repository.run_membership_matches_eligible_snapshot(
+                session, run.calibration_run_id, scope=scope
+            ):
+                raise OutcomeConflict("training data changed since evaluation; retrain")
+            actual_hash = self._verify_version_artifact(
+                path=version.artifact_path,
+                expected_sha256=version.artifact_hash,
+                run_id=run.calibration_run_id,
+                scope=scope,
+                dataset_sha256=version.training_dataset_version,
+            )
+            previous = self.repository.get_active_run(session, scope=scope, for_update=True)
+            if previous is not None and not is_strictly_newer_candidate(
+                run.sample_count, active_sample_count=previous.sample_count
+            ):
+                raise OutcomeConflict("candidate is not newer than the ACTIVE model")
+            now = self._now()
+            self.set_governance_actor(session, user)
+            if previous is not None:
+                previous.deployment_status = "superseded"
+                previous.deactivated_at = now
+                session.flush()
+            self.model_registry.transition(
+                session,
+                version,
+                ModelVersionStatus.ACTIVE,
+                reason=reason,
+                metrics={
+                    "evaluation": version.evaluation,
+                    "artifact_sha256_verified": actual_hash,
+                },
+            )
+            run.deployment_status = "active"
+            run.activation_mode = "manual_promotion"
+            run.activation_reason = reason
+            run.activated_at = now
+            run.deactivated_at = None
+            run.previous_active_run_id = (
+                previous.calibration_run_id if previous is not None else None
+            )
+            session.flush()
+            self._registry_event(session, run, "PROMOTION_DECISION", reason="manually_promoted")
+            self.ledger_repository.append_many(
+                session,
+                run.calibration_run_id,
+                [
+                    (
+                        "CALIBRATION_MANUALLY_ACTIVATED",
+                        {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "model_version_id": str(version.id),
+                            "deployment_scope": scope,
+                            "promotion_reason": reason,
+                            "previous_active_run_id": (
+                                str(previous.calibration_run_id)
+                                if previous is not None
+                                else None
+                            ),
+                            "artifact_sha256": actual_hash,
+                            "promoted_by_user_id": str(user.user_id),
+                        },
+                    )
+                ],
+            )
+            return version.id
+
+    @staticmethod
+    def _verify_version_artifact(
+        *,
+        path: str,
+        expected_sha256: str,
+        run_id: uuid.UUID,
+        scope: str,
+        dataset_sha256: str,
+    ) -> str:
+        try:
+            actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError as error:
+            raise OutcomeConflict("model artifact is unavailable") from error
+        if actual != expected_sha256:
+            raise OutcomeConflict("model artifact hash does not match the registry")
+        try:
+            load_verified_calibration(
+                Path(path),
+                expected_sha256=expected_sha256,
+                run_id=str(run_id),
+                deployment_scope=scope,
+                expected_dataset_sha256=dataset_sha256,
+            )
+        except ValueError as error:
+            raise OutcomeConflict("model artifact failed verification") from error
+        return actual
 
     def _validate_submission_snapshot(
         self,
@@ -1325,6 +1559,31 @@ class OutcomeService:
         evidence = independent_validation_evidence(candidate)
         if decision.activate and not evidence["independent"]:
             decision = ActivationDecision(False, "validation_not_independent", scope)
+        version = self.model_registry.get_by_run(
+            session, run.calibration_run_id
+        ) or self.model_registry.register(
+            session,
+            run,
+            created_by=SYSTEM_ACTOR,
+            created_by_user_id=None,
+        )
+        if version.status in (
+            ModelVersionStatus.DRAFT.value,
+            ModelVersionStatus.EVALUATING.value,
+        ):
+            passed = decision.activate and decision.deployment_scope == scope
+            self.model_registry.record_evaluation(
+                session,
+                version,
+                evidence={
+                    **evidence,
+                    "gate_reason": decision.reason,
+                    "artifact_integrity": integrity,
+                    "artifact_sha256": run.artifact_sha256,
+                },
+                passed=passed,
+                reason="evaluation_passed" if passed else f"evaluation_failed:{decision.reason}",
+            )
         self._registry_event(
             session,
             run,
@@ -1384,6 +1643,12 @@ class OutcomeService:
                     "active_sample_count": previous.sample_count,
                     "artifact_integrity": integrity,
                 }
+            elif not self.auto_promotion:
+                # Validated but held: the version stays CANDIDATE until an
+                # auditor promotes it through the model registry.
+                run.activation_reason = AWAITING_PROMOTION
+                event_type = ""
+                payload = {}
             else:
                 if previous is not None:
                     previous.deployment_status = "superseded"
@@ -1421,11 +1686,12 @@ class OutcomeService:
                 else f"not_promoted:{run.activation_reason}"
             ),
         )
-        self.ledger_repository.append_many(
-            session,
-            run.calibration_run_id,
-            [(event_type, payload)],
-        )
+        if event_type:
+            self.ledger_repository.append_many(
+                session,
+                run.calibration_run_id,
+                [(event_type, payload)],
+            )
 
     def _registry_event(
         self,

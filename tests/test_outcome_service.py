@@ -29,6 +29,7 @@ from app.models_lifecycle import (
     FacilityWriteOffModel,
 )
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
+from app.models_model_governance import RiskModelVersionModel, RiskModelVersionTransitionModel
 from app.models_research import (
     DatasetVersionModel,
     GraphSnapshotModel,
@@ -203,7 +204,35 @@ def _active_run_with_membership(session_factory, outcome_id: uuid.UUID, scope: s
             calibration_run_id=run_id, outcome_id=outcome_id,
             correction_head_id=None,
         ))
+        _register_active_version(session, session.get(CalibrationRunModel, run_id))
     return run_id
+
+
+def _register_active_version(session, run: CalibrationRunModel) -> None:
+    """Fixture runs are inserted ACTIVE, so their registry version is too."""
+
+    version_id = uuid.uuid4()
+    evaluation = {"source": "test_fixture", "passed": True}
+    session.add(RiskModelVersionModel(
+        id=version_id, model_id=f"calibration:{run.deployment_scope}",
+        version=1 + (session.scalar(
+            select(func.count()).select_from(RiskModelVersionModel).where(
+                RiskModelVersionModel.scope == run.deployment_scope
+            )
+        ) or 0),
+        model_type="platt_calibration", calibration_run_id=run.calibration_run_id,
+        artifact_path=run.artifact_locator, artifact_hash=run.artifact_sha256,
+        scope=run.deployment_scope, training_dataset_version=run.dataset_sha256,
+        metrics={}, evaluation=evaluation, evaluation_passed=True, evaluated_at=NOW,
+        status="ACTIVE", status_sequence=1, created_by="test_fixture",
+        created_at=NOW, activated_at=NOW, promotion_reason=run.activation_reason,
+    ))
+    session.flush()
+    session.add(RiskModelVersionTransitionModel(
+        model_version_id=version_id, from_status=None, to_status="ACTIVE",
+        status_sequence=1, reason="test_fixture", actor_label="test_fixture",
+        evaluation_metrics=evaluation, artifact_hash=run.artifact_sha256,
+    ))
 
 
 def _candidate_run_with_membership(

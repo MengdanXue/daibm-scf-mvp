@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,6 +45,15 @@ from app.services.outcomes import OutcomeService
 from app.services.calibration_jobs import CalibrationJobService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _auto_promotion_enabled() -> bool:
+    """CALIBRATION_AUTO_PROMOTION=false holds validated candidates for an auditor."""
+
+    raw = os.environ.get("CALIBRATION_AUTO_PROMOTION", "true").strip().lower()
+    if raw not in {"true", "false"}:
+        raise ValueError("CALIBRATION_AUTO_PROMOTION must be true or false")
+    return raw == "true"
 
 
 def create_app(
@@ -94,8 +104,11 @@ def create_app(
             / "candidates"
             / "calibration"
         ),
+        auto_promotion=_auto_promotion_enabled(),
     )
-    model_registry_service = ModelRegistryService(active_database.session_factory)
+    model_registry_service = ModelRegistryService(
+        active_database.session_factory, outcome_service=outcome_service
+    )
     calibration_job_service = CalibrationJobService(
         active_database.session_factory,
         outcome_service=outcome_service,
