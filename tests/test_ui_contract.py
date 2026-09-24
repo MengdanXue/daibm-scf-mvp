@@ -514,3 +514,37 @@ def test_browser_script_requires_explicit_video_flag():
     assert "record_video_dir" in source
     assert "record_video=False" in source
     assert "def run_acceptance(" in source
+
+
+def test_facility_ui_covers_governed_lifecycle_actions_bilingually():
+    javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for action in (
+        "open_disposal",
+        "close_disposal",
+        "restructure",
+        "declare_default",
+        "start_recovery",
+        "record_recovery",
+        "write_off",
+    ):
+        assert f'"{action}"' in javascript
+    assert '"/recoveries"' in javascript
+    assert 'action.replace("_", "-")' in javascript
+    for key in (
+        "in_disposal",
+        "in_recovery",
+        "recovered",
+        "written_off",
+        "facilityHistory",
+        "facilityContracts",
+        "facilityNetLoss",
+        "facilityArrears",
+    ):
+        assert javascript.count(f"{key}:") == 2, key
+    # Evidence references are hashed in the browser for every governed command,
+    # including mark-overdue, whose API requires days_past_due and a hash.
+    assert "days_past_due: Number(data.get(\"days_past_due\"))" in javascript
+    assert javascript.count("await hashEvidenceReference(reference)") >= 3
+    assert "facility.status_history" in javascript
+    assert "facility.contract_versions" in javascript

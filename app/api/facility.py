@@ -8,12 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import current_user
+from app.domain.facility import state_machine_definition
 from app.identity import AuthenticatedUser
 from app.schemas_facility import (
     CreateFacilityRequest,
     DeclareDefaultRequest,
     DecisionPaymentRequest,
+    LifecycleDecisionRequest,
     MarkOverdueRequest,
+    RecordRecoveryRequest,
     RestructureFacilityRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
@@ -106,6 +109,59 @@ class FacilityWriteOffResponse(BaseModel):
     recorded_at: str
 
 
+class FacilityRecoveryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recovery_id: str
+    amount: str
+    applied_to: Literal["outstanding", "written_off"]
+    source: str
+    recovery_reference: str
+    evidence_sha256: str
+    recorded_by_user_id: str
+    recorded_at: str
+
+
+class FacilityLifecycleDecisionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision_id: str
+    decision_type: Literal["disposal_opened", "disposal_closed", "recovery_started"]
+    schedule_version: int
+    decided_by_user_id: str
+    reason_code: str
+    comment: str
+    evidence_sha256: str
+    recorded_at: str
+
+
+class FacilityContractVersionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: int
+    origin: Literal["origination", "restructure", "migration_backfill"]
+    principal: str
+    outstanding_at_start: str | None
+    currency: str
+    schedule: list[dict[str, Any]]
+    superseded_schedule: list[dict[str, Any]] | None
+    restructure_id: str | None
+    terms_sha256: str
+    recorded_at: str
+
+
+class FacilityStatusTransitionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    from_status: str | None
+    to_status: str
+    trigger_action: str
+    actor_role: str | None
+    resulting_version: int
+    reason_code: str | None
+    recorded_at: str
+
+
 class FacilityResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -125,7 +181,21 @@ class FacilityResponse(BaseModel):
     realized_loss: str = Field(
         description="Realized principal loss, equal to the written-off amount."
     )
-    settlement_classification: Literal["NORMAL_SETTLED", "WRITTEN_OFF"] | None
+    recovery_collected_amount: str = Field(
+        description="Recovery cash from third-party sources applied to the live balance."
+    )
+    post_writeoff_recovery_amount: str = Field(
+        description="Recovery cash collected on the claim after it was written off."
+    )
+    net_loss: str = Field(
+        description="Written-off amount less recoveries collected after write-off."
+    )
+    arrears_amount: str = Field(
+        description="Unpaid amount of current-schedule installments already past due."
+    )
+    settlement_classification: (
+        Literal["NORMAL_SETTLED", "SETTLED_AFTER_DEFAULT", "WRITTEN_OFF"] | None
+    )
     currency: str
     status: str
     version: int
@@ -147,6 +217,10 @@ class FacilityResponse(BaseModel):
     default_event: FacilityDefaultResponse | None
     default_history: list[FacilityDefaultResponse]
     writeoff_event: FacilityWriteOffResponse | None
+    recoveries: list[FacilityRecoveryResponse]
+    lifecycle_decisions: list[FacilityLifecycleDecisionResponse]
+    contract_versions: list[FacilityContractVersionResponse]
+    status_history: list[FacilityStatusTransitionResponse]
 
 
 def _execute(operation: Callable[[], Any]) -> Any:
@@ -216,6 +290,13 @@ def list_facilities(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/state-machine")
+def facility_state_machine(user: CurrentUser) -> dict[str, Any]:
+    """Stages, entry conditions, role actions and every legal status change."""
+
+    return state_machine_definition()
 
 
 @router.get("/{facility_id}", response_model=FacilityResponse)
@@ -339,6 +420,82 @@ def restructure_facility(
 ):
     return _execute(
         lambda: request.app.state.facility_service.restructure(
+            facility_id,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/open-disposal",
+    response_model=FacilityResponse,
+)
+def open_disposal(
+    facility_id: str,
+    payload: LifecycleDecisionRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.open_disposal(
+            facility_id,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/close-disposal",
+    response_model=FacilityResponse,
+)
+def close_disposal(
+    facility_id: str,
+    payload: LifecycleDecisionRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.close_disposal(
+            facility_id,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/start-recovery",
+    response_model=FacilityResponse,
+)
+def start_recovery(
+    facility_id: str,
+    payload: LifecycleDecisionRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.start_recovery(
+            facility_id,
+            payload,
+            user,
+        )
+    )
+
+
+@router.post(
+    "/{facility_id}/recoveries",
+    response_model=FacilityResponse,
+)
+def record_recovery(
+    facility_id: str,
+    payload: RecordRecoveryRequest,
+    user: CurrentUser,
+    request: Request,
+):
+    return _execute(
+        lambda: request.app.state.facility_service.record_recovery(
             facility_id,
             payload,
             user,
