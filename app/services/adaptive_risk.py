@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from app.domain.governance import ScopeResult, check_scope
 from app.repositories.outcomes import OutcomeRepository
 from app.services.outcome_calibration import (
     CalibrationCandidate,
@@ -53,6 +54,10 @@ class AdaptiveRiskResult:
     deployment_scope: str | None
     fallback_code: str | None
     attempted_calibration_run_id: str | None = None
+    artifact_sha256: str | None = None
+    model_scope: str | None = None
+    scope_result: str = "no_active_model"
+    scope_reason: str = "no_active_model_in_scope"
 
 
 class AdaptiveRiskInferenceService:
@@ -73,10 +78,14 @@ class AdaptiveRiskInferenceService:
             )
             incompatible = self.repository.get_active_run(session, scope=other_scope)
             if incompatible is not None:
+                decision = check_scope(incompatible.deployment_scope, assessment_scope)
                 return self._fallback(
                     baseline_probability,
                     str(incompatible.calibration_run_id),
                     "calibration_scope_mismatch",
+                    model_scope=incompatible.deployment_scope,
+                    scope_result=decision.result.value,
+                    scope_reason=decision.reason,
                 )
             return AdaptiveRiskResult(
                 raw_score=baseline_probability,
@@ -85,14 +94,26 @@ class AdaptiveRiskInferenceService:
                 deployment_scope=None,
                 fallback_code=None,
             )
-        if active.deployment_scope != assessment_scope:
+        # An ACTIVE artifact is never trusted by status alone: the declared model
+        # scope must pass the compatibility matrix for this request.
+        decision = check_scope(active.deployment_scope, assessment_scope)
+        scope_fields = {
+            "model_scope": active.deployment_scope,
+            "scope_result": decision.result.value,
+            "scope_reason": decision.reason,
+        }
+        if not decision.permits_model:
             return self._fallback(
-                baseline_probability, str(active.calibration_run_id), "calibration_scope_mismatch"
+                baseline_probability,
+                str(active.calibration_run_id),
+                "calibration_scope_mismatch",
+                **scope_fields,
             )
         if active.artifact_locator is None or active.artifact_sha256 is None:
             return self._fallback(
                 baseline_probability,
                 str(active.calibration_run_id),
+                **scope_fields,
             )
         try:
             calibration = load_verified_calibration(
@@ -110,6 +131,7 @@ class AdaptiveRiskInferenceService:
             return self._fallback(
                 baseline_probability,
                 str(active.calibration_run_id),
+                **scope_fields,
             )
         return AdaptiveRiskResult(
             raw_score=baseline_probability,
@@ -117,6 +139,8 @@ class AdaptiveRiskInferenceService:
             calibration_run_id=str(active.calibration_run_id),
             deployment_scope=active.deployment_scope,
             fallback_code=None,
+            artifact_sha256=active.artifact_sha256,
+            **scope_fields,
         )
 
     @staticmethod
@@ -124,6 +148,10 @@ class AdaptiveRiskInferenceService:
         baseline_probability: float,
         attempted_run_id: str,
         reason: str = "active_artifact_invalid",
+        *,
+        model_scope: str | None = None,
+        scope_result: str = ScopeResult.ALLOW.value,
+        scope_reason: str = "scope_match",
     ) -> AdaptiveRiskResult:
         return AdaptiveRiskResult(
             raw_score=baseline_probability,
@@ -132,7 +160,41 @@ class AdaptiveRiskInferenceService:
             deployment_scope=None,
             fallback_code=reason,
             attempted_calibration_run_id=attempted_run_id,
+            model_scope=model_scope,
+            scope_result=scope_result,
+            scope_reason=scope_reason,
         )
+
+
+def independent_validation_evidence(candidate: CalibrationCandidate) -> dict[str, Any]:
+    """Summarize the holdout that decides promotion and prove its independence.
+
+    Promotion must rest on observations the calibration never saw: the
+    validation partition has to be disjoint from, and strictly later than, the
+    training partition. Training-fit diagnostics are deliberately excluded.
+    """
+
+    validation = candidate.artifact.get("validation")
+    if not isinstance(validation, dict):
+        return {"method": None, "independent": False, "reason": "validation_missing"}
+    training = [str(item) for item in validation.get("training_outcome_ids", [])]
+    held_out = [str(item) for item in validation.get("validation_outcome_ids", [])]
+    cutoff = str(validation.get("training_cutoff", ""))
+    start = str(validation.get("validation_start", ""))
+    disjoint = set(training).isdisjoint(held_out)
+    chronological = bool(cutoff) and bool(start) and cutoff < start
+    return {
+        "method": validation.get("method"),
+        "training_count": len(training),
+        "validation_count": len(held_out),
+        "disjoint": disjoint,
+        "chronological": chronological,
+        "training_cutoff": cutoff or None,
+        "validation_start": start or None,
+        "validation_metrics_before": validation.get("metrics_before"),
+        "validation_metrics_after": validation.get("metrics_after"),
+        "independent": bool(training) and bool(held_out) and disjoint and chronological,
+    }
 
 
 def resolve_deployment_scope(provenances: tuple[str, ...]) -> str:

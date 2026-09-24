@@ -129,6 +129,7 @@ Offline research pipeline
 
 - `GET /api/health` — PostgreSQL и целостность реестра / PostgreSQL 与账本健康状态；
 - `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` — вход, выход и текущая роль / 登录、退出与当前角色；
+- `GET /api/v1/model-registry`, `POST /api/v1/model-registry/calibration/{id}/retire`, `GET /api/v1/outcome-governance/summary`, `POST /api/v1/outcomes/{id}/supersede`, `GET /api/v1/outcomes/{id}/lineage`, `GET /api/v1/applications/{id}/risk-decisions` — модельный реестр, проверка результатов и аудит решений / 模型注册表、结果资格审查与风险决策审计（见 [docs/product/model-governance.md](docs/product/model-governance.md)）；
 - `GET /api/v1/dashboard`, `GET /api/v1/tasks` — ролевые показатели и очередь задач / 角色指标与待办；
 - `GET /api/v1/organizations/core-enterprises` — доступный справочник якорных компаний из PostgreSQL / PostgreSQL 中可选核心企业目录；
 - `POST /api/v1/applications`, `GET /api/v1/applications` — создание и доступный реестр заявок / 创建申请与角色可见列表；

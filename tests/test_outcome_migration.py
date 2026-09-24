@@ -96,6 +96,11 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
         "risk_engine_version",
         "risk_input_sha256",
         "recorded_at",
+        # Revision 0016: superseding corrections append revisions.
+        "revision",
+        "supersedes_outcome_id",
+        "correction_reason_code",
+        "correction_comment",
     }
     assert set(run_columns) == {
         "calibration_run_id",
@@ -122,6 +127,11 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
         "activation_reason",
         "started_at",
         "completed_at",
+        # Revision 0016: governed rollback and retirement.
+        "rolled_back_at",
+        "retired_at",
+        "retired_by_user_id",
+        "retirement_reason",
     }
     assert outcome_columns["model_version_id"]["nullable"] is True
     assert outcome_columns["risk_engine_version"]["nullable"] is False
@@ -160,7 +170,12 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
                 )
             )
         )
-    assert triggers == {"trg_actual_outcomes_immutable"}
+    assert triggers == {
+        "trg_actual_outcomes_immutable",
+        # Revision 0016: eligibility review and superseding-revision lineage.
+        "trg_actual_outcomes_review",
+        "trg_actual_outcomes_supersession",
+    }
 
 
 def test_downgrade_refuses_to_drop_immutable_rows_even_without_ledger_events(
@@ -265,22 +280,9 @@ def test_0008_backfills_existing_research_outcome_despite_immutable_trigger(
             ) == "legacy-tgnn@1.2.3"
     finally:
         with migrated_engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE actual_outcomes "
-                    "DISABLE TRIGGER trg_actual_outcomes_immutable"
-                )
-            )
-            connection.execute(
-                text("DELETE FROM actual_outcomes WHERE outcome_id = :outcome_id"),
-                {"outcome_id": outcome_id},
-            )
-            connection.execute(
-                text(
-                    "ALTER TABLE actual_outcomes "
-                    "ENABLE TRIGGER trg_actual_outcomes_immutable"
-                )
-            )
+            # Review history references the outcome and is itself immutable,
+            # so fixture cleanup truncates instead of deleting single rows.
+            connection.execute(text("TRUNCATE actual_outcomes CASCADE"))
             connection.execute(
                 text("DELETE FROM model_versions WHERE model_version_id = :model_id"),
                 {"model_id": model_version_id},
