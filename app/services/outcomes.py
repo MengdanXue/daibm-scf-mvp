@@ -628,7 +628,9 @@ class OutcomeService:
         if user.role not in {"auditor", "risk_manager"}:
             raise ForbiddenOutcome("Only auditors and risk managers can view outcome governance")
         with self.session_factory() as session:
-            rows = self.repository.review_summary(session)
+            rows = self.repository.review_summary(
+                session, facility_ids=PermissionService.visible_facility_ids(session, user)
+            )
         by_scope: dict[str, dict[str, Any]] = {}
         for provenance, status, reason, effective, count in rows:
             scope = self._scope_for_provenance(provenance)
@@ -731,7 +733,9 @@ class OutcomeService:
         self._require_auditor(user)
         with self.session_factory() as session:
             run = self.repository.get_run(session, self._uuid(run_id))
-            if run is None:
+            if run is None or not PermissionService.can_access_organization(
+                session, user, run.organization_id
+            ):
                 raise OutcomeNotFound(str(run_id))
             return self._serialize_run(run, session=session)
 
@@ -743,7 +747,9 @@ class OutcomeService:
         self._require_auditor(user)
         with self.session_factory() as session:
             job = self.repository.get_job(session, self._uuid(job_id))
-            if job is None:
+            if job is None or not PermissionService.can_access_organization(
+                session, user, job.organization_id
+            ):
                 raise OutcomeNotFound(str(job_id))
             return self._serialize_job(job)
 
@@ -760,7 +766,12 @@ class OutcomeService:
             return [
                 self._serialize_run(item, session=session)
                 for item in self.repository.list_runs(
-                    session, limit=limit, offset=offset
+                    session,
+                    limit=limit,
+                    offset=offset,
+                    visibility=PermissionService.organization_filter(
+                        user, CalibrationRunModel.organization_id
+                    ),
                 )
             ]
 
@@ -812,10 +823,17 @@ class OutcomeService:
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                 self._reject_unrecoverable_deployment(run_id)
 
-    def get_active_deployment(self, user: AuthenticatedUser, *, scope: str) -> dict[str, Any]:
+    def get_active_deployment(
+        self,
+        user: AuthenticatedUser,
+        *,
+        scope: str,
+        organization_id: str | uuid.UUID | None = None,
+    ) -> dict[str, Any]:
         self._require_auditor(user)
         with self.session_factory() as session:
-            run = self.repository.get_active_run(session, scope=scope)
+            owner = self.resolve_organization(session, user, organization_id)
+            run = self.repository.get_active_run(session, scope=scope, organization_id=owner)
             if run is None:
                 raise OutcomeNotFound("active calibration deployment")
             return self._serialize_run(run, session=session)
@@ -831,8 +849,23 @@ class OutcomeService:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
         with self.session_factory.begin() as session:
+            # The expected run names the organization; an unknown or foreign
+            # id is simply "not the active run" of the caller's own lender, so
+            # the answer never reveals another organization's runs.
+            expected = self.repository.get_run(session, expected_id)
+            if expected is not None and PermissionService.can_access_organization(
+                session, user, expected.organization_id
+            ):
+                owner = expected.organization_id
+            else:
+                owner = self.resolve_organization(session, user, None)
             self.repository.acquire_scope_lock(session, scope=scope)
-            current = self.repository.get_active_run(session, scope=scope, for_update=True)
+            current = self.repository.get_active_run(
+                session,
+                scope=scope,
+                organization_id=owner,
+                for_update=True,
+            )
             if current is None:
                 raise OutcomeNotFound("active calibration deployment")
             if current.calibration_run_id != expected_id:
@@ -845,7 +878,10 @@ class OutcomeService:
             )
             if restored is None or restored.deployment_status != "superseded":
                 raise OutcomeConflict("rollback predecessor is unavailable")
-            if restored.deployment_scope != scope:
+            if (
+                restored.deployment_scope != scope
+                or restored.organization_id != current.organization_id
+            ):
                 raise OutcomeConflict("rollback predecessor scope is inconsistent")
             if restored.retired_at is not None:
                 raise OutcomeConflict("rollback predecessor has been retired")
@@ -908,7 +944,9 @@ class OutcomeService:
         normalized = self._uuid(run_id)
         with self.session_factory.begin() as session:
             unlocked = self.repository.get_run(session, normalized)
-            if unlocked is None:
+            if unlocked is None or not PermissionService.can_access_organization(
+                session, user, unlocked.organization_id
+            ):
                 raise OutcomeNotFound("calibration run")
             self._acquire_run_lock(session, unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, normalized)
@@ -1001,7 +1039,9 @@ class OutcomeService:
         normalized = self._uuid(version_id)
         with self.session_factory.begin() as session:
             unlocked = self.model_registry.get(session, normalized)
-            if unlocked is None:
+            if unlocked is None or not PermissionService.can_access_organization(
+                session, user, unlocked.organization_id
+            ):
                 raise OutcomeNotFound("model version")
             scope = unlocked.scope
             self._acquire_run_lock(session, scope)
@@ -1030,7 +1070,9 @@ class OutcomeService:
                 scope=scope,
                 dataset_sha256=version.training_dataset_version,
             )
-            previous = self.repository.get_active_run(session, scope=scope, for_update=True)
+            previous = self.repository.get_active_run(
+                session, scope=scope, organization_id=version.organization_id, for_update=True
+            )
             if previous is not None and not is_strictly_newer_candidate(
                 run.sample_count, active_sample_count=previous.sample_count
             ):
@@ -1084,6 +1126,29 @@ class OutcomeService:
                 ],
             )
             return version.id
+
+    @staticmethod
+    def resolve_organization(
+        session: Session, user: AuthenticatedUser, organization_id: str | uuid.UUID | None
+    ) -> uuid.UUID:
+        """The lending organization a model question is about.
+
+        Explicit ids must be in the caller's scope; without one, the caller's
+        only visible lending organization is used.
+        """
+
+        if organization_id is not None:
+            try:
+                owner = uuid.UUID(str(organization_id))
+            except ValueError as error:
+                raise OutcomeNotFound(str(organization_id)) from error
+            if not PermissionService.can_access_organization(session, user, owner):
+                raise OutcomeNotFound(str(organization_id))
+            return owner
+        visible = PermissionService.lending_organizations(session, user)
+        if len(visible) != 1:
+            raise OutcomeConflict("organization_id is required to choose a lending organization")
+        return visible[0]
 
     @staticmethod
     def _verify_version_artifact(
@@ -1681,7 +1746,7 @@ class OutcomeService:
         else:
             now = self._now()
             previous = self.repository.get_active_run(
-                session, scope=scope, for_update=True
+                session, scope=scope, organization_id=run.organization_id, for_update=True
             )
             if previous is not None and not is_strictly_newer_candidate(
                 run.sample_count,
@@ -2172,6 +2237,7 @@ class OutcomeService:
     def _serialize_job(job: CalibrationJobModel) -> dict[str, Any]:
         return {
             "job_id": str(job.job_id),
+            "organization_id": str(job.organization_id),
             "deployment_scope": job.deployment_scope,
             "trigger_type": job.trigger_type,
             "trigger_outcome_id": (
@@ -2258,6 +2324,7 @@ class OutcomeService:
                 fold_assignment_sha256 = value
         return {
             "calibration_run_id": str(run.calibration_run_id),
+            "organization_id": str(run.organization_id),
             "trigger_outcome_id": (
                 str(run.trigger_outcome_id) if run.trigger_outcome_id is not None else None
             ),

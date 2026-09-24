@@ -63,6 +63,7 @@ class CalibrationJobResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     job_id: UUID
+    organization_id: UUID
     deployment_scope: Literal["controlled_demo", "external_verified"]
     trigger_type: Literal[
         "outcome_submitted", "correction_exclude", "correction_reinstate", "outcome_reviewed"

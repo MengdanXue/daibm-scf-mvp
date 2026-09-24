@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     Identity,
     Index,
@@ -220,6 +221,8 @@ class RiskModelVersionModel(Base):
     """Registry of record: one governed version per calibration artifact."""
 
     __tablename__ = "risk_model_versions"
+    # organization_id is read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         UniqueConstraint("model_id", "version", name="uq_risk_model_versions_model_version"),
         UniqueConstraint("calibration_run_id", name="uq_risk_model_versions_artifact"),
@@ -291,10 +294,20 @@ class RiskModelVersionModel(Base):
         ForeignKey("training_dataset_snapshots.snapshot_id", ondelete="RESTRICT"),
         index=True,
     )
+    # Owning (lending) organization; the database fills it from the lineage and
+    # rejects rows whose lineage belongs to another organization.
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=FetchedValue(),
+    )
 
 
 Index(
     "uq_risk_model_versions_active_scope",
+    RiskModelVersionModel.organization_id,
     RiskModelVersionModel.scope,
     unique=True,
     postgresql_where=text("status = 'ACTIVE'"),
@@ -370,9 +383,14 @@ class TrainingDatasetSnapshotModel(Base):
     """Immutable record of exactly what one training attempt was allowed to read."""
 
     __tablename__ = "training_dataset_snapshots"
+    # organization_id is read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         UniqueConstraint(
-            "deployment_scope", "dataset_hash", name="uq_training_dataset_snapshots_hash"
+            "organization_id",
+            "deployment_scope",
+            "dataset_hash",
+            name="uq_training_dataset_snapshots_hash",
         ),
         CheckConstraint(
             "deployment_scope IN ('controlled_demo', 'external_verified', 'mixed')",
@@ -407,6 +425,15 @@ class TrainingDatasetSnapshotModel(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
+    )
+    # Owning (lending) organization; the database fills it from the lineage and
+    # rejects rows whose lineage belongs to another organization.
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=FetchedValue(),
     )
 
 

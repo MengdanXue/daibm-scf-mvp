@@ -28,6 +28,7 @@ from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel
 from app.models_enterprise import AuditGrantModel
 from app.models_facility import FinancingFacilityModel
+from app.models_identity import OrganizationModel
 
 ALL_ROLES = frozenset({"supplier", "core_enterprise", "financier", "risk_manager", "auditor", "admin"})
 BANK_ROLES = frozenset({"financier", "risk_manager"})
@@ -159,6 +160,24 @@ class PermissionService:
         if facility is None or not cls.can_view_facility(session, user, facility):
             raise ResourceNotVisible(str(facility_id))
         return facility
+
+    @classmethod
+    def can_access_organization(
+        cls, session: Session, user: AuthenticatedUser, organization_id: uuid.UUID | None
+    ) -> bool:
+        """Whether an organization-owned record (model, run, snapshot) is in scope."""
+
+        return cls.scope(session, user).allows(organization_id)
+
+    @classmethod
+    def lending_organizations(cls, session: Session, user: AuthenticatedUser) -> list[uuid.UUID]:
+        """Financier organizations whose models and data the caller may see."""
+
+        statement = select(OrganizationModel.organization_id).where(
+            OrganizationModel.organization_type == "financier",
+            cls.organization_filter(user, OrganizationModel.organization_id),
+        )
+        return list(session.scalars(statement.order_by(OrganizationModel.organization_code)))
 
     @staticmethod
     def organization_filter(user: AuthenticatedUser, column: Any) -> ColumnElement[bool]:

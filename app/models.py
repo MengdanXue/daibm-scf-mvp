@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     Identity,
     Index,
@@ -91,10 +92,16 @@ class Base(DeclarativeBase):
 
 class FinancingRequestModel(Base):
     __tablename__ = "financing_requests"
+    # Server-side columns are read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         CheckConstraint(
             "amount > 0",
             name="ck_financing_requests_amount_positive",
+        ),
+        CheckConstraint(
+            "supplier_organization_id IS NULL OR lender_organization_id IS NOT NULL",
+            name="ck_financing_requests_lender",
         ),
         CheckConstraint(
             "term_days BETWEEN 1 AND 365",
@@ -225,6 +232,14 @@ class FinancingRequestModel(Base):
         UUID(as_uuid=True),
         ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
     )
+    # The financier organization the application is addressed to (tenant
+    # boundary of the application stage); fixed once submitted.
+    lender_organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        # Omitted from INSERT when unset, so pre-0021 schemas stay writable.
+        server_default=FetchedValue(),
+    )
     contract_number: Mapped[str | None] = mapped_column(Text)
     invoice_number: Mapped[str | None] = mapped_column(Text)
     trade_evidence_sha256: Mapped[str | None] = mapped_column(Text)
@@ -266,6 +281,10 @@ Index(
 Index(
     "ix_financing_requests_core_enterprise_organization_id",
     FinancingRequestModel.core_enterprise_organization_id,
+)
+Index(
+    "ix_financing_requests_lender_organization_id",
+    FinancingRequestModel.lender_organization_id,
 )
 Index(
     "ix_financing_requests_created_by_user_id",

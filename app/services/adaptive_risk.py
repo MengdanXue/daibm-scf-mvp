@@ -76,18 +76,40 @@ class AdaptiveRiskInferenceService:
         self.registry = registry or ModelRegistryRepository()
 
     def assess(
-        self, session: Any, baseline_probability: float, assessment_scope: str
+        self,
+        session: Any,
+        baseline_probability: float,
+        assessment_scope: str,
+        organization_id: uuid.UUID | None = None,
     ) -> AdaptiveRiskResult:
+        """Calibrate with the deciding organization's ACTIVE model only.
+
+        Without a deciding organization no tenant model applies and the
+        transparent baseline score is returned unchanged.
+        """
+
         if assessment_scope not in {"controlled_demo", "external_verified"}:
             raise ValueError("assessment scope must be explicit and deployable")
-        active = self.registry.get_active_version(session, scope=assessment_scope)
+        if organization_id is None:
+            return AdaptiveRiskResult(
+                raw_score=baseline_probability,
+                final_score=baseline_probability,
+                calibration_run_id=None,
+                deployment_scope=None,
+                fallback_code=None,
+            )
+        active = self.registry.get_active_version(
+            session, scope=assessment_scope, organization_id=organization_id
+        )
         if active is None:
             other_scope = (
                 "controlled_demo"
                 if assessment_scope == "external_verified"
                 else "external_verified"
             )
-            incompatible = self.registry.get_active_version(session, scope=other_scope)
+            incompatible = self.registry.get_active_version(
+                session, scope=other_scope, organization_id=organization_id
+            )
             if incompatible is not None:
                 decision = check_scope(incompatible.scope, assessment_scope)
                 return self._fallback(

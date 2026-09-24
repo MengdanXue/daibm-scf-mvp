@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import hashlib
 import json
 import math
@@ -30,6 +32,9 @@ from app.services.outcome_calibration import (
     temporal_partition,
 )
 import numpy as np
+
+# The deciding organization; only its ACTIVE model may calibrate a decision.
+LENDER = uuid.UUID("00000000-0000-4000-8000-00000000000a")
 
 
 def _built_candidate() -> CalibrationCandidate:
@@ -711,13 +716,15 @@ def test_inference_service_applies_the_single_active_verified_artifact(tmp_path)
     )
 
     class Registry:
-        def get_active_version(self, _session, *, scope):
+        def get_active_version(self, _session, *, scope, organization_id=None):
+            assert organization_id == LENDER
             return run
 
     result = AdaptiveRiskInferenceService(registry=Registry()).assess(
         object(),
         0.8,
         "controlled_demo",
+        LENDER,
     )
 
     assert result.raw_score == 0.8
@@ -746,13 +753,15 @@ def test_inference_service_falls_back_to_baseline_on_active_artifact_corruption(
     )
 
     class Registry:
-        def get_active_version(self, _session, *, scope):
+        def get_active_version(self, _session, *, scope, organization_id=None):
+            assert organization_id == LENDER
             return run
 
     result = AdaptiveRiskInferenceService(registry=Registry()).assess(
         object(),
         0.8,
         "controlled_demo",
+        LENDER,
     )
 
     assert result.final_score == 0.8

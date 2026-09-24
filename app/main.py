@@ -29,6 +29,7 @@ from app.config import (
     ZkpProverSettings,
 )
 from app.database import Database
+from app.demo_dataset import DemoDatasetSeeder
 from app.identity import AuthenticationRequired
 from app.ops.metrics import Heartbeats, RequestMetrics
 from app.ops.service import OpsService
@@ -239,6 +240,12 @@ def create_app(
             outcome_service.reconcile_deployments()
             with active_database.session_factory.begin() as session:
                 seed_default_rules(session)
+            if _flag("DAIBM_DEMO_DATASET", default="false"):
+                # Once, through the business services, before any worker runs.
+                DemoDatasetSeeder(
+                    active_database.session_factory,
+                    artifact_root=outcome_service.artifact_root,
+                ).seed()
         stop_event: asyncio.Event | None = None
         worker_task: asyncio.Task[None] | None = None
         monitor_task: asyncio.Task[None] | None = None
@@ -398,7 +405,7 @@ def create_app(
         request: Request,
         _user=Depends(require_roles("financier", "auditor")),
     ):
-        return request.app.state.service.dashboard()
+        return request.app.state.service.dashboard(_user)
 
     @application.post("/api/requests", status_code=201)
     def create_financing_request(
@@ -406,7 +413,7 @@ def create_app(
         request: Request,
         _user=Depends(require_roles("financier", "auditor")),
     ):
-        return request.app.state.service.create_request(payload)
+        return request.app.state.service.create_request(payload, _user)
 
     @application.get("/api/requests")
     def list_financing_requests(
@@ -414,7 +421,7 @@ def create_app(
         limit: int = Query(50, ge=1, le=200),
         _user=Depends(require_roles("financier", "auditor")),
     ):
-        return request.app.state.service.list_requests(limit=limit)
+        return request.app.state.service.list_requests(limit=limit, viewer=_user)
 
     @application.get("/api/requests/{request_id}")
     def get_financing_request(
@@ -423,7 +430,7 @@ def create_app(
         _user=Depends(require_roles("financier", "auditor")),
     ):
         try:
-            return request.app.state.service.get_request(request_id)
+            return request.app.state.service.get_request(request_id, _user)
         except KeyError as error:
             raise HTTPException(
                 status_code=404,

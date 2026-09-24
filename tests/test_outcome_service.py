@@ -586,7 +586,9 @@ def test_exclude_and_activation_share_scope_lock_and_leave_no_active_member(
                 CalibrationRunModel.deployment_status == "active",
             )
         )
-        inference = AdaptiveRiskInferenceService().assess(session, 0.61, "controlled_demo")
+        inference = AdaptiveRiskInferenceService().assess(
+            session, 0.61, "controlled_demo", run.organization_id
+        )
     assert run.deployment_status in {"invalidated", "rejected"}
     assert active_members == 0
     assert inference.final_score == 0.61

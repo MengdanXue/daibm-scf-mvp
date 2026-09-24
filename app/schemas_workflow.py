@@ -13,6 +13,9 @@ class ApplicationDraftCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     core_enterprise_organization_code: str = Field(min_length=2, max_length=80)
+    # The financier the application is addressed to; optional while exactly
+    # one lending organization exists.
+    lender_organization_code: str | None = Field(default=None, min_length=2, max_length=80)
     contract_number: str = Field(min_length=2, max_length=120)
     invoice_number: str = Field(min_length=2, max_length=120)
     amount: float = Field(gt=0, le=20_000_000)

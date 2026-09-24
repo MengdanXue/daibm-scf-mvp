@@ -33,6 +33,8 @@ from app.models_model_governance import (
     TrainingDatasetSnapshotItemModel,
     TrainingDatasetSnapshotModel,
 )
+from app.models_facility import FinancingFacilityModel
+from app.models_governance import CalibrationJobModel
 from app.models_outcome import ActualOutcomeModel
 from app.repositories.outcomes import OutcomeRepository
 from app.services.outcome_calibration import CalibrationObservation
@@ -108,7 +110,11 @@ class OutcomeEligibilityService:
     def __init__(self, repository: OutcomeRepository | None = None) -> None:
         self.repository = repository or OutcomeRepository()
 
-    def assess(self, session: Session, *, scope: str) -> EligibilityAssessment:
+    def assess(
+        self, session: Session, *, scope: str, organization_id: uuid.UUID | None = None
+    ) -> EligibilityAssessment:
+        """Eligibility of one organization's outcomes (every organization for None)."""
+
         verdicts = tuple(
             EligibilityVerdict(
                 outcome=outcome,
@@ -123,7 +129,9 @@ class OutcomeEligibilityService:
                 ),
             )
             for outcome, head_id, head_action, status, reason, rule_reason, effective in (
-                self.repository.eligibility_population(session, scope=scope)
+                self.repository.eligibility_population(
+                    session, scope=scope, organization_id=organization_id
+                )
             )
         )
         return EligibilityAssessment(scope=scope, verdicts=verdicts)
@@ -136,13 +144,40 @@ class OutcomeEligibilityService:
         created_by: str,
         trigger_job_id: uuid.UUID | None,
         now: datetime | None = None,
+        organization_id: uuid.UUID | None = None,
     ) -> TrainingDatasetSnapshotModel:
-        """Freeze the current eligibility of the scope; identical states share one snapshot."""
+        """Freeze the current eligibility of one organization's scope.
 
-        assessment = self.assess(session, scope=scope)
+        A snapshot never mixes tenants: the owner is the explicit
+        organization, else the triggering job's, else the single organization
+        of the population. Identical states share one snapshot.
+        """
+
+        if organization_id is None and trigger_job_id is not None:
+            organization_id = session.scalar(
+                select(CalibrationJobModel.organization_id).where(
+                    CalibrationJobModel.job_id == trigger_job_id
+                )
+            )
+        if organization_id is None:
+            owners = set(
+                session.scalars(
+                    select(FinancingFacilityModel.organization_id)
+                    .join(
+                        ActualOutcomeModel,
+                        ActualOutcomeModel.facility_id == FinancingFacilityModel.facility_id,
+                    )
+                    .distinct()
+                )
+            )
+            if len(owners) > 1:
+                raise ValueError("a dataset snapshot must name its organization")
+            organization_id = next(iter(owners), None)
+        assessment = self.assess(session, scope=scope, organization_id=organization_id)
         digest = assessment.dataset_hash()
         existing = session.scalar(
             select(TrainingDatasetSnapshotModel).where(
+                TrainingDatasetSnapshotModel.organization_id == organization_id,
                 TrainingDatasetSnapshotModel.deployment_scope == scope,
                 TrainingDatasetSnapshotModel.dataset_hash == digest,
             )
@@ -161,6 +196,7 @@ class OutcomeEligibilityService:
             created_by=created_by,
             trigger_job_id=trigger_job_id,
             created_at=now or datetime.now(timezone.utc),
+            organization_id=organization_id,
         )
         session.add(snapshot)
         session.flush()
@@ -206,6 +242,11 @@ class OutcomeEligibilityService:
 
         if snapshot_id is None:
             return False
+        organization_id = session.scalar(
+            select(TrainingDatasetSnapshotModel.organization_id).where(
+                TrainingDatasetSnapshotModel.snapshot_id == snapshot_id
+            )
+        )
         frozen = {
             (row.outcome_id, row.correction_head_id)
             for row in session.scalars(
@@ -217,7 +258,9 @@ class OutcomeEligibilityService:
         }
         current = {
             (item.outcome.outcome_id, item.correction_head_id)
-            for item in self.assess(session, scope=scope).included
+            for item in self.assess(
+                session, scope=scope, organization_id=organization_id
+            ).included
         }
         return bool(current) and frozen == current
 

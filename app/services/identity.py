@@ -325,6 +325,14 @@ class IdentityService:
                 for organization in organizations
             ]
 
+    def lenders(self) -> list[dict[str, str]]:
+        with self.session_factory() as session:
+            return [
+                {"organization_code": item.organization_code, "name": item.name}
+                for item in self.repository.list_organizations_by_type(session, "financier")
+                if item.status == "active"
+            ]
+
     @staticmethod
     def demo_accounts() -> list[dict[str, str]]:
         return [

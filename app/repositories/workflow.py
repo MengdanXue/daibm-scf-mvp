@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.domain.workflow import Role, Status
 from app.identity import AuthenticatedUser
 from app.models import FinancingRequestModel
+from app.services.permissions import PermissionService
 from app.models_identity import OrganizationModel, UserModel
 from app.models_workflow import WorkflowActionModel
 
@@ -74,6 +75,7 @@ class WorkflowRepository:
             )
         elif role == Role.FINANCIER:
             statement = statement.where(
+                FinancingRequestModel.lender_organization_id == user.organization_id,
                 FinancingRequestModel.status.in_(
                     (
                         Status.TRADE_CONFIRMED.value,
@@ -88,6 +90,7 @@ class WorkflowRepository:
             )
         elif role == Role.RISK_MANAGER:
             statement = statement.where(
+                FinancingRequestModel.lender_organization_id == user.organization_id,
                 FinancingRequestModel.status.in_(
                     (
                         Status.APPROVED.value,
@@ -98,6 +101,14 @@ class WorkflowRepository:
                     )
                 )
             )
+        elif role == Role.AUDITOR:
+            statement = statement.where(
+                PermissionService.organization_filter(
+                    user, FinancingRequestModel.lender_organization_id
+                )
+            )
+        elif role != Role.ADMIN:
+            return []
         statement = (
             statement.order_by(FinancingRequestModel.updated_at.desc())
             .limit(limit)

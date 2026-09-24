@@ -13,7 +13,7 @@
       currentStation: "Текущая рабочая станция", allApplications: "Доступные заявки", myTasks: "Мои задачи",
       activeStatus: "Активных статусов", database: "Хранилище", newApplication: "Новая заявка на финансирование",
       newApplicationHint: "Заполните реквизиты сделки. Заявка сохранится как черновик и будет доступна для подачи.",
-      coreEnterpriseCode: "Код якорной компании", contractNumber: "Номер договора", invoiceNumber: "Номер счёта-фактуры",
+      coreEnterpriseCode: "Код якорной компании", lenderCode: "Финансирующая организация", lender_required: "Выберите финансирующую организацию.", lender_locked: "Финансирующую организацию нельзя изменить после подачи заявки.", contractNumber: "Номер договора", invoiceNumber: "Номер счёта-фактуры",
       amount: "Сумма, CNY", termDays: "Срок, дней", paymentDelay: "Просрочка, дней", counterpartyRisk: "Риск контрагента, 0–1",
       relationshipMonths: "Отношения, месяцев", transactions30d: "Сделок за 30 дней", invoiceMismatch: "Есть расхождение документов",
       saveDraft: "Сохранить черновик", updateDraft: "Сохранить изменения", applicationQueue: "Очередь заявок",
@@ -93,7 +93,7 @@
       commonPassword: "演示角色密码由部署配置 DAIBM_DEMO_PASSWORD 设定。", navWorkflow: "业务工作台", workflowEyebrow: "基于角色的业务流程",
       workflowTitle: "供应链融资", refresh: "刷新数据", currentStation: "当前工作站", allApplications: "可查看申请",
       myTasks: "我的待办", activeStatus: "活跃状态", database: "数据存储", newApplication: "新建融资申请",
-      newApplicationHint: "填写交易信息。申请将先保存为草稿，确认后可提交。", coreEnterpriseCode: "核心企业代码",
+      newApplicationHint: "填写交易信息。申请将先保存为草稿，确认后可提交。", coreEnterpriseCode: "核心企业代码", lenderCode: "融资机构", lender_required: "请选择融资机构。", lender_locked: "申请提交后不能更换融资机构。",
       contractNumber: "合同编号", invoiceNumber: "发票编号", amount: "融资金额，CNY", termDays: "期限，天",
       paymentDelay: "付款延迟，天", counterpartyRisk: "交易对手风险，0–1", relationshipMonths: "合作关系，月",
       transactions30d: "近30天交易数", invoiceMismatch: "存在单据不一致", saveDraft: "保存草稿", updateDraft: "保存修改",
@@ -175,7 +175,7 @@
 
   const state = {
     lang: localStorage.getItem("daibm-lang") || "ru", user: null,
-    accounts: [], coreEnterprises: [], dashboard: null, tasks: [],
+    accounts: [], coreEnterprises: [], lenders: [], dashboard: null, tasks: [],
     applications: [], selected: null, editing: null, busy: false,
     facilities: [], selectedFacility: null, facilityPending: false,
     anchors: [], anchorsBusy: false, anchorLastSummary: null,
@@ -417,6 +417,9 @@
     state.coreEnterprises = state.user.role === "supplier"
       ? await wfApi("/api/v1/organizations/core-enterprises")
       : [];
+    state.lenders = state.user.role === "supplier"
+      ? await wfApi("/api/v1/organizations/lenders")
+      : [];
     await Promise.all([refreshWorkflow(), refreshFacilities(), state.user.role === "auditor" ? refreshAnchors() : Promise.resolve(), state.user.role === "auditor" ? refreshOutcomes() : Promise.resolve()]);
     await refreshLegacyForRole();
   }
@@ -592,6 +595,18 @@
     if (state.coreEnterprises.some(
       (organization) => organization.organization_code === selectedCode
     )) select.value = selectedCode;
+    // The application is addressed to one lending organization.
+    const lenderSelect = document.querySelector(
+      '#applicationForm select[name="lender_organization_code"]'
+    );
+    if (!lenderSelect) return;
+    const selectedLender = state.editing?.lender_organization_code || lenderSelect.value;
+    lenderSelect.innerHTML = state.lenders.map((organization) =>
+      `<option value="${escapeHtml(organization.organization_code)}">${escapeHtml(organization.name)} · ${escapeHtml(organization.organization_code)}</option>`
+    ).join("");
+    if (state.lenders.some(
+      (organization) => organization.organization_code === selectedLender
+    )) lenderSelect.value = selectedLender;
   }
 
   const compactHash = (value) => value ? `${String(value).slice(0, 10)}…${String(value).slice(-8)}` : "—";
@@ -634,7 +649,7 @@
     </div>`;
     container.innerHTML = `<div class="detail-top"><div><span class="status-chip" data-status="${escapeHtml(application.status)}">${escapeHtml(tr(application.status))}</span><h2>${escapeHtml(application.contract_number)}</h2><p>${escapeHtml(application.request_id)}</p></div><div class="detail-version"><span>${escapeHtml(tr("version"))}</span><b>v${application.version}</b></div></div>
       <div class="detail-fields">
-        ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), coreEnterprise)}${detailField(tr("amount"), money(application.amount))}
+        ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), coreEnterprise)}${detailField(tr("lenderCode"), application.lender_organization_code || "—")}${detailField(tr("amount"), money(application.amount))}
         ${detailField(tr("invoice"), application.invoice_number)}${detailField(tr("term"), `${application.term_days} ${tr("days")}`)}${detailField(tr("paymentDelay"), `${application.features.payment_delay_days} ${tr("days")}`)}
       </div>
       <div class="risk-result"><span>${escapeHtml(tr("risk"))}<strong>${escapeHtml(risk)}</strong></span><span>${escapeHtml(tr("decision"))}<strong>${escapeHtml(application.decision ? tr(application.decision) : "—")}</strong></span></div>
@@ -1039,7 +1054,8 @@
   function formPayload(form) {
     const data = new FormData(form);
     return {
-      core_enterprise_organization_code: data.get("core_enterprise_organization_code"), contract_number: data.get("contract_number"),
+      core_enterprise_organization_code: data.get("core_enterprise_organization_code"),
+      lender_organization_code: data.get("lender_organization_code") || null, contract_number: data.get("contract_number"),
       invoice_number: data.get("invoice_number"), amount: Number(data.get("amount")), term_days: Number(data.get("term_days")),
       payment_delay_days: Number(data.get("payment_delay_days")), counterparty_risk: Number(data.get("counterparty_risk")),
       invoice_mismatch: data.get("invoice_mismatch") === "on", relationship_months: Number(data.get("relationship_months")),
@@ -1067,7 +1083,7 @@
     const application = state.selected;
     state.editing = application;
     const form = document.querySelector("#applicationForm");
-    const values = { ...application.features, core_enterprise_organization_code: application.core_enterprise_organization_code, contract_number: application.contract_number, invoice_number: application.invoice_number, amount: application.amount, term_days: application.term_days };
+    const values = { ...application.features, core_enterprise_organization_code: application.core_enterprise_organization_code, lender_organization_code: application.lender_organization_code, contract_number: application.contract_number, invoice_number: application.invoice_number, amount: application.amount, term_days: application.term_days };
     Object.entries(values).forEach(([name, value]) => {
       const input = form.elements.namedItem(name);
       if (!input) return;
