@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.facility import derive_closure_reason
@@ -29,14 +29,22 @@ from app.models_lifecycle import (
     FacilityDelinquencyModel,
     FacilityWriteOffModel,
 )
+from app.models_model_governance import ModelRegistryEventModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel, RiskAssessmentModel
+from app.domain.model_registry import ModelVersionStatus
 from app.repositories.ledger import LedgerRepository
+from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
-from app.schemas_outcome import ActualOutcomeCreate, OutcomeCorrectionCreate
+from app.schemas_outcome import (
+    ActualOutcomeCreate,
+    OutcomeCorrectionCreate,
+    OutcomeSupersedeCreate,
+)
 from app.services.adaptive_risk import (
     ActivationDecision,
     evaluate_activation_gate,
+    independent_validation_evidence,
     is_strictly_newer_candidate,
     load_verified_calibration,
 )
@@ -52,6 +60,10 @@ from app.services.outcome_calibration import (
     recover_candidate_artifact,
     stage_candidate_artifact,
 )
+
+
+SYSTEM_ACTOR = "system:calibration-worker"
+AWAITING_PROMOTION = "awaiting_manual_promotion"
 
 
 class OutcomeError(Exception):
@@ -140,10 +152,15 @@ class OutcomeService:
         artifact_writer: ArtifactWriter = stage_candidate_artifact,
         training_config: CalibrationTrainingConfig | None = None,
         clock: Callable[[], datetime] | None = None,
+        model_registry: ModelRegistryRepository | None = None,
+        auto_promotion: bool = True,
     ) -> None:
         self.session_factory = session_factory
         self.artifact_root = Path(artifact_root)
         self.repository = repository or OutcomeRepository()
+        self.model_registry = model_registry or ModelRegistryRepository()
+        # When false, a validated candidate waits for an auditor's promotion.
+        self.auto_promotion = auto_promotion
         self.ledger_repository = ledger_repository or LedgerRepository()
         self.trainer = trainer
         self.artifact_writer = artifact_writer
@@ -295,6 +312,8 @@ class OutcomeService:
                 raise OutcomeNotFound(str(normalized_id))
             if self._scope_for_provenance(outcome.provenance) != scope:
                 raise OutcomeConflict("Outcome provenance changed during correction")
+            if self.repository.get_successor(session, outcome.outcome_id) is not None:
+                raise OutcomeConflict("Superseded outcomes cannot be corrected; use the effective revision")
             replay = self.repository.get_correction_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -387,6 +406,206 @@ class OutcomeService:
                 ]
             )
 
+    def supersede(
+        self,
+        outcome_id: str | uuid.UUID,
+        payload: OutcomeSupersedeCreate,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """Append a corrected revision; the original stays and loses eligibility."""
+
+        self._require_auditor(user)
+        normalized_id = self._uuid(outcome_id)
+        request_sha256 = hashlib.sha256(
+            canonical_json(
+                {"supersedes": str(normalized_id), **payload.model_dump(mode="json")}
+            ).encode("utf-8")
+        ).hexdigest()
+        with self.session_factory.begin() as session:
+            replay = self.repository.get_by_idempotency_key(session, payload.idempotency_key)
+            if replay is not None:
+                if replay.request_sha256 != request_sha256:
+                    raise OutcomeConflict(
+                        "Idempotency key was already used for different outcome semantics"
+                    )
+                return self._result(session, replay)
+            original = self.repository.get_outcome(session, normalized_id)
+            if original is None:
+                raise OutcomeNotFound(str(normalized_id))
+            scope = self._scope_for_provenance(original.provenance)
+            self.repository.acquire_scope_lock(session, scope=scope)
+            original = self.repository.get_outcome_for_update(session, normalized_id)
+            if original is None:
+                raise OutcomeNotFound(str(normalized_id))
+            if self.repository.get_successor(session, original.outcome_id) is not None:
+                raise OutcomeConflict("Only the effective outcome revision can be superseded")
+            facility = session.get(FinancingFacilityModel, original.facility_id)
+            if facility is None:
+                raise OutcomeConflict("Outcome lifecycle lineage is missing")
+            loss = Decimal(payload.loss_amount)
+            if loss > Decimal(facility.principal):
+                raise OutcomeConflict("Corrected loss amount cannot exceed principal")
+            now = self._now()
+            corrected = self.repository.add_outcome(
+                session,
+                ActualOutcomeModel(
+                    outcome_id=uuid.uuid4(),
+                    facility_id=original.facility_id,
+                    request_id=original.request_id,
+                    risk_assessment_id=original.risk_assessment_id,
+                    model_version_id=original.model_version_id,
+                    submitted_by_user_id=user.user_id,
+                    idempotency_key=payload.idempotency_key,
+                    request_sha256=request_sha256,
+                    defaulted=payload.defaulted,
+                    days_past_due=payload.days_past_due,
+                    loss_amount=loss,
+                    observed_at=payload.observed_at,
+                    evidence_sha256=payload.evidence_sha256,
+                    provenance=original.provenance,
+                    original_risk_score=original.original_risk_score,
+                    risk_engine_version=original.risk_engine_version,
+                    risk_input_sha256=original.risk_input_sha256,
+                    recorded_at=now,
+                    revision=original.revision + 1,
+                    supersedes_outcome_id=original.outcome_id,
+                    correction_reason_code=payload.reason_code,
+                    correction_comment=payload.comment,
+                ),
+            )
+            invalidated = self.repository.invalidate_active_runs_containing(
+                session, original.outcome_id, scope=scope, now=now
+            )
+            events: list[tuple[str, dict[str, Any]]] = [
+                (
+                    "ACTUAL_OUTCOME_SUPERSEDED",
+                    {
+                        "superseded_outcome_id": str(original.outcome_id),
+                        "effective_outcome_id": str(corrected.outcome_id),
+                        "revision": corrected.revision,
+                        "reason_code": payload.reason_code,
+                        "evidence_sha256": payload.evidence_sha256,
+                        "deployment_scope": scope,
+                    },
+                )
+            ]
+            events.extend(
+                (
+                    "CALIBRATION_DEPLOYMENT_INVALIDATED",
+                    {
+                        "outcome_id": str(original.outcome_id),
+                        "calibration_run_id": str(run.calibration_run_id),
+                        "deployment_scope": scope,
+                        "reason": "outcome_superseded",
+                    },
+                )
+                for run in invalidated
+            )
+            self.ledger_repository.append_many(session, corrected.outcome_id, events)
+            job = self.repository.add_job(
+                session,
+                self._new_job(
+                    scope=scope,
+                    trigger_type="outcome_submitted",
+                    idempotency_key=payload.idempotency_key,
+                    now=now,
+                    outcome_id=corrected.outcome_id,
+                ),
+            )
+            return self._result(session, corrected, job=job)
+
+    def lineage(
+        self,
+        outcome_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """Full audit chain: every revision, its corrections and review history."""
+
+        self._require_auditor(user)
+        normalized_id = self._uuid(outcome_id)
+        with self.session_factory() as session:
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
+                raise OutcomeNotFound(str(normalized_id))
+            chain = self.repository.list_revision_chain(session, outcome.facility_id)
+            reviews = self.repository.list_review_events(
+                session, [item.outcome_id for item in chain]
+            )
+            effective = chain[-1]
+            return {
+                "facility_id": str(outcome.facility_id),
+                "effective_outcome_id": str(effective.outcome_id),
+                "revisions": [
+                    {
+                        "outcome": self._serialize_outcome(
+                            item,
+                            effective_training_eligible=self._is_eligible(
+                                session, item.outcome_id
+                            ),
+                            review=self.repository.review_status(session, item.outcome_id),
+                        ),
+                        "is_effective": item.outcome_id == effective.outcome_id,
+                        "corrections": [
+                            self._serialize_correction(row)
+                            for row in self.repository.list_corrections(
+                                session, item.outcome_id
+                            )
+                        ],
+                        "review_history": [
+                            {
+                                "status": event.status,
+                                "reason_code": event.reason_code,
+                                "calibration_run_id": (
+                                    str(event.calibration_run_id)
+                                    if event.calibration_run_id is not None
+                                    else None
+                                ),
+                                "recorded_at": canonical_timestamp(event.recorded_at),
+                            }
+                            for event in reviews
+                            if event.outcome_id == item.outcome_id
+                        ],
+                    }
+                    for item in chain
+                ],
+            }
+
+    def governance_summary(self, user: AuthenticatedUser) -> dict[str, Any]:
+        """Outcome counts by review status, rejection reasons and supersession."""
+
+        if user.role not in {"auditor", "risk_manager"}:
+            raise ForbiddenOutcome("Only auditors and risk managers can view outcome governance")
+        with self.session_factory() as session:
+            rows = self.repository.review_summary(session)
+        by_scope: dict[str, dict[str, Any]] = {}
+        for provenance, status, reason, effective, count in rows:
+            scope = self._scope_for_provenance(provenance)
+            bucket = by_scope.setdefault(
+                scope,
+                {
+                    "total_records": 0,
+                    "effective_outcomes": 0,
+                    "superseded_records": 0,
+                    "by_status": {},
+                    "rejected_reasons": {},
+                    "training_eligible": 0,
+                },
+            )
+            bucket["total_records"] += count
+            if not effective:
+                bucket["superseded_records"] += count
+                continue
+            bucket["effective_outcomes"] += count
+            key = status or "UNREVIEWED"
+            bucket["by_status"][key] = bucket["by_status"].get(key, 0) + count
+            if status in ("ELIGIBLE", "TRAINING_USED"):
+                bucket["training_eligible"] += count
+            if status == "REJECTED" and reason:
+                bucket["rejected_reasons"][reason] = (
+                    bucket["rejected_reasons"].get(reason, 0) + count
+                )
+        return {"scopes": by_scope}
+
     def list_corrections(
         self,
         outcome_id: str | uuid.UUID,
@@ -417,6 +636,7 @@ class OutcomeService:
                 effective_training_eligible=self._is_eligible(
                     session, outcome.outcome_id
                 ),
+                review=self.repository.review_status(session, outcome.outcome_id),
             )
 
     def list_outcomes(
@@ -425,18 +645,26 @@ class OutcomeService:
         *,
         limit: int = 50,
         offset: int = 0,
+        include_superseded: bool = False,
     ) -> list[dict[str, Any]]:
+        """Effective outcomes by default; superseded revisions only on request."""
+
         self._require_auditor(user)
         self._page(limit, offset)
         with self.session_factory() as session:
+            rows = self.repository.list_outcomes_with_eligibility(
+                session,
+                limit=limit,
+                offset=offset,
+                include_superseded=include_superseded,
+            )
             return [
                 self._serialize_outcome(
                     item,
                     effective_training_eligible=eligible,
+                    review=(status, reason),
                 )
-                for item, eligible in self.repository.list_outcomes_with_eligibility(
-                    session, limit=limit, offset=offset
-                )
+                for item, eligible, status, reason in rows
             ]
 
     def get_run(
@@ -542,6 +770,7 @@ class OutcomeService:
         user: AuthenticatedUser,
         *,
         scope: str,
+        reason: str = "manual_rollback",
     ) -> dict[str, Any]:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
@@ -562,6 +791,8 @@ class OutcomeService:
                 raise OutcomeConflict("rollback predecessor is unavailable")
             if restored.deployment_scope != scope:
                 raise OutcomeConflict("rollback predecessor scope is inconsistent")
+            if restored.retired_at is not None:
+                raise OutcomeConflict("rollback predecessor has been retired")
             if not self.repository.run_membership_is_eligible(
                 session, restored.calibration_run_id, scope=scope
             ):
@@ -577,14 +808,16 @@ class OutcomeService:
                 raise OutcomeConflict("rollback predecessor artifact is invalid") from error
 
             now = self._now()
+            self.set_governance_actor(session, user)
             current.deployment_status = "superseded"
             current.deactivated_at = now
+            current.rolled_back_at = now
             session.flush()
             restored.deployment_status = "active"
             restored.activation_mode = "manual_rollback"
             restored.activated_at = now
             restored.deactivated_at = None
-            restored.activation_reason = "manual_rollback"
+            restored.activation_reason = reason
             session.flush()
             self.ledger_repository.append_many(
                 session,
@@ -597,11 +830,231 @@ class OutcomeService:
                             "restored_run_id": str(restored.calibration_run_id),
                             "deployment_scope": restored.deployment_scope,
                             "expected_active_run_id": str(expected_id),
+                            **({} if reason == "manual_rollback" else {"reason": reason}),
                         },
                     )
                 ],
             )
             return self._serialize_run(restored, session=session)
+
+    def register_version(
+        self,
+        run_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> uuid.UUID:
+        """Register a published artifact that has no version and evaluate it.
+
+        Evaluation is the same independent-holdout gate the worker applies; a
+        passing version becomes CANDIDATE and waits for manual promotion.
+        """
+
+        self._require_auditor(user)
+        normalized = self._uuid(run_id)
+        with self.session_factory.begin() as session:
+            unlocked = self.repository.get_run(session, normalized)
+            if unlocked is None:
+                raise OutcomeNotFound("calibration run")
+            self._acquire_run_lock(session, unlocked.deployment_scope)
+            run = self.repository.get_run_for_update(session, normalized)
+            assert run is not None
+            if run.artifact_locator is None or run.artifact_sha256 is None:
+                raise OutcomeConflict("calibration run has no published artifact")
+            if self.model_registry.get_by_run(session, normalized) is not None:
+                raise OutcomeConflict("calibration artifact is already registered")
+            self.set_governance_actor(session, user)
+            version = self.model_registry.register(
+                session,
+                run,
+                created_by=user.username,
+                created_by_user_id=user.user_id,
+                reason="manual_registration",
+            )
+            memberships = tuple(self.repository.list_run_membership(session, normalized))
+            try:
+                candidate = self._candidate_from_run(run, memberships)
+            except (OSError, KeyError, TypeError, ValueError) as error:
+                self.model_registry.record_evaluation(
+                    session,
+                    version,
+                    evidence={"artifact_integrity": "invalid", "error": type(error).__name__},
+                    passed=False,
+                    reason="evaluation_failed:artifact_unverified",
+                )
+                return version.id
+            try:
+                self._verify_version_artifact(
+                    path=version.artifact_path,
+                    expected_sha256=version.artifact_hash,
+                    run_id=run.calibration_run_id,
+                    scope=run.deployment_scope,
+                    dataset_sha256=run.dataset_sha256,
+                )
+                integrity = "verified"
+            except OutcomeConflict:
+                integrity = "invalid"
+            member_ids = {item.outcome_id for item in memberships}
+            provenances = tuple(
+                item.provenance
+                for item in self.repository.list_all_outcomes(session)
+                if item.outcome_id in member_ids
+            )
+            decision = evaluate_activation_gate(
+                candidate, artifact_integrity=integrity, provenances=provenances
+            )
+            evidence = independent_validation_evidence(candidate)
+            reason = decision.reason
+            if decision.activate and not evidence["independent"]:
+                reason = "validation_not_independent"
+            elif decision.deployment_scope != run.deployment_scope:
+                reason = "deployment_scope_mismatch"
+            elif run.deployment_status != "not_deployed":
+                reason = f"artifact_not_deployable:{run.deployment_status}"
+            passed = reason == decision.reason and decision.activate
+            self.model_registry.record_evaluation(
+                session,
+                version,
+                evidence={
+                    **evidence,
+                    "gate_reason": decision.reason,
+                    "artifact_integrity": integrity,
+                    "artifact_sha256": run.artifact_sha256,
+                },
+                passed=passed,
+                reason="evaluation_passed" if passed else f"evaluation_failed:{reason}",
+            )
+            if passed:
+                # A manually registered candidate is never auto-activated.
+                run.activation_reason = AWAITING_PROMOTION
+            return version.id
+
+    def promote_version(
+        self,
+        version_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+        *,
+        reason: str,
+    ) -> uuid.UUID:
+        """Promote an evaluated CANDIDATE to ACTIVE after re-verifying its artifact.
+
+        The previous ACTIVE version of the scope is superseded in the same
+        transaction; the promotion transition records the reason, the
+        evaluation metrics and the verified artifact hash.
+        """
+
+        self._require_auditor(user)
+        normalized = self._uuid(version_id)
+        with self.session_factory.begin() as session:
+            unlocked = self.model_registry.get(session, normalized)
+            if unlocked is None:
+                raise OutcomeNotFound("model version")
+            scope = unlocked.scope
+            self._acquire_run_lock(session, scope)
+            version = self.model_registry.get(session, normalized, for_update=True)
+            assert version is not None
+            if version.status != ModelVersionStatus.CANDIDATE.value:
+                raise OutcomeConflict(f"model version is {version.status}, not CANDIDATE")
+            if not version.evaluation_passed or version.evaluation is None:
+                raise OutcomeConflict("model version has no passed evaluation")
+            run = self.repository.get_run_for_update(session, version.calibration_run_id)
+            if run is None or run.deployment_status != "not_deployed":
+                raise OutcomeConflict("model artifact is no longer deployable")
+            if run.status != "eligible_candidate" or scope not in (
+                "controlled_demo",
+                "external_verified",
+            ):
+                raise OutcomeConflict("model scope is not deployable")
+            if not self.repository.run_membership_matches_eligible_snapshot(
+                session, run.calibration_run_id, scope=scope
+            ):
+                raise OutcomeConflict("training data changed since evaluation; retrain")
+            actual_hash = self._verify_version_artifact(
+                path=version.artifact_path,
+                expected_sha256=version.artifact_hash,
+                run_id=run.calibration_run_id,
+                scope=scope,
+                dataset_sha256=version.training_dataset_version,
+            )
+            previous = self.repository.get_active_run(session, scope=scope, for_update=True)
+            if previous is not None and not is_strictly_newer_candidate(
+                run.sample_count, active_sample_count=previous.sample_count
+            ):
+                raise OutcomeConflict("candidate is not newer than the ACTIVE model")
+            now = self._now()
+            self.set_governance_actor(session, user)
+            if previous is not None:
+                previous.deployment_status = "superseded"
+                previous.deactivated_at = now
+                session.flush()
+            self.model_registry.transition(
+                session,
+                version,
+                ModelVersionStatus.ACTIVE,
+                reason=reason,
+                metrics={
+                    "evaluation": version.evaluation,
+                    "artifact_sha256_verified": actual_hash,
+                },
+            )
+            run.deployment_status = "active"
+            run.activation_mode = "manual_promotion"
+            run.activation_reason = reason
+            run.activated_at = now
+            run.deactivated_at = None
+            run.previous_active_run_id = (
+                previous.calibration_run_id if previous is not None else None
+            )
+            session.flush()
+            self._registry_event(session, run, "PROMOTION_DECISION", reason="manually_promoted")
+            self.ledger_repository.append_many(
+                session,
+                run.calibration_run_id,
+                [
+                    (
+                        "CALIBRATION_MANUALLY_ACTIVATED",
+                        {
+                            "calibration_run_id": str(run.calibration_run_id),
+                            "model_version_id": str(version.id),
+                            "deployment_scope": scope,
+                            "promotion_reason": reason,
+                            "previous_active_run_id": (
+                                str(previous.calibration_run_id)
+                                if previous is not None
+                                else None
+                            ),
+                            "artifact_sha256": actual_hash,
+                            "promoted_by_user_id": str(user.user_id),
+                        },
+                    )
+                ],
+            )
+            return version.id
+
+    @staticmethod
+    def _verify_version_artifact(
+        *,
+        path: str,
+        expected_sha256: str,
+        run_id: uuid.UUID,
+        scope: str,
+        dataset_sha256: str,
+    ) -> str:
+        try:
+            actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError as error:
+            raise OutcomeConflict("model artifact is unavailable") from error
+        if actual != expected_sha256:
+            raise OutcomeConflict("model artifact hash does not match the registry")
+        try:
+            load_verified_calibration(
+                Path(path),
+                expected_sha256=expected_sha256,
+                run_id=str(run_id),
+                deployment_scope=scope,
+                expected_dataset_sha256=dataset_sha256,
+            )
+        except ValueError as error:
+            raise OutcomeConflict("model artifact failed verification") from error
+        return actual
 
     def _validate_submission_snapshot(
         self,
@@ -680,6 +1133,14 @@ class OutcomeService:
         facts = self._validate_lifecycle_snapshot(session, facility)
         assert facility.closed_at is not None
         lineage = self._prediction_lineage(session, application)
+        if outcome.revision > 1:
+            # A superseding revision deliberately corrects lifecycle-derived facts;
+            # only its prediction lineage must still match the application.
+            facts = DerivedOutcomeFacts(
+                defaulted=outcome.defaulted,
+                days_past_due=outcome.days_past_due,
+                loss_amount=Decimal(outcome.loss_amount),
+            )
         if (
             facts.defaulted != outcome.defaulted
             or facts.days_past_due != outcome.days_past_due
@@ -813,6 +1274,7 @@ class OutcomeService:
             "outcome": self._serialize_outcome(
                 outcome,
                 effective_training_eligible=self._is_eligible(session, outcome.outcome_id),
+                review=self.repository.review_status(session, outcome.outcome_id),
             ),
             "calibration_job": self._serialize_job(calibration_job),
         }
@@ -870,7 +1332,11 @@ class OutcomeService:
 
     def _is_eligible(self, session: Session, outcome_id: uuid.UUID) -> bool:
         head = self.repository.get_correction_head(session, outcome_id)
-        return head is None or head.action == "REINSTATE"
+        status, _ = self.repository.review_status(session, outcome_id)
+        return (head is None or head.action == "REINSTATE") and status in (
+            "ELIGIBLE",
+            "TRAINING_USED",
+        )
 
     def _mark_publication_failed(
         self,
@@ -968,6 +1434,7 @@ class OutcomeService:
                 run,
                 decision=decision,
                 integrity=integrity,
+                candidate=candidate,
             )
 
     def _complete_claimed_deployment(
@@ -1033,6 +1500,7 @@ class OutcomeService:
                     run,
                     decision=decision,
                     integrity=integrity,
+                    candidate=candidate,
                 )
             self.repository.complete_job(
                 session,
@@ -1081,11 +1549,56 @@ class OutcomeService:
         *,
         decision: ActivationDecision,
         integrity: str,
+        candidate: CalibrationCandidate,
     ) -> None:
         if run.deployment_status != "not_deployed":
             return
         scope = run.deployment_scope
         payload: dict[str, Any]
+        # Promotion evidence is the chronological holdout, never the training fit.
+        evidence = independent_validation_evidence(candidate)
+        if decision.activate and not evidence["independent"]:
+            decision = ActivationDecision(False, "validation_not_independent", scope)
+        version = self.model_registry.get_by_run(
+            session, run.calibration_run_id
+        ) or self.model_registry.register(
+            session,
+            run,
+            created_by=SYSTEM_ACTOR,
+            created_by_user_id=None,
+        )
+        if version.status in (
+            ModelVersionStatus.DRAFT.value,
+            ModelVersionStatus.EVALUATING.value,
+        ):
+            passed = decision.activate and decision.deployment_scope == scope
+            self.model_registry.record_evaluation(
+                session,
+                version,
+                evidence={
+                    **evidence,
+                    "gate_reason": decision.reason,
+                    "artifact_integrity": integrity,
+                    "artifact_sha256": run.artifact_sha256,
+                },
+                passed=passed,
+                reason="evaluation_passed" if passed else f"evaluation_failed:{decision.reason}",
+            )
+        self._registry_event(
+            session,
+            run,
+            "VALIDATED",
+            reason="validation_passed" if decision.activate else "validation_failed",
+            metrics={**evidence, "gate_reason": decision.reason, "artifact_integrity": integrity},
+        )
+        if decision.activate:
+            self._registry_event(
+                session,
+                run,
+                "STATUS_CHANGED",
+                reason="independent_validation_passed",
+                to_status="CANDIDATE",
+            )
         if decision.deployment_scope != scope:
             run.deployment_status = "rejected"
             run.activation_reason = "deployment_scope_mismatch"
@@ -1130,6 +1643,12 @@ class OutcomeService:
                     "active_sample_count": previous.sample_count,
                     "artifact_integrity": integrity,
                 }
+            elif not self.auto_promotion:
+                # Validated but held: the version stays CANDIDATE until an
+                # auditor promotes it through the model registry.
+                run.activation_reason = AWAITING_PROMOTION
+                event_type = ""
+                payload = {}
             else:
                 if previous is not None:
                     previous.deployment_status = "superseded"
@@ -1157,10 +1676,70 @@ class OutcomeService:
                     "positive_count": run.positive_count,
                     "negative_count": run.negative_count,
                 }
-        self.ledger_repository.append_many(
+        self._registry_event(
             session,
-            run.calibration_run_id,
-            [(event_type, payload)],
+            run,
+            "PROMOTION_DECISION",
+            reason=(
+                "promoted"
+                if event_type == "CALIBRATION_AUTO_ACTIVATED"
+                else f"not_promoted:{run.activation_reason}"
+            ),
+        )
+        if event_type:
+            self.ledger_repository.append_many(
+                session,
+                run.calibration_run_id,
+                [(event_type, payload)],
+            )
+
+    def _registry_event(
+        self,
+        session: Session,
+        run: CalibrationRunModel,
+        event_type: str,
+        *,
+        reason: str,
+        metrics: dict[str, Any] | None = None,
+        to_status: str | None = None,
+    ) -> None:
+        from_status = None
+        if to_status is not None:
+            from_status = session.scalar(
+                select(ModelRegistryEventModel.to_status)
+                .where(
+                    ModelRegistryEventModel.model_kind == "calibration",
+                    ModelRegistryEventModel.model_id == run.calibration_run_id,
+                    ModelRegistryEventModel.event_type == "STATUS_CHANGED",
+                )
+                .order_by(ModelRegistryEventModel.event_id.desc())
+                .limit(1)
+            )
+        session.add(
+            ModelRegistryEventModel(
+                model_kind="calibration",
+                model_id=run.calibration_run_id,
+                event_type=event_type,
+                from_status=from_status,
+                to_status=to_status,
+                deployment_scope=run.deployment_scope,
+                dataset_sha256=run.dataset_sha256,
+                sample_count=run.sample_count,
+                metrics=metrics,
+                artifact_sha256=run.artifact_sha256,
+                reason=reason,
+                actor_user_id=None,
+            )
+        )
+        session.flush()
+
+    @staticmethod
+    def set_governance_actor(session: Session, user: AuthenticatedUser) -> None:
+        """Attribute trigger-written registry events in this transaction."""
+
+        session.execute(
+            text("SELECT set_config('daibm.actor_user_id', :actor, true)"),
+            {"actor": str(user.user_id)},
         )
 
     def _reject_unrecoverable_deployment(
@@ -1342,6 +1921,7 @@ class OutcomeService:
         outcome: ActualOutcomeModel,
         *,
         effective_training_eligible: bool = True,
+        review: tuple[str | None, str | None] = (None, None),
     ) -> dict[str, Any]:
         return {
             "outcome_id": str(outcome.outcome_id),
@@ -1364,6 +1944,15 @@ class OutcomeService:
             "risk_input_sha256": outcome.risk_input_sha256,
             "recorded_at": canonical_timestamp(outcome.recorded_at),
             "effective_training_eligible": effective_training_eligible,
+            "revision": outcome.revision,
+            "supersedes_outcome_id": (
+                str(outcome.supersedes_outcome_id)
+                if outcome.supersedes_outcome_id is not None
+                else None
+            ),
+            "correction_reason_code": outcome.correction_reason_code,
+            "review_status": review[0],
+            "review_reason": review[1],
         }
 
     @staticmethod

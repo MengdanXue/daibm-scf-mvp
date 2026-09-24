@@ -487,14 +487,10 @@ def test_database_allows_one_active_run_per_distinct_scope(migrated_engine):
                 {"run_ids": run_ids},
             ) == 2
     finally:
+        # Revision 0016 forbids deleting an ACTIVE model, so fixture cleanup
+        # truncates (row triggers do not fire) instead of deleting rows.
         with migrated_engine.begin() as connection:
-            connection.execute(
-                sa.text(
-                    "DELETE FROM calibration_runs "
-                    "WHERE calibration_run_id = ANY(:run_ids)"
-                ),
-                {"run_ids": run_ids},
-            )
+            connection.execute(sa.text("TRUNCATE calibration_runs CASCADE"))
 
 
 def test_database_rejects_active_legacy_mixed_scope(migrated_engine):

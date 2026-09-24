@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api import facility_router
 from app.api.anchors import router as anchor_router
 from app.api.outcomes import router as outcome_router
+from app.api.governance import router as governance_router
 from app.api.auth import router as auth_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
@@ -38,10 +40,20 @@ from app.services.integrity import (
     NoIntegrityViolation,
 )
 from app.services.anchor_dispatch import AnchorDispatchService, FabricGatewayClient
+from app.services.model_registry import ModelRegistryService
 from app.services.outcomes import OutcomeService
 from app.services.calibration_jobs import CalibrationJobService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _auto_promotion_enabled() -> bool:
+    """CALIBRATION_AUTO_PROMOTION=false holds validated candidates for an auditor."""
+
+    raw = os.environ.get("CALIBRATION_AUTO_PROMOTION", "true").strip().lower()
+    if raw not in {"true", "false"}:
+        raise ValueError("CALIBRATION_AUTO_PROMOTION must be true or false")
+    return raw == "true"
 
 
 def create_app(
@@ -92,6 +104,10 @@ def create_app(
             / "candidates"
             / "calibration"
         ),
+        auto_promotion=_auto_promotion_enabled(),
+    )
+    model_registry_service = ModelRegistryService(
+        active_database.session_factory, outcome_service=outcome_service
     )
     calibration_job_service = CalibrationJobService(
         active_database.session_factory,
@@ -112,6 +128,7 @@ def create_app(
         application.state.anchor_dispatch_service = anchor_dispatch_service
         application.state.outcome_service = outcome_service
         application.state.calibration_job_service = calibration_job_service
+        application.state.model_registry_service = model_registry_service
         if maintenance_mode:
             # The original 8010 maintenance entrypoint must not create demo
             # identities, register missing artifacts, or settle deployments.
@@ -154,6 +171,7 @@ def create_app(
     application.include_router(facility_router)
     application.include_router(anchor_router)
     application.include_router(outcome_router)
+    application.include_router(governance_router)
 
     @application.get("/", include_in_schema=False)
     def index():

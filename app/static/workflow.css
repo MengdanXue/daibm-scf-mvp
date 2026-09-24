@@ -420,3 +420,28 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .facility-history-rail li { display: grid; gap: 2px; min-width: 0; }
 .facility-history-rail b { font-size: 13px; }
 .facility-history-rail small, .facility-history-rail em { color: #6d7890; font-size: 11px; font-style: normal; overflow-wrap: anywhere; }
+.governance-content { display: grid; gap: 16px; }
+.gov-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; }
+.gov-table-wrap { overflow-x: auto; }
+.gov-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gov-table th, .gov-table td { padding: 8px 10px; border-bottom: 1px solid #e4e9f2; text-align: left; white-space: nowrap; }
+.gov-table tbody tr { cursor: pointer; }
+.gov-table tbody tr.selected, .gov-table tbody tr:hover { background: #f1f5fd; }
+.gov-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; margin: 8px 0 12px; }
+.gov-detail dt { color: #6d7890; font-size: 11px; }
+.gov-detail dd { margin: 2px 0 0; font-weight: 700; overflow-wrap: anywhere; }
+.gov-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.gov-inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 8px 0; }
+.gov-toggle { font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.gov-scope[data-scope-result="reject"] { color: #d24b50; font-weight: 800; }
+.gov-scope[data-scope-result="allow"] { color: #15976c; font-weight: 800; }
+.gov-scope[data-scope-result="allow_with_warning"] { color: #d48a16; font-weight: 800; }
+.gov-status[data-registry-status="ACTIVE"], .gov-status[data-registry-status="ELIGIBLE"], .gov-status[data-registry-status="TRAINING_USED"] { background: #e3f5ee; color: #15976c; }
+.gov-status[data-registry-status="REJECTED"], .gov-status[data-registry-status="ROLLED_BACK"] { background: #fbe8e9; color: #d24b50; }
+@media (max-width: 900px) { .gov-grid { grid-template-columns: 1fr; } }
+.gov-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.gov-cards article { min-width: 0; padding: 12px 14px; border: 1px solid #dce6f2; border-radius: 12px; background: #fbfdff; }
+.gov-cards span, .gov-cards small { display: block; color: #6d7890; font-size: 11px; overflow-wrap: anywhere; }
+.gov-cards b { display: block; margin: 4px 0; font-size: 18px; overflow-wrap: anywhere; }
+.workflow-evidence.risk-decision-detail { display: block; }
+.gov-note { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: #6d7890; }
