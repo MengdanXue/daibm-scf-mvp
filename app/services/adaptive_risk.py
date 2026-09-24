@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.domain.governance import ScopeResult, check_scope
+from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.services.outcome_calibration import (
     CalibrationCandidate,
@@ -58,34 +59,45 @@ class AdaptiveRiskResult:
     model_scope: str | None = None
     scope_result: str = "no_active_model"
     scope_reason: str = "no_active_model_in_scope"
+    model_version_id: str | None = None
+    model_version: str | None = None
+    attempted_model_version_id: str | None = None
 
 
 class AdaptiveRiskInferenceService:
-    def __init__(self, repository: OutcomeRepository | None = None) -> None:
+    """Resolve the model through the registry: scope -> ACTIVE version -> artifact."""
+
+    def __init__(
+        self,
+        repository: OutcomeRepository | None = None,
+        registry: ModelRegistryRepository | None = None,
+    ) -> None:
         self.repository = repository or OutcomeRepository()
+        self.registry = registry or ModelRegistryRepository()
 
     def assess(
         self, session: Any, baseline_probability: float, assessment_scope: str
     ) -> AdaptiveRiskResult:
         if assessment_scope not in {"controlled_demo", "external_verified"}:
             raise ValueError("assessment scope must be explicit and deployable")
-        active = self.repository.get_active_run(session, scope=assessment_scope)
+        active = self.registry.get_active_version(session, scope=assessment_scope)
         if active is None:
             other_scope = (
                 "controlled_demo"
                 if assessment_scope == "external_verified"
                 else "external_verified"
             )
-            incompatible = self.repository.get_active_run(session, scope=other_scope)
+            incompatible = self.registry.get_active_version(session, scope=other_scope)
             if incompatible is not None:
-                decision = check_scope(incompatible.deployment_scope, assessment_scope)
+                decision = check_scope(incompatible.scope, assessment_scope)
                 return self._fallback(
                     baseline_probability,
                     str(incompatible.calibration_run_id),
                     "calibration_scope_mismatch",
-                    model_scope=incompatible.deployment_scope,
+                    model_scope=incompatible.scope,
                     scope_result=decision.result.value,
                     scope_reason=decision.reason,
+                    model_version_id=str(incompatible.id),
                 )
             return AdaptiveRiskResult(
                 raw_score=baseline_probability,
@@ -94,13 +106,14 @@ class AdaptiveRiskInferenceService:
                 deployment_scope=None,
                 fallback_code=None,
             )
-        # An ACTIVE artifact is never trusted by status alone: the declared model
+        # An ACTIVE version is never trusted by status alone: the declared model
         # scope must pass the compatibility matrix for this request.
-        decision = check_scope(active.deployment_scope, assessment_scope)
-        scope_fields = {
-            "model_scope": active.deployment_scope,
+        decision = check_scope(active.scope, assessment_scope)
+        scope_fields: dict[str, Any] = {
+            "model_scope": active.scope,
             "scope_result": decision.result.value,
             "scope_reason": decision.reason,
+            "model_version_id": str(active.id),
         }
         if not decision.permits_model:
             return self._fallback(
@@ -109,19 +122,13 @@ class AdaptiveRiskInferenceService:
                 "calibration_scope_mismatch",
                 **scope_fields,
             )
-        if active.artifact_locator is None or active.artifact_sha256 is None:
-            return self._fallback(
-                baseline_probability,
-                str(active.calibration_run_id),
-                **scope_fields,
-            )
         try:
             calibration = load_verified_calibration(
-                Path(active.artifact_locator),
-                expected_sha256=active.artifact_sha256,
+                Path(active.artifact_path),
+                expected_sha256=active.artifact_hash,
                 run_id=str(active.calibration_run_id),
-                deployment_scope=active.deployment_scope,
-                expected_dataset_sha256=active.dataset_sha256,
+                deployment_scope=active.scope,
+                expected_dataset_sha256=active.training_dataset_version,
             )
             final_score = apply_platt_calibration(
                 baseline_probability,
@@ -137,9 +144,10 @@ class AdaptiveRiskInferenceService:
             raw_score=baseline_probability,
             final_score=final_score,
             calibration_run_id=str(active.calibration_run_id),
-            deployment_scope=active.deployment_scope,
+            deployment_scope=active.scope,
             fallback_code=None,
-            artifact_sha256=active.artifact_sha256,
+            artifact_sha256=active.artifact_hash,
+            model_version=f"{active.model_id}@v{active.version}",
             **scope_fields,
         )
 
@@ -152,6 +160,7 @@ class AdaptiveRiskInferenceService:
         model_scope: str | None = None,
         scope_result: str = ScopeResult.ALLOW.value,
         scope_reason: str = "scope_match",
+        model_version_id: str | None = None,
     ) -> AdaptiveRiskResult:
         return AdaptiveRiskResult(
             raw_score=baseline_probability,
@@ -163,6 +172,7 @@ class AdaptiveRiskInferenceService:
             model_scope=model_scope,
             scope_result=scope_result,
             scope_reason=scope_reason,
+            attempted_model_version_id=model_version_id,
         )
 
 

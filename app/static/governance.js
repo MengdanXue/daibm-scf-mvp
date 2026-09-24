@@ -10,6 +10,7 @@
       activeModels: "Активные модели", noActive: "нет активной модели", models: "Реестр моделей", matrix: "Матрица совместимости контуров",
       version: "Версия", type: "Тип", scope: "Контур", status: "Статус", dataset: "Снимок данных", samples: "n", metrics: "Brier (holdout) до → после", created: "Создана", creator: "Автор",
       detail: "Карточка модели", events: "История реестра", artifact: "Проверка артефакта", consistent: "хеш совпадает", inconsistent: "хеш НЕ совпадает", rollback: "Откатить к предыдущей", retire: "Вывести из эксплуатации",
+      candidates: "Кандидаты на активацию", noCandidates: "Нет кандидатов, ожидающих решения.", activationHistory: "История активаций", activatedAt: "Активирована", promotionReason: "Основание активации", activate: "Активировать", evaluation: "Оценка", unregistered: "Незарегистрированные артефакты",
       reasonCode: "Код основания", confirmed: "Операция выполнена", modelScope: "Модель", requestScope: "Запрос", result: "Результат", reason: "Причина",
       totals: "Всего записей", effective: "Действующих", eligible: "Пригодны для обучения", superseded: "Заменено исправлением", byStatus: "По статусу проверки", rejected: "Причины отклонения",
       outcomes: "Результаты", revision: "Ревизия", review: "Проверка", lineage: "Цепочка исправлений", showAll: "Показать и заменённые ревизии",
@@ -25,6 +26,7 @@
       activeModels: "当前激活模型", noActive: "无激活模型", models: "模型注册表", matrix: "Scope 兼容矩阵",
       version: "版本", type: "类型", scope: "Scope", status: "状态", dataset: "数据快照", samples: "n", metrics: "Brier（留出集）前 → 后", created: "创建时间", creator: "创建者",
       detail: "模型详情", events: "注册表历史", artifact: "工件校验", consistent: "哈希一致", inconsistent: "哈希不一致", rollback: "回滚到上一版本", retire: "下线模型",
+      candidates: "待激活候选模型", noCandidates: "暂无等待决策的候选模型。", activationHistory: "激活历史", activatedAt: "激活时间", promotionReason: "晋升原因", activate: "激活", evaluation: "评估", unregistered: "未注册的工件",
       reasonCode: "原因代码", confirmed: "操作已完成", modelScope: "模型", requestScope: "请求", result: "结果", reason: "原因",
       totals: "记录总数", effective: "有效结果", eligible: "可训练", superseded: "已被更正替代", byStatus: "审查状态分布", rejected: "拒绝原因",
       outcomes: "业务结果", revision: "修订", review: "审查", lineage: "更正链", showAll: "包含已被替代的修订",
@@ -57,7 +59,7 @@
   }
   const notify = (message, isError = false) => { if (typeof window.toast === "function") window.toast(message, isError); };
 
-  // --- Model center -----------------------------------------------------------
+  // --- Model center (model versions are the registry of record) -------------
 
   async function refreshRegistry() {
     const container = document.querySelector("#governanceContent");
@@ -65,81 +67,114 @@
     if (!READ_ROLES.has(role())) { container.innerHTML = `<p class="facility-empty-copy">${esc(tr("forbidden"))}</p>`; return; }
     container.innerHTML = `<p class="facility-empty-copy">${esc(tr("loading"))}</p>`;
     try {
-      state.registry = await api("/api/v1/model-registry");
-      if (state.selected) state.selected = await api(`/api/v1/model-registry/${state.selected.model_kind}/${state.selected.model_id}`);
+      const [versions, history, matrix] = await Promise.all([
+        api("/api/v1/model-versions"),
+        api("/api/v1/model-versions/activation-history"),
+        api("/api/v1/model-registry/scope-compatibility"),
+      ]);
+      state.registry = { ...versions, history, matrix };
+      if (state.selected) state.selected = await api(`/api/v1/model-versions/${state.selected.id}`);
       renderRegistry();
     } catch (error) { container.innerHTML = `<p class="facility-inline-error">${esc(error.message)}</p>`; }
   }
+
+  const brier = (item, key) => num(item.metrics?.[key]?.brier_score);
+  const panel = (tag, title, body, badge = "") => `<section class="workflow-panel"><div class="workflow-panel-head"><div><span>${esc(tag)}</span><h2>${esc(title)}</h2></div>${badge}</div>${body}</section>`;
 
   function renderRegistry() {
     const container = document.querySelector("#governanceContent");
     const registry = state.registry;
     if (!container || !registry) return;
+    const auditor = role() === "auditor";
     const active = ["controlled_demo", "external_verified"].map((scope) => {
-      const id = registry.active_by_scope[scope];
-      const model = registry.models.find((item) => item.model_id === id);
-      return `<article><span>${esc(scope)}</span><b>${esc(model ? model.version : tr("noActive"))}</b><small>${esc(model ? short(model.artifact_hash) : "—")}</small></article>`;
+      const model = registry.active_by_scope[scope];
+      return `<article data-active-scope="${esc(scope)}"><span>${esc(scope)}</span><b>${esc(model ? model.label : tr("noActive"))}</b>
+        <small>${esc(tr("activatedAt"))}: ${esc(model?.activated_at || "—")}</small><small title="${esc(model?.artifact_hash || "")}">${esc(tr("artifactHash"))}: ${esc(short(model?.artifact_hash))}</small>
+        <small>${esc(tr("promotionReason"))}: ${esc(model?.promotion_reason || "—")}</small></article>`;
     }).join("");
-    const rows = registry.models.map((item) => `<tr data-model-kind="${esc(item.model_kind)}" data-model-id="${esc(item.model_id)}" class="${state.selected?.model_id === item.model_id ? "selected" : ""}">
-      <td><b>${esc(item.version)}</b></td><td>${esc(item.model_type)}</td><td>${esc(item.training_scope)}</td><td>${chip(item.status)}</td>
-      <td title="${esc(item.training_dataset_version)}">${esc(short(item.training_dataset_version))}</td><td>${esc(item.sample_count ?? "—")}</td>
-      <td>${esc(num(item.evaluation_metrics?.holdout_before?.brier_score))} → ${esc(num(item.evaluation_metrics?.holdout_after?.brier_score))}</td>
-      <td>${esc(item.created_time)}</td><td>${esc(item.creator)}</td></tr>`).join("");
-    const matrix = registry.scope_compatibility.map((row) => `<tr><td>${esc(row.model_scope)}</td><td>${esc(row.request_scope)}</td><td><span class="gov-scope" data-scope-result="${esc(row.result)}">${esc(row.result)}</span></td><td>${esc(row.reason)}</td></tr>`).join("");
-    container.innerHTML = `<section class="workflow-panel"><div class="workflow-panel-head"><div><span>ACTIVE</span><h2>${esc(tr("activeModels"))}</h2></div></div><div id="governanceActive" class="gov-cards">${active}</div></section>
+    const candidates = registry.candidates.map((item) => `<li data-candidate-id="${esc(item.id)}"><b>${esc(item.label)}</b><small>${esc(item.scope)} · n=${esc(item.metrics?.sample_count ?? "—")} · Brier ${esc(brier(item, "holdout_before"))} → ${esc(brier(item, "holdout_after"))} · ${esc(short(item.artifact_hash))}</small></li>`).join("");
+    const rows = registry.versions.map((item) => `<tr data-version-id="${esc(item.id)}" class="${state.selected?.id === item.id ? "selected" : ""}">
+      <td><b>${esc(item.label)}</b></td><td>${esc(item.model_type)}</td><td>${esc(item.scope)}</td><td>${chip(item.status)}</td>
+      <td title="${esc(item.training_dataset_version)}">${esc(short(item.training_dataset_version))}</td><td>${esc(item.metrics?.sample_count ?? "—")}</td>
+      <td>${esc(brier(item, "holdout_before"))} → ${esc(brier(item, "holdout_after"))}</td>
+      <td title="${esc(item.artifact_hash)}">${esc(short(item.artifact_hash))}</td>
+      <td>${esc(item.created_at)}</td><td>${esc(item.created_by)}</td><td>${esc(item.activated_at || "—")}</td></tr>`).join("");
+    const history = registry.history.map((item) => `<li><b>${esc(item.version_label)} · ${esc(tr(item.from_status || "—"))} → ${esc(tr(item.to_status))}</b><small>${esc(item.reason)} · ${esc(item.actor)} · ${esc(short(item.artifact_hash))}</small><em>${esc(item.recorded_at)}</em></li>`).join("");
+    const matrix = registry.matrix.map((row) => `<tr><td>${esc(row.model_scope)}</td><td>${esc(row.request_scope)}</td><td><span class="gov-scope" data-scope-result="${esc(row.result)}">${esc(row.result)}</span></td><td>${esc(row.reason)}</td></tr>`).join("");
+    const unregistered = auditor && registry.unregistered_artifacts.length
+      ? `<p class="gov-note">${esc(tr("unregistered"))}: ${registry.unregistered_artifacts.map((id) => `<button class="btn" type="button" data-register-run="${esc(id)}">${esc(short(id))}</button>`).join(" ")}</p>` : "";
+    container.innerHTML = `${panel("ACTIVE", tr("activeModels"), `<div id="governanceActive" class="gov-cards">${active}</div>`)}
       <div class="gov-grid">
-        <section class="workflow-panel"><div class="workflow-panel-head"><div><span>REGISTRY</span><h2>${esc(tr("models"))}</h2></div><span class="task-badge">${registry.models.length}</span></div>
-          <div class="gov-table-wrap"><table id="modelRegistryTable" class="gov-table"><thead><tr><th>${esc(tr("version"))}</th><th>${esc(tr("type"))}</th><th>${esc(tr("scope"))}</th><th>${esc(tr("status"))}</th><th>${esc(tr("dataset"))}</th><th>${esc(tr("samples"))}</th><th>${esc(tr("metrics"))}</th><th>${esc(tr("created"))}</th><th>${esc(tr("creator"))}</th></tr></thead><tbody>${rows || `<tr><td colspan="9">${esc(tr("empty"))}</td></tr>`}</tbody></table></div></section>
+        ${panel("CANDIDATE", tr("candidates"), `<ul id="modelCandidates" class="gov-list">${candidates || `<li>${esc(tr("noCandidates"))}</li>`}</ul>`, `<span class="task-badge">${registry.candidates.length}</span>`)}
+        ${panel("HISTORY", tr("activationHistory"), `<ol id="activationHistory" class="facility-history-rail">${history || `<li>${esc(tr("empty"))}</li>`}</ol>`)}
+      </div>
+      <div class="gov-grid">
+        ${panel("REGISTRY", tr("models"), `${unregistered}<div class="gov-table-wrap"><table id="modelRegistryTable" class="gov-table"><thead><tr><th>${esc(tr("version"))}</th><th>${esc(tr("type"))}</th><th>${esc(tr("scope"))}</th><th>${esc(tr("status"))}</th><th>${esc(tr("dataset"))}</th><th>${esc(tr("samples"))}</th><th>${esc(tr("metrics"))}</th><th>${esc(tr("artifactHash"))}</th><th>${esc(tr("created"))}</th><th>${esc(tr("creator"))}</th><th>${esc(tr("activatedAt"))}</th></tr></thead><tbody>${rows || `<tr><td colspan="11">${esc(tr("empty"))}</td></tr>`}</tbody></table></div>`, `<span class="task-badge">${registry.versions.length}</span>`)}
         <section id="modelDetail" class="workflow-panel">${renderModelDetail()}</section>
       </div>
-      <section class="workflow-panel"><div class="workflow-panel-head"><div><span>SCOPE</span><h2>${esc(tr("matrix"))}</h2></div></div><div class="gov-table-wrap"><table id="scopeMatrix" class="gov-table"><thead><tr><th>${esc(tr("modelScope"))}</th><th>${esc(tr("requestScope"))}</th><th>${esc(tr("result"))}</th><th>${esc(tr("reason"))}</th></tr></thead><tbody>${matrix}</tbody></table></div></section>`;
-    container.querySelectorAll("[data-model-id]").forEach((row) => row.addEventListener("click", async () => {
-      try { state.selected = await api(`/api/v1/model-registry/${row.dataset.modelKind}/${row.dataset.modelId}`); renderRegistry(); }
+      ${panel("SCOPE", tr("matrix"), `<div class="gov-table-wrap"><table id="scopeMatrix" class="gov-table"><thead><tr><th>${esc(tr("modelScope"))}</th><th>${esc(tr("requestScope"))}</th><th>${esc(tr("result"))}</th><th>${esc(tr("reason"))}</th></tr></thead><tbody>${matrix}</tbody></table></div>`)}`;
+    const select = async (id) => {
+      try { state.selected = await api(`/api/v1/model-versions/${id}`); renderRegistry(); }
       catch (error) { notify(error.message, true); }
-    }));
-    container.querySelector("[data-gov-rollback]")?.addEventListener("click", rollbackSelected);
-    container.querySelector("#retireModelForm")?.addEventListener("submit", retireSelected);
+    };
+    container.querySelectorAll("[data-version-id]").forEach((row) => row.addEventListener("click", () => select(row.dataset.versionId)));
+    container.querySelectorAll("[data-candidate-id]").forEach((row) => row.addEventListener("click", () => select(row.dataset.candidateId)));
+    container.querySelectorAll("[data-register-run]").forEach((button) => button.addEventListener("click", () => command("/api/v1/model-versions", { calibration_run_id: button.dataset.registerRun })));
+    container.querySelector("#activateVersionForm")?.addEventListener("submit", (event) => submitForm(event, "activate"));
+    container.querySelector("#rollbackVersionForm")?.addEventListener("submit", (event) => submitForm(event, "rollback"));
+    container.querySelector("#retireModelForm")?.addEventListener("submit", (event) => submitForm(event, "retire"));
   }
 
   function renderModelDetail() {
     const model = state.selected;
     if (!model) return `<div class="workflow-empty"><span>≋</span><b>${esc(tr("detail"))}</b></div>`;
     const check = model.artifact_check;
-    const events = (model.events || []).map((event) => `<li><b>${esc(event.event_type)}${event.to_status ? ` · ${esc(event.from_status || "—")} → ${esc(event.to_status)}` : ""}</b><small>${esc(event.reason || "—")} · ${esc(event.actor)} · n=${esc(event.sample_count ?? "—")}</small><em>${esc(event.recorded_at)}</em></li>`).join("");
+    const transitions = (model.transitions || []).map((item) => `<li><b>#${esc(item.status_sequence)} · ${esc(tr(item.from_status || "—"))} → ${esc(tr(item.to_status))}</b><small>${esc(item.reason)} · ${esc(item.actor)}${item.evaluation_metrics ? ` · ${esc(tr("evaluation"))} ✓` : ""}</small><em>${esc(item.recorded_at)}</em></li>`).join("");
     const auditor = role() === "auditor";
-    return `<div class="workflow-panel-head"><div><span>${esc(model.model_kind.toUpperCase())}</span><h2>${esc(model.version)}</h2><p>${esc(model.model_id)}</p></div>${chip(model.status)}</div>
+    const evaluation = model.evaluation ? `${model.evaluation_passed ? "✓" : "✗"} ${esc(model.evaluation.gate_reason || model.evaluation.source || "")}` : "—";
+    const retirable = !["ACTIVE", "RETIRED"].includes(model.status);
+    return `<div class="workflow-panel-head"><div><span>${esc(model.model_id)}</span><h2>${esc(model.label)}</h2><p>${esc(model.id)}</p></div>${chip(model.status)}</div>
       <dl class="gov-detail">
-        <div><dt>${esc(tr("type"))}</dt><dd>${esc(model.model_type)}</dd></div><div><dt>${esc(tr("scope"))}</dt><dd>${esc(model.training_scope)}</dd></div>
+        <div><dt>${esc(tr("type"))}</dt><dd>${esc(model.model_type)}</dd></div><div><dt>${esc(tr("scope"))}</dt><dd>${esc(model.scope)}</dd></div>
         <div><dt>${esc(tr("dataset"))}</dt><dd title="${esc(model.training_dataset_version)}">${esc(short(model.training_dataset_version))}</dd></div>
         <div><dt>${esc(tr("artifactHash"))}</dt><dd title="${esc(model.artifact_hash)}">${esc(short(model.artifact_hash))}</dd></div>
         <div><dt>${esc(tr("artifact"))}</dt><dd id="artifactCheck" data-consistent="${esc(check?.consistent)}">${esc(check ? tr(check.consistent ? "consistent" : "inconsistent") : "—")}</dd></div>
-        <div><dt>${esc(tr("creator"))}</dt><dd>${esc(model.creator)}</dd></div>
+        <div><dt>${esc(tr("evaluation"))}</dt><dd>${evaluation}</dd></div>
+        <div><dt>${esc(tr("metrics"))}</dt><dd>${esc(brier(model, "holdout_before"))} → ${esc(brier(model, "holdout_after"))}</dd></div>
+        <div><dt>${esc(tr("creator"))}</dt><dd>${esc(model.created_by)}</dd></div>
+        <div><dt>${esc(tr("activatedAt"))}</dt><dd>${esc(model.activated_at || "—")}</dd></div>
+        <div><dt>${esc(tr("promotionReason"))}</dt><dd>${esc(model.promotion_reason || "—")}</dd></div>
       </dl>
-      ${auditor && model.can_rollback ? `<button class="btn btn-danger" type="button" data-gov-rollback="${esc(model.model_id)}">${esc(tr("rollback"))}</button>` : ""}
-      ${auditor && model.can_retire ? `<form id="retireModelForm" class="gov-inline-form"><label><span>${esc(tr("reasonCode"))}</span><input name="reason_code" value="OBSOLETE_MODEL" pattern="[A-Z][A-Z0-9_]{2,63}" required></label><button class="btn btn-danger" type="submit">${esc(tr("retire"))}</button></form>` : ""}
-      <h3>${esc(tr("events"))}</h3><ol id="modelEvents" class="facility-history-rail">${events || `<li>${esc(tr("empty"))}</li>`}</ol>`;
+      ${auditor && model.can_activate ? `<form id="activateVersionForm" class="gov-inline-form"><label><span>${esc(tr("promotionReason"))}</span><input name="reason" minlength="8" maxlength="500" required></label><button class="btn btn-primary" type="submit">${esc(tr("activate"))}</button></form>` : ""}
+      ${auditor && model.can_rollback ? `<form id="rollbackVersionForm" class="gov-inline-form"><label><span>${esc(tr("reasonCode"))}</span><input name="reason_code" value="MODEL_DEGRADED" pattern="[A-Z][A-Z0-9_]{2,63}" required></label><button class="btn btn-danger" type="submit">${esc(tr("rollback"))}</button></form>` : ""}
+      ${auditor && retirable ? `<form id="retireModelForm" class="gov-inline-form"><label><span>${esc(tr("reasonCode"))}</span><input name="reason_code" value="OBSOLETE_MODEL" pattern="[A-Z][A-Z0-9_]{2,63}" required></label><button class="btn btn-danger" type="submit">${esc(tr("retire"))}</button></form>` : ""}
+      <h3>${esc(tr("events"))}</h3><ol id="modelEvents" class="facility-history-rail">${transitions || `<li>${esc(tr("empty"))}</li>`}</ol>`;
   }
 
-  async function rollbackSelected() {
-    const model = state.selected;
-    if (!model) return;
+  async function command(path, body) {
     try {
-      await api("/api/v1/calibration-deployments/rollback", { method: "POST", body: JSON.stringify({ expected_active_run_id: model.model_id, deployment_scope: model.training_scope }) });
+      const result = await api(path, { method: "POST", body: JSON.stringify(body) });
+      if (result && result.id) state.selected = result;
       notify(tr("confirmed"));
       await refreshRegistry();
     } catch (error) { notify(error.message, true); }
   }
 
-  async function retireSelected(event) {
+  async function submitForm(event, action) {
     event.preventDefault();
     const model = state.selected;
     if (!model) return;
-    const reason = String(new FormData(event.currentTarget).get("reason_code") || "").trim();
-    try {
-      state.selected = await api(`/api/v1/model-registry/calibration/${model.model_id}/retire`, { method: "POST", body: JSON.stringify({ reason_code: reason }) });
-      notify(tr("confirmed"));
-      await refreshRegistry();
-    } catch (error) { notify(error.message, true); }
+    const data = Object.fromEntries(new FormData(event.currentTarget).entries());
+    if (action === "retire") {
+      try {
+        await api(`/api/v1/model-registry/calibration/${model.calibration_run_id}/retire`, { method: "POST", body: JSON.stringify({ reason_code: String(data.reason_code || "").trim() }) });
+        notify(tr("confirmed"));
+        await refreshRegistry();
+      } catch (error) { notify(error.message, true); }
+      return;
+    }
+    const body = action === "activate" ? { reason: String(data.reason || "").trim() } : { reason_code: String(data.reason_code || "").trim() };
+    await command(`/api/v1/model-versions/${model.id}/${action}`, body);
   }
 
   // --- Data feedback ------------------------------------------------------------

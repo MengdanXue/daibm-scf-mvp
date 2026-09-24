@@ -700,18 +700,21 @@ def test_inference_service_applies_the_single_active_verified_artifact(tmp_path)
     path = tmp_path / f"{sha256}.json"
     path.write_bytes(artifact_bytes)
     run = SimpleNamespace(
+        id="10000000-0000-0000-0000-000000000001",
+        model_id="calibration:controlled_demo",
+        version=1,
         calibration_run_id="00000000-0000-0000-0000-000000000001",
-        artifact_locator=str(path),
-        artifact_sha256=sha256,
-        deployment_scope="controlled_demo",
-        dataset_sha256="1" * 64,
+        artifact_path=str(path),
+        artifact_hash=sha256,
+        scope="controlled_demo",
+        training_dataset_version="1" * 64,
     )
 
-    class Repository:
-        def get_active_run(self, _session, *, scope):
+    class Registry:
+        def get_active_version(self, _session, *, scope):
             return run
 
-    result = AdaptiveRiskInferenceService(repository=Repository()).assess(
+    result = AdaptiveRiskInferenceService(registry=Registry()).assess(
         object(),
         0.8,
         "controlled_demo",
@@ -722,6 +725,8 @@ def test_inference_service_applies_the_single_active_verified_artifact(tmp_path)
     assert result.calibration_run_id == str(run.calibration_run_id)
     assert result.deployment_scope == "controlled_demo"
     assert result.fallback_code is None
+    assert result.model_version_id == run.id
+    assert result.model_version == "calibration:controlled_demo@v1"
 
 
 def test_inference_service_falls_back_to_baseline_on_active_artifact_corruption(
@@ -730,18 +735,21 @@ def test_inference_service_falls_back_to_baseline_on_active_artifact_corruption(
     path = tmp_path / "corrupt.json"
     path.write_text("{}", encoding="utf-8")
     run = SimpleNamespace(
+        id="10000000-0000-0000-0000-000000000001",
+        model_id="calibration:controlled_demo",
+        version=1,
         calibration_run_id="00000000-0000-0000-0000-000000000001",
-        artifact_locator=str(path),
-        artifact_sha256="1" * 64,
-        deployment_scope="controlled_demo",
-        dataset_sha256="1" * 64,
+        artifact_path=str(path),
+        artifact_hash="1" * 64,
+        scope="controlled_demo",
+        training_dataset_version="1" * 64,
     )
 
-    class Repository:
-        def get_active_run(self, _session, *, scope):
+    class Registry:
+        def get_active_version(self, _session, *, scope):
             return run
 
-    result = AdaptiveRiskInferenceService(repository=Repository()).assess(
+    result = AdaptiveRiskInferenceService(registry=Registry()).assess(
         object(),
         0.8,
         "controlled_demo",
@@ -752,3 +760,4 @@ def test_inference_service_falls_back_to_baseline_on_active_artifact_corruption(
     assert result.deployment_scope is None
     assert result.fallback_code == "active_artifact_invalid"
     assert result.attempted_calibration_run_id == str(run.calibration_run_id)
+    assert result.attempted_model_version_id == run.id

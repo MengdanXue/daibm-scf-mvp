@@ -80,3 +80,8 @@ CREATED → REVIEWING → REJECTED
 - 仍是 Platt 校准层治理，不新增模型算法、不在线训练、不替换 TGNN；TGNN 条目只读。
 - 资格规则是确定性的业务一致性检查，不验证外部证据真实性；`external_verified` 仍是人工声明而非密码学来源证明。
 - CANDIDATE 在自动晋升中是瞬时状态（同一事务内验证通过即晋升或拒绝），以注册表事件形式记录。
+
+## Phase 2.1：模型版本注册表
+
+自迁移 `20260926_0017` 起，`risk_model_versions` 是部署模型的记录源：每个校准工件注册为一个版本（`calibration:{scope}@vN`），生命周期为 DRAFT → EVALUATING → CANDIDATE → ACTIVE → ROLLED_BACK → RETIRED（另有 REJECTED）。每次状态变化都经过 `transition_model_version` 写入不可变的 `risk_model_version_transitions`；推理按 scope 查询 ACTIVE 版本。人工激活会重新校验工件哈希。详见 [PHASE2.1_MODEL_REGISTRY_REPORT.md](../../PHASE2.1_MODEL_REGISTRY_REPORT.md)。
+

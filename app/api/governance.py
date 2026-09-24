@@ -57,6 +57,83 @@ def _execute(operation: Callable[[], Any]) -> Any:
         ) from error
 
 
+class ActivateVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=8, max_length=500)
+
+
+class RollbackVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{2,63}$")
+
+
+class RegisterVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    calibration_run_id: str
+
+
+ScopeFilter = Query(None, pattern=r"^(controlled_demo|external_verified|mixed)$")
+
+
+@router.get("/api/v1/model-versions")
+def list_model_versions(user: CurrentUser, request: Request, scope: str | None = ScopeFilter):
+    return _execute(
+        lambda: request.app.state.model_registry_service.list_versions(user, scope=scope)
+    )
+
+
+@router.post("/api/v1/model-versions", status_code=201)
+def register_model_version(
+    payload: RegisterVersionRequest, user: CurrentAuditor, request: Request
+):
+    return _execute(
+        lambda: request.app.state.model_registry_service.register_version(
+            payload.calibration_run_id, user
+        )
+    )
+
+
+@router.get("/api/v1/model-versions/activation-history")
+def model_activation_history(
+    user: CurrentUser, request: Request, scope: str | None = ScopeFilter
+):
+    return _execute(
+        lambda: request.app.state.model_registry_service.activation_history(user, scope=scope)
+    )
+
+
+@router.get("/api/v1/model-versions/{version_id}")
+def get_model_version(version_id: str, user: CurrentUser, request: Request):
+    return _execute(
+        lambda: request.app.state.model_registry_service.get_version(version_id, user)
+    )
+
+
+@router.post("/api/v1/model-versions/{version_id}/activate")
+def activate_model_version(
+    version_id: str, payload: ActivateVersionRequest, user: CurrentAuditor, request: Request
+):
+    return _execute(
+        lambda: request.app.state.model_registry_service.activate_version(
+            version_id, user, reason=payload.reason
+        )
+    )
+
+
+@router.post("/api/v1/model-versions/{version_id}/rollback")
+def rollback_model_version(
+    version_id: str, payload: RollbackVersionRequest, user: CurrentAuditor, request: Request
+):
+    return _execute(
+        lambda: request.app.state.model_registry_service.rollback_version(
+            version_id, user, reason_code=payload.reason_code
+        )
+    )
+
+
 @router.get("/api/v1/model-registry")
 def list_models(
     user: CurrentUser,

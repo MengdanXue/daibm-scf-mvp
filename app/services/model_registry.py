@@ -29,12 +29,18 @@ from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
 from app.models_governance import CalibrationJobModel, OutcomeCorrectionModel
 from app.models_identity import UserModel
-from app.models_model_governance import ModelRegistryEventModel
+from app.domain.model_registry import ModelVersionStatus
+from app.models_model_governance import (
+    ModelRegistryEventModel,
+    RiskModelVersionModel,
+    RiskModelVersionTransitionModel,
+)
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel
 from app.repositories.ledger import LedgerRepository
+from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
-from app.services.outcomes import OutcomeService
+from app.services.outcomes import OutcomeConflict, OutcomeNotFound, OutcomeService
 
 READ_ROLES = {"auditor", "risk_manager", "financier"}
 
@@ -63,8 +69,12 @@ class ModelRegistryService:
         repository: OutcomeRepository | None = None,
         ledger_repository: LedgerRepository | None = None,
         clock: Callable[[], datetime] | None = None,
+        outcome_service: OutcomeService | None = None,
+        versions: ModelRegistryRepository | None = None,
     ) -> None:
         self.session_factory = session_factory
+        self.outcome_service = outcome_service
+        self.versions = versions or ModelRegistryRepository()
         self.repository = repository or OutcomeRepository()
         self.ledger_repository = ledger_repository or LedgerRepository()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
@@ -176,6 +186,188 @@ class ModelRegistryService:
                     for event in events
                 ],
             }
+
+    # --- Model versions (registry of record) -------------------------------
+
+    def list_versions(
+        self, user: AuthenticatedUser, *, scope: str | None = None
+    ) -> dict[str, Any]:
+        self._require_read(user)
+        with self.session_factory() as session:
+            versions = self.versions.list_versions(session, scope=scope)
+            entries = [self._version_entry(item) for item in versions]
+            return {
+                "versions": entries,
+                "active_by_scope": {
+                    item["scope"]: item for item in entries if item["status"] == "ACTIVE"
+                },
+                "candidates": [item for item in entries if item["status"] == "CANDIDATE"],
+                "unregistered_artifacts": [
+                    str(run_id) for run_id in self._unregistered_runs(session, scope)
+                ],
+            }
+
+    def get_version(self, version_id: str | uuid.UUID, user: AuthenticatedUser) -> dict[str, Any]:
+        self._require_read(user)
+        normalized = self._uuid(version_id)
+        with self.session_factory() as session:
+            version = self.versions.get(session, normalized)
+            if version is None:
+                raise RegistryNotFound(str(version_id))
+            transitions = self.versions.list_transitions(session, version_ids=[version.id])
+            labels = {version.id: self._label(version)}
+            return {
+                **self._version_entry(version),
+                "artifact_check": self._hash_check(version.artifact_path, version.artifact_hash),
+                "transitions": [self._transition_entry(item, labels) for item in transitions],
+            }
+
+    def activation_history(
+        self, user: AuthenticatedUser, *, scope: str | None = None
+    ) -> list[dict[str, Any]]:
+        self._require_read(user)
+        with self.session_factory() as session:
+            transitions = self.versions.list_transitions(
+                session, scope=scope, activation_only=True
+            )
+            labels = {
+                item.id: self._label(item) for item in self.versions.list_versions(session)
+            }
+            return [self._transition_entry(item, labels) for item in reversed(transitions)]
+
+    def register_version(self, run_id: str | uuid.UUID, user: AuthenticatedUser) -> dict[str, Any]:
+        self._require_auditor(user)
+        version_id = self._delegate(lambda service: service.register_version(run_id, user))
+        return self.get_version(version_id, user)
+
+    def activate_version(
+        self, version_id: str | uuid.UUID, user: AuthenticatedUser, *, reason: str
+    ) -> dict[str, Any]:
+        self._require_auditor(user)
+        activated = self._delegate(
+            lambda service: service.promote_version(version_id, user, reason=reason)
+        )
+        return self.get_version(activated, user)
+
+    def rollback_version(
+        self, version_id: str | uuid.UUID, user: AuthenticatedUser, *, reason_code: str
+    ) -> dict[str, Any]:
+        """Deactivate an ACTIVE version and restore the version it replaced."""
+
+        self._require_auditor(user)
+        normalized = self._uuid(version_id)
+        with self.session_factory() as session:
+            version = self.versions.get(session, normalized)
+            if version is None:
+                raise RegistryNotFound(str(version_id))
+            if version.status != ModelVersionStatus.ACTIVE.value:
+                raise RegistryConflict(f"model version is {version.status}, not ACTIVE")
+            run_id, scope = version.calibration_run_id, version.scope
+        self._delegate(
+            lambda service: service.rollback(
+                run_id, user, scope=scope, reason=f"manual_rollback:{reason_code}"
+            )
+        )
+        with self.session_factory() as session:
+            restored = self.versions.get_active_version(session, scope=scope)
+            assert restored is not None
+            restored_id = restored.id
+        return self.get_version(restored_id, user)
+
+    def _delegate(self, operation: Callable[[OutcomeService], Any]) -> Any:
+        if self.outcome_service is None:
+            raise RegistryConflict("model promotion is not configured")
+        try:
+            return operation(self.outcome_service)
+        except OutcomeNotFound as error:
+            raise RegistryNotFound(str(error)) from error
+        except OutcomeConflict as error:
+            raise RegistryConflict(str(error)) from error
+
+    @staticmethod
+    def _unregistered_runs(session: Session, scope: str | None) -> list[uuid.UUID]:
+        statement = (
+            select(CalibrationRunModel.calibration_run_id)
+            .outerjoin(
+                RiskModelVersionModel,
+                RiskModelVersionModel.calibration_run_id == CalibrationRunModel.calibration_run_id,
+            )
+            .where(
+                RiskModelVersionModel.id.is_(None),
+                CalibrationRunModel.artifact_locator.is_not(None),
+            )
+            .order_by(CalibrationRunModel.completed_at)
+        )
+        if scope is not None:
+            statement = statement.where(CalibrationRunModel.deployment_scope == scope)
+        return list(session.scalars(statement))
+
+    @staticmethod
+    def _label(version: RiskModelVersionModel) -> str:
+        return f"{version.model_id}@v{version.version}"
+
+    def _version_entry(self, version: RiskModelVersionModel) -> dict[str, Any]:
+        status = version.status
+        return {
+            "id": str(version.id),
+            "model_id": version.model_id,
+            "version": version.version,
+            "label": self._label(version),
+            "model_type": version.model_type,
+            "calibration_run_id": str(version.calibration_run_id),
+            "artifact_path": version.artifact_path,
+            "artifact_hash": version.artifact_hash,
+            "scope": version.scope,
+            "training_dataset_version": version.training_dataset_version,
+            "metrics": version.metrics,
+            "evaluation": version.evaluation,
+            "evaluation_passed": version.evaluation_passed,
+            "evaluated_at": _timestamp(version.evaluated_at),
+            "status": status,
+            "created_by": version.created_by,
+            "created_at": _timestamp(version.created_at),
+            "activated_at": _timestamp(version.activated_at),
+            "deactivated_at": _timestamp(version.deactivated_at),
+            "promotion_reason": version.promotion_reason,
+            "previous_active_version_id": (
+                str(version.previous_active_version_id)
+                if version.previous_active_version_id
+                else None
+            ),
+            "can_activate": status == "CANDIDATE" and bool(version.evaluation_passed),
+            "can_rollback": status == "ACTIVE" and version.previous_active_version_id is not None,
+        }
+
+    @staticmethod
+    def _transition_entry(
+        item: RiskModelVersionTransitionModel, labels: dict[uuid.UUID, str]
+    ) -> dict[str, Any]:
+        return {
+            "model_version_id": str(item.model_version_id),
+            "version_label": labels.get(item.model_version_id),
+            "from_status": item.from_status,
+            "to_status": item.to_status,
+            "status_sequence": item.status_sequence,
+            "reason": item.reason,
+            "actor": item.actor_label,
+            "actor_user_id": str(item.actor_user_id) if item.actor_user_id else None,
+            "evaluation_metrics": item.evaluation_metrics,
+            "artifact_hash": item.artifact_hash,
+            "recorded_at": canonical_timestamp(item.recorded_at),
+        }
+
+    @staticmethod
+    def _hash_check(path: str, expected: str) -> dict[str, Any]:
+        try:
+            actual: str | None = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            actual = None
+        return {"expected_sha256": expected, "actual_sha256": actual, "consistent": actual == expected}
+
+    @staticmethod
+    def _require_auditor(user: AuthenticatedUser) -> None:
+        if user.role != "auditor":
+            raise RegistryForbidden("Only auditors can change model versions")
 
     # --- Commands -----------------------------------------------------------
 
@@ -390,3 +582,7 @@ class ModelRegistryService:
             return uuid.UUID(str(value))
         except ValueError as error:
             raise RegistryNotFound(str(value)) from error
+
+
+def _timestamp(value: datetime | None) -> str | None:
+    return canonical_timestamp(value) if value is not None else None

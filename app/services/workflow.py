@@ -412,6 +412,10 @@ class WorkflowService:
                         else None
                     ),
                     fallback_code=adaptive_result.fallback_code,
+                    model_version_id=_optional_uuid(
+                        adaptive_result.model_version_id
+                        or adaptive_result.attempted_model_version_id
+                    ),
                     recorded_at=application.risk_assessed_at,
                 )
             )
@@ -436,6 +440,7 @@ class WorkflowService:
                     "calibration_artifact_sha256": adaptive_result.artifact_sha256,
                     "scope_result": adaptive_result.scope_result,
                     "scope_reason": adaptive_result.scope_reason,
+                    "model_version_id": adaptive_result.model_version_id,
                     "assessment_id": str(application.risk_assessment_id),
                     "input_sha256": application.risk_input_sha256,
                     "provenance": "DEMO_WORKFLOW",
@@ -545,6 +550,9 @@ class WorkflowService:
                         str(item.calibration_run_id) if item.calibration_run_id else None
                     ),
                     "calibration_artifact_sha256": item.calibration_artifact_sha256,
+                    "model_version_id": (
+                        str(item.model_version_id) if item.model_version_id else None
+                    ),
                     "model_scope": item.model_scope,
                     "scope_result": item.scope_result,
                     "scope_reason": item.scope_reason,
@@ -1031,3 +1039,7 @@ class WorkflowService:
             "payable_commitment": payload.get("payable_commitment"),
             "fallback_code": payload.get("proof_fallback_code"),
         }
+
+
+def _optional_uuid(value: str | None) -> uuid.UUID | None:
+    return uuid.UUID(value) if value is not None else None
