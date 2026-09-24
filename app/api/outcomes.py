@@ -58,6 +58,8 @@ class CalibrationRunResponse(BaseModel):
     eligible_count: int
     excluded_count: int
     failure_code: str | None
+    failure_reason: str | None
+    dataset_snapshot_id: str | None
     deployment_status: str
     deployment_scope: str
     activation_mode: str | None

@@ -29,16 +29,19 @@ from app.models_lifecycle import (
     FacilityDelinquencyModel,
     FacilityWriteOffModel,
 )
-from app.models_model_governance import ModelRegistryEventModel
+from app.models_identity import UserModel
+from app.models_model_governance import ModelRegistryEventModel, OutcomeReviewEventModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel, RiskAssessmentModel
 from app.domain.model_registry import ModelVersionStatus
+from app.domain.outcome_governance import training_failure_reason
 from app.repositories.ledger import LedgerRepository
 from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import (
     ActualOutcomeCreate,
     OutcomeCorrectionCreate,
+    OutcomeReviewCreate,
     OutcomeSupersedeCreate,
 )
 from app.services.adaptive_risk import (
@@ -48,6 +51,7 @@ from app.services.adaptive_risk import (
     is_strictly_newer_candidate,
     load_verified_calibration,
 )
+from app.services.outcome_eligibility import OutcomeEligibilityService, observation_for
 from app.services.outcome_calibration import (
     UnmeasuredCalibrationDataset,
     CalibrationCandidate,
@@ -63,6 +67,7 @@ from app.services.outcome_calibration import (
 
 
 SYSTEM_ACTOR = "system:calibration-worker"
+REVIEWER_ROLES = frozenset({"auditor", "risk_manager"})
 AWAITING_PROMOTION = "awaiting_manual_promotion"
 
 
@@ -154,6 +159,7 @@ class OutcomeService:
         clock: Callable[[], datetime] | None = None,
         model_registry: ModelRegistryRepository | None = None,
         auto_promotion: bool = True,
+        manual_review: bool = False,
     ) -> None:
         self.session_factory = session_factory
         self.artifact_root = Path(artifact_root)
@@ -161,6 +167,9 @@ class OutcomeService:
         self.model_registry = model_registry or ModelRegistryRepository()
         # When false, a validated candidate waits for an auditor's promotion.
         self.auto_promotion = auto_promotion
+        # When true, outcomes that pass the rules wait in REVIEWING for a reviewer.
+        self.manual_review = manual_review
+        self.eligibility = OutcomeEligibilityService(self.repository)
         self.ledger_repository = ledger_repository or LedgerRepository()
         self.trainer = trainer
         self.artifact_writer = artifact_writer
@@ -185,6 +194,7 @@ class OutcomeService:
         normalized_id = self._uuid(facility_id)
         request_sha256 = self._request_sha256(normalized_id, payload)
         with self.session_factory.begin() as session:
+            self._apply_review_mode(session)
             replay = self.repository.get_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -291,6 +301,7 @@ class OutcomeService:
         normalized_id = self._uuid(outcome_id)
         request_sha256 = self._correction_sha256(normalized_id, payload)
         with self.session_factory.begin() as session:
+            self._apply_review_mode(session)
             replay = self.repository.get_correction_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -422,6 +433,7 @@ class OutcomeService:
             ).encode("utf-8")
         ).hexdigest()
         with self.session_factory.begin() as session:
+            self._apply_review_mode(session)
             replay = self.repository.get_by_idempotency_key(session, payload.idempotency_key)
             if replay is not None:
                 if replay.request_sha256 != request_sha256:
@@ -1733,6 +1745,128 @@ class OutcomeService:
         )
         session.flush()
 
+    def _apply_review_mode(self, session: Session) -> None:
+        """Tell the review trigger whether rule-passing outcomes need a reviewer."""
+
+        if self.manual_review:
+            session.execute(text("SELECT set_config('daibm.outcome_review_mode', 'manual', true)"))
+
+    def review(
+        self,
+        outcome_id: str | uuid.UUID,
+        payload: OutcomeReviewCreate,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """A reviewer approves a REVIEWING outcome or rejects one not yet trained on."""
+
+        if user.role not in REVIEWER_ROLES:
+            raise ForbiddenOutcome("Only auditors and risk managers can review outcomes")
+        normalized_id = self._uuid(outcome_id)
+        with self.session_factory.begin() as session:
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
+                raise OutcomeNotFound(str(normalized_id))
+            scope = self._scope_for_provenance(outcome.provenance)
+            self._acquire_run_lock(session, scope)
+            if self.repository.get_successor(session, normalized_id) is not None:
+                raise OutcomeConflict("A superseded revision cannot be reviewed")
+            status, _ = self.repository.review_status(session, normalized_id)
+            now = self._now()
+            job = None
+            if payload.decision == "APPROVE":
+                if status != "REVIEWING":
+                    raise OutcomeConflict(f"Only a REVIEWING outcome can be approved (is {status})")
+                rule_reason = session.scalar(
+                    text("SELECT outcome_eligibility_reason(:id)"), {"id": normalized_id}
+                )
+                if rule_reason is not None:
+                    raise OutcomeConflict(f"Eligibility rules fail: {rule_reason}")
+                target, reason_code = "ELIGIBLE", None
+            else:
+                if status not in ("REVIEWING", "ELIGIBLE"):
+                    raise OutcomeConflict(
+                        "Only an outcome not yet used for training can be rejected by review; "
+                        "use a correction for trained outcomes"
+                    )
+                target, reason_code = "REJECTED", payload.reason_code
+            session.add(
+                OutcomeReviewEventModel(
+                    outcome_id=normalized_id,
+                    status=target,
+                    reason_code=reason_code,
+                    actor_user_id=user.user_id,
+                    comment=payload.comment,
+                )
+            )
+            session.flush()
+            if target == "ELIGIBLE" and scope in self.repository.DEPLOYABLE_SCOPES:
+                job = self.repository.add_job(
+                    session,
+                    self._new_job(
+                        scope=scope,
+                        trigger_type="outcome_reviewed",
+                        idempotency_key=uuid.uuid4(),
+                        now=now,
+                        outcome_id=normalized_id,
+                    ),
+                )
+            self.ledger_repository.append_many(
+                session,
+                normalized_id,
+                [
+                    (
+                        "ACTUAL_OUTCOME_REVIEWED",
+                        {
+                            "outcome_id": str(normalized_id),
+                            "from_status": status,
+                            "to_status": target,
+                            "reason_code": reason_code,
+                            "comment": payload.comment,
+                            "reviewer_user_id": str(user.user_id),
+                            "reviewer_role": user.role,
+                            "calibration_job_id": str(job.job_id) if job is not None else None,
+                        },
+                    )
+                ],
+            )
+            return {
+                "outcome_id": str(normalized_id),
+                "review_status": target,
+                "review_reason": reason_code,
+                "calibration_job_id": str(job.job_id) if job is not None else None,
+                "review_history": self.review_history(session, normalized_id),
+            }
+
+    def review_history(self, session: Session, outcome_id: uuid.UUID) -> list[dict[str, Any]]:
+        events = self.repository.list_review_events(session, [outcome_id])
+        usernames = {
+            row.user_id: row.username
+            for row in session.scalars(
+                select(UserModel).where(
+                    UserModel.user_id.in_(
+                        [item.actor_user_id for item in events if item.actor_user_id]
+                    )
+                )
+            )
+        }
+        return [
+            {
+                "from_status": event.from_status,
+                "to_status": event.status,
+                "reason_code": event.reason_code,
+                "comment": event.comment,
+                "operator": usernames.get(event.actor_user_id, "system")
+                if event.actor_user_id
+                else "system",
+                "role": event.actor_role or ("system" if event.actor_user_id is None else None),
+                "calibration_run_id": (
+                    str(event.calibration_run_id) if event.calibration_run_id else None
+                ),
+                "recorded_at": canonical_timestamp(event.recorded_at),
+            }
+            for event in events
+        ]
+
     @staticmethod
     def set_governance_actor(session: Session, user: AuthenticatedUser) -> None:
         """Attribute trigger-written registry events in this transaction."""
@@ -2090,6 +2224,12 @@ class OutcomeService:
             "eligible_count": int(eligible_count),
             "excluded_count": int(excluded_count),
             "failure_code": run.failure_code,
+            "failure_reason": training_failure_reason(
+                failure_code=run.failure_code, activation_reason=run.activation_reason
+            ),
+            "dataset_snapshot_id": (
+                str(run.dataset_snapshot_id) if run.dataset_snapshot_id is not None else None
+            ),
             "deployment_status": run.deployment_status,
             "deployment_scope": run.deployment_scope,
             "activation_mode": run.activation_mode,
@@ -2109,24 +2249,7 @@ class OutcomeService:
 
     @staticmethod
     def _observation(outcome: ActualOutcomeModel) -> CalibrationObservation:
-        return CalibrationObservation(
-            outcome_id=str(outcome.outcome_id),
-            facility_id=str(outcome.facility_id),
-            request_id=str(outcome.request_id),
-            risk_assessment_id=str(outcome.risk_assessment_id),
-            model_version_id=(
-                str(outcome.model_version_id)
-                if outcome.model_version_id is not None
-                else None
-            ),
-            risk_engine_version=outcome.risk_engine_version,
-            risk_input_sha256=outcome.risk_input_sha256,
-            evidence_sha256=outcome.evidence_sha256,
-            original_score=outcome.original_risk_score,
-            defaulted=outcome.defaulted,
-            observed_at=canonical_timestamp(outcome.observed_at),
-            provenance=outcome.provenance,
-        )
+        return observation_for(outcome)
 
     @staticmethod
     def _request_sha256(

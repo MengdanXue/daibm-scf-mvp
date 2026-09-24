@@ -244,6 +244,11 @@ class CalibrationRunModel(Base):
         UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT")
     )
     retirement_reason: Mapped[str | None] = mapped_column(Text)
+    dataset_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("training_dataset_snapshots.snapshot_id", ondelete="RESTRICT"),
+        index=True,
+    )
 
 
 Index("ix_calibration_runs_completed_at", CalibrationRunModel.completed_at.desc())

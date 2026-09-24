@@ -372,6 +372,7 @@
       ledger: role === "auditor",
       governance: ["auditor", "risk_manager", "financier"].includes(role),
       feedback: role === "auditor" || role === "risk_manager",
+      snapshots: ["auditor", "risk_manager", "financier"].includes(role),
       model: true
     };
     document.querySelectorAll("[data-view-button]").forEach((button) => {

@@ -34,6 +34,7 @@ from app.models_model_governance import (
     ModelRegistryEventModel,
     RiskModelVersionModel,
     RiskModelVersionTransitionModel,
+    TrainingDatasetSnapshotModel,
 )
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel
@@ -195,7 +196,11 @@ class ModelRegistryService:
         self._require_read(user)
         with self.session_factory() as session:
             versions = self.versions.list_versions(session, scope=scope)
-            entries = [self._version_entry(item) for item in versions]
+            snapshots = self._snapshots(session, versions)
+            entries = [
+                self._version_entry(item, snapshots.get(item.dataset_snapshot_id))
+                for item in versions
+            ]
             return {
                 "versions": entries,
                 "active_by_scope": {
@@ -216,8 +221,9 @@ class ModelRegistryService:
                 raise RegistryNotFound(str(version_id))
             transitions = self.versions.list_transitions(session, version_ids=[version.id])
             labels = {version.id: self._label(version)}
+            snapshot = self._snapshots(session, [version]).get(version.dataset_snapshot_id)
             return {
-                **self._version_entry(version),
+                **self._version_entry(version, snapshot),
                 "artifact_check": self._hash_check(version.artifact_path, version.artifact_hash),
                 "transitions": [self._transition_entry(item, labels) for item in transitions],
             }
@@ -306,9 +312,34 @@ class ModelRegistryService:
     def _label(version: RiskModelVersionModel) -> str:
         return f"{version.model_id}@v{version.version}"
 
-    def _version_entry(self, version: RiskModelVersionModel) -> dict[str, Any]:
+    @staticmethod
+    def _snapshots(
+        session: Session, versions: list[RiskModelVersionModel]
+    ) -> dict[uuid.UUID | None, TrainingDatasetSnapshotModel]:
+        ids = {item.dataset_snapshot_id for item in versions if item.dataset_snapshot_id}
+        if not ids:
+            return {}
+        return {
+            item.snapshot_id: item
+            for item in session.scalars(
+                select(TrainingDatasetSnapshotModel).where(
+                    TrainingDatasetSnapshotModel.snapshot_id.in_(ids)
+                )
+            )
+        }
+
+    def _version_entry(
+        self,
+        version: RiskModelVersionModel,
+        snapshot: TrainingDatasetSnapshotModel | None = None,
+    ) -> dict[str, Any]:
         status = version.status
         return {
+            "dataset_snapshot_id": str(snapshot.snapshot_id) if snapshot else None,
+            "dataset_snapshot_hash": snapshot.dataset_hash if snapshot else None,
+            "training_outcome_count": snapshot.included_count if snapshot else None,
+            "excluded_outcome_count": snapshot.excluded_count if snapshot else None,
+            "exclusion_reasons": snapshot.exclusion_summary if snapshot else None,
             "id": str(version.id),
             "model_id": version.model_id,
             "version": version.version,

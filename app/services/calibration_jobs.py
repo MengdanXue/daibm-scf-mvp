@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -23,7 +23,7 @@ from app.services.outcome_calibration import (
     publish_candidate_artifact,
     summarize_calibration_observations,
 )
-from app.services.outcomes import OutcomeService
+from app.services.outcomes import SYSTEM_ACTOR, OutcomeService
 
 
 ArtifactPublisher = Callable[[StagedCalibrationArtifact], CalibrationArtifact]
@@ -32,6 +32,10 @@ FailureSettlement = Literal["contended", "stale", "lost", "retry", "terminal"]
 
 class DeterministicCalibrationRejection(Exception):
     """A stable data rejection that must not consume infrastructure retries."""
+
+    def __init__(self, code: str = "calibration_data_rejected") -> None:
+        super().__init__(code)
+        self.code = code
 
 
 class CalibrationClaimDeferred(Exception):
@@ -112,11 +116,11 @@ class CalibrationJobService:
                     provenances=provenances,
                     now=self._now(),
                 )
-            except DeterministicCalibrationRejection:
+            except DeterministicCalibrationRejection as rejection:
                 settlement = self._settle_failure(
                     claim,
                     prepared=None,
-                    failure_code="calibration_data_rejected",
+                    failure_code=rejection.code,
                     retryable=False,
                 )
                 if settlement == "contended":
@@ -246,18 +250,16 @@ class CalibrationJobService:
                     job_id=claim.job_id,
                 )
 
-            rows = self.repository.list_eligible_outcomes_with_heads(
+            # Training reads only a frozen, governed snapshot of eligible outcomes.
+            snapshot = self.outcome_service.eligibility.create_snapshot(
                 session,
                 scope=claim.deployment_scope,
+                created_by=SYSTEM_ACTOR,
+                trigger_job_id=job.job_id,
+                now=fenced_now,
             )
-            observations = tuple(
-                replace(
-                    self.outcome_service._observation(outcome),
-                    correction_head_id=(
-                        str(correction_head_id) if correction_head_id is not None else None
-                    ),
-                )
-                for outcome, correction_head_id in rows
+            observations = self.outcome_service.eligibility.training_observations(
+                session, snapshot
             )
             try:
                 candidate = self.outcome_service.trainer(
@@ -268,6 +270,7 @@ class CalibrationJobService:
                 return self._persist_data_rejection(
                     session,
                     job=job,
+                    snapshot_id=snapshot.snapshot_id,
                     observations=observations,
                     scope=claim.deployment_scope,
                     rejection_reason=str(error)
@@ -292,6 +295,7 @@ class CalibrationJobService:
             return self._persist_candidate(
                 session,
                 job=job,
+                snapshot_id=snapshot.snapshot_id,
                 claim=claim,
                 candidate=candidate,
                 staged=staged,
@@ -302,6 +306,7 @@ class CalibrationJobService:
         session: Session,
         *,
         job: CalibrationJobModel,
+        snapshot_id: uuid.UUID,
         claim: ClaimedJob,
         candidate: CalibrationCandidate,
         staged: StagedCalibrationArtifact,
@@ -335,6 +340,7 @@ class CalibrationJobService:
                     activation_reason="not_evaluated",
                     started_at=now,
                     completed_at=now,
+                    dataset_snapshot_id=snapshot_id,
                 ),
             )
             correction_heads = dict(candidate.correction_heads)
@@ -430,12 +436,13 @@ class CalibrationJobService:
         session: Session,
         *,
         job: CalibrationJobModel,
+        snapshot_id: uuid.UUID,
         observations: tuple[CalibrationObservation, ...],
         scope: str,
         rejection_reason: str = "calibration_data_rejected",
     ) -> PreparedRun:
         if not observations:
-            raise DeterministicCalibrationRejection
+            raise DeterministicCalibrationRejection("no_eligible_outcomes")
         summary = summarize_calibration_observations(
             observations,
             config=self.outcome_service.training_config,
@@ -468,6 +475,7 @@ class CalibrationJobService:
                 activation_reason=rejection_reason,
                 started_at=now,
                 completed_at=now,
+                dataset_snapshot_id=snapshot_id,
             ),
         )
         self.repository.add_run_observations(
