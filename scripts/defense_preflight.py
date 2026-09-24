@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import argparse
 import json
 import re
@@ -10,6 +12,9 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
+
+# The demo password is deployment configuration, never a literal.
+DEMO_PASSWORD = os.environ.get("DAIBM_DEMO_PASSWORD", "")
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -288,7 +293,7 @@ def run_preflight(
                 client,
                 "POST",
                 _url(base_url, "/api/v1/auth/login"),
-                {"username": username, "password": "Demo123!"},
+                {"username": username, "password": DEMO_PASSWORD},
             )
             _require_role(login, role, f"{role} login")
             session = _json_response(

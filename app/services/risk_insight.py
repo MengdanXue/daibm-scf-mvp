@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.outcome_governance import training_failure_reason
 from app.domain.risk_operations import (
-    DASHBOARD_ROLES,
     DEFAULTED,
     ENTERPRISE_ROLES,
     HIGH_RISK,
@@ -43,12 +42,13 @@ from app.models_model_governance import (
 from app.models_outcome import CalibrationRunModel
 from app.models_risk_ops import RiskAlertEventModel, RiskAlertModel, RiskTaskEventModel, RiskTaskModel
 from app.models_workflow import WorkflowActionModel
-from app.repositories.facility import FacilityRepository
+from app.services.permissions import PermissionService
 from app.services.facility import FacilityNotFound, FacilityService
 from app.services.risk_operations import (
     RiskOpsNotFound,
     current_rules,
-    org_scope,
+    org_condition,
+    sees_everything,
     parse_uuid,
     require_role,
     ts,
@@ -123,7 +123,7 @@ class RiskInsightService:
     # --- Dashboard --------------------------------------------------------------
 
     def dashboard(self, user: AuthenticatedUser) -> dict[str, Any]:
-        require_role(user, DASHBOARD_ROLES, "Current role cannot view the risk dashboard")
+        require_role(user, "dashboard:read", "Current role cannot view the risk dashboard")
         now = self.clock()
         with self.session_factory() as session:
             facilities = self._facilities(session, user)
@@ -146,7 +146,7 @@ class RiskInsightService:
             )
             exposure = recovered_outstanding + written_off + remaining_defaulted
             return {
-                "scope": "all" if org_scope(user) is None else "organization",
+                "scope": "all" if sees_everything(session, user) else "organization",
                 "generated_at": ts(now),
                 "assets": {
                     "total_financed": _money(
@@ -349,13 +349,7 @@ class RiskInsightService:
     def _facilities(
         session: Session, user: AuthenticatedUser
     ) -> list[tuple[FinancingFacilityModel, uuid.UUID | None]]:
-        visible = (
-            FacilityRepository._visible_facilities_statement(
-                role=user.role, organization_id=user.organization_id
-            )
-            .with_only_columns(FinancingFacilityModel.facility_id)
-            .subquery()
-        )
+        visible = PermissionService.visible_facility_ids(session, user).subquery()
         return [
             (facility, supplier)
             for facility, supplier in session.execute(
@@ -501,12 +495,11 @@ class RiskInsightService:
 
     @staticmethod
     def _alert_summary(session: Session, user: AuthenticatedUser) -> dict[str, Any]:
-        statement = select(RiskAlertModel.status, RiskAlertModel.severity, func.count()).group_by(
-            RiskAlertModel.status, RiskAlertModel.severity
+        statement = (
+            select(RiskAlertModel.status, RiskAlertModel.severity, func.count())
+            .where(org_condition(session, user, RiskAlertModel.organization_id))
+            .group_by(RiskAlertModel.status, RiskAlertModel.severity)
         )
-        scope = org_scope(user)
-        if scope is not None:
-            statement = statement.where(RiskAlertModel.organization_id == scope)
         by_status: Counter[str] = Counter()
         open_by_severity: Counter[str] = Counter()
         for status, severity, count in session.execute(statement):
@@ -688,10 +681,10 @@ class RiskInsightService:
 
     @staticmethod
     def _facility_alerts(session: Session, facility_id: uuid.UUID, user: AuthenticatedUser) -> list[dict[str, Any]]:
-        statement = select(RiskAlertModel).where(RiskAlertModel.facility_id == facility_id)
-        scope = org_scope(user)
-        if scope is not None:
-            statement = statement.where(RiskAlertModel.organization_id == scope)
+        statement = select(RiskAlertModel).where(
+            RiskAlertModel.facility_id == facility_id,
+            org_condition(session, user, RiskAlertModel.organization_id),
+        )
         return [
             {
                 "alert_id": str(item.alert_id),

@@ -837,6 +837,7 @@ class OutcomeRepository:
         limit: int,
         offset: int,
         include_superseded: bool = False,
+        facility_ids: Any = None,
     ) -> list[tuple[ActualOutcomeModel, bool, str | None, str | None]]:
         latest_action = (
             select(OutcomeCorrectionModel.action)
@@ -869,6 +870,9 @@ class OutcomeRepository:
                 .label("review_reason"),
             )
             .where(true() if include_superseded else is_effective())
+            .where(
+                true() if facility_ids is None else ActualOutcomeModel.facility_id.in_(facility_ids)
+            )
             .order_by(
                 ActualOutcomeModel.recorded_at.desc(),
                 ActualOutcomeModel.outcome_id,

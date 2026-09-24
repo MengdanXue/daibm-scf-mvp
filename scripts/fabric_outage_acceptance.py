@@ -1,6 +1,8 @@
 """Opt-in local gateway outage acceptance; leaves one synthetic draft as evidence."""
 from __future__ import annotations
 
+import os
+
 import argparse
 import json
 import re
@@ -12,6 +14,9 @@ from functools import partial
 from http.cookiejar import CookieJar
 from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
+
+# The demo password is deployment configuration, never a literal.
+DEMO_PASSWORD = os.environ.get("DAIBM_DEMO_PASSWORD", "")
 
 
 BASE = "http://127.0.0.1:8010"
@@ -39,7 +44,7 @@ def api(client, path, payload=None, *, base_url=BASE):
 
 def client(username, *, base_url=BASE):
     opener = build_opener(HTTPCookieProcessor(CookieJar()))
-    api(opener, "/api/v1/auth/login", {"username": username, "password": "Demo123!"},
+    api(opener, "/api/v1/auth/login", {"username": username, "password": DEMO_PASSWORD},
         base_url=base_url)
     return opener
 

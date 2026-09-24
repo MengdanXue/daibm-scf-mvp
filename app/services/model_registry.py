@@ -41,9 +41,9 @@ from app.models_research import ModelVersionModel
 from app.repositories.ledger import LedgerRepository
 from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
+from app.services.permissions import PermissionService
 from app.services.outcomes import OutcomeConflict, OutcomeNotFound, OutcomeService
 
-READ_ROLES = {"auditor", "risk_manager", "financier"}
 
 
 class RegistryError(Exception):
@@ -397,7 +397,7 @@ class ModelRegistryService:
 
     @staticmethod
     def _require_auditor(user: AuthenticatedUser) -> None:
-        if user.role != "auditor":
+        if not PermissionService.allowed(user, "model:change"):
             raise RegistryForbidden("Only auditors can change model versions")
 
     # --- Commands -----------------------------------------------------------
@@ -604,7 +604,7 @@ class ModelRegistryService:
 
     @staticmethod
     def _require_read(user: AuthenticatedUser) -> None:
-        if user.role not in READ_ROLES:
+        if not PermissionService.allowed(user, "model:read"):
             raise RegistryForbidden("Current role cannot view the model registry")
 
     @staticmethod

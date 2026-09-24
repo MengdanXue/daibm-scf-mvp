@@ -420,6 +420,7 @@ def test_release_documentation_lists_five_demo_roles_and_workflow():
     ):
         assert username in readme
         assert username in demo
-    assert "Demo123!" in readme
+    assert "Demo123!" not in readme
+    assert "DAIBM_DEMO_PASSWORD" in readme
     assert "draft → submitted" in readme
     assert "/api/v1/applications" in readme

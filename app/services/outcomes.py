@@ -51,6 +51,7 @@ from app.services.adaptive_risk import (
     is_strictly_newer_candidate,
     load_verified_calibration,
 )
+from app.services.permissions import PermissionService
 from app.services.outcome_eligibility import OutcomeEligibilityService, observation_for
 from app.services.outcome_calibration import (
     UnmeasuredCalibrationDataset,
@@ -160,21 +161,55 @@ class OutcomeService:
         model_registry: ModelRegistryRepository | None = None,
         auto_promotion: bool = True,
         manual_review: bool = False,
+        policy_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.artifact_root = Path(artifact_root)
         self.repository = repository or OutcomeRepository()
         self.model_registry = model_registry or ModelRegistryRepository()
-        # When false, a validated candidate waits for an auditor's promotion.
-        self.auto_promotion = auto_promotion
-        # When true, outcomes that pass the rules wait in REVIEWING for a reviewer.
-        self.manual_review = manual_review
+        # Runtime policy comes from the configuration center when wired; the
+        # constructor values are the fallback, and assignment pins a value.
+        self.policy_provider = policy_provider
+        self._policy_defaults = {
+            "calibration.auto_promotion": auto_promotion,
+            "outcome.manual_review": manual_review,
+        }
+        self._policy_pinned: dict[str, bool] = {}
         self.eligibility = OutcomeEligibilityService(self.repository)
         self.ledger_repository = ledger_repository or LedgerRepository()
         self.trainer = trainer
         self.artifact_writer = artifact_writer
         self.training_config = training_config or CalibrationTrainingConfig()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def _policy(self, key: str) -> bool:
+        if key in self._policy_pinned:
+            return self._policy_pinned[key]
+        if self.policy_provider is not None:
+            values = self.policy_provider()
+            if key in values:
+                return bool(values[key])
+        return bool(self._policy_defaults[key])
+
+    @property
+    def auto_promotion(self) -> bool:
+        """When false, a validated candidate waits for an auditor's promotion."""
+
+        return self._policy("calibration.auto_promotion")
+
+    @auto_promotion.setter
+    def auto_promotion(self, value: bool) -> None:
+        self._policy_pinned["calibration.auto_promotion"] = value
+
+    @property
+    def manual_review(self) -> bool:
+        """When true, outcomes that pass the rules wait in REVIEWING for a reviewer."""
+
+        return self._policy("outcome.manual_review")
+
+    @manual_review.setter
+    def manual_review(self, value: bool) -> None:
+        self._policy_pinned["outcome.manual_review"] = value
 
     def submit(
         self,
@@ -204,6 +239,7 @@ class OutcomeService:
             facility = self.repository.get_facility_for_update(session, normalized_id)
             if facility is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_facility(session, user, facility)
             replay = self.repository.get_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -275,6 +311,7 @@ class OutcomeService:
             facility = self.repository.get_facility_for_update(session, normalized_id)
             if facility is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_facility(session, user, facility)
             application = session.get(FinancingRequestModel, facility.request_id)
             if application is None:
                 raise OutcomeConflict("Facility request lineage is missing")
@@ -316,6 +353,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, normalized_id)
             if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             scope = self._scope_for_provenance(outcome.provenance)
             self.repository.acquire_scope_lock(session, scope=scope)
             outcome = self.repository.get_outcome_for_update(session, normalized_id)
@@ -444,6 +482,7 @@ class OutcomeService:
             original = self.repository.get_outcome(session, normalized_id)
             if original is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, original)
             scope = self._scope_for_provenance(original.provenance)
             self.repository.acquire_scope_lock(session, scope=scope)
             original = self.repository.get_outcome_for_update(session, normalized_id)
@@ -539,6 +578,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, normalized_id)
             if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             chain = self.repository.list_revision_chain(session, outcome.facility_id)
             reviews = self.repository.list_review_events(
                 session, [item.outcome_id for item in chain]
@@ -626,8 +666,10 @@ class OutcomeService:
         self._require_auditor(user)
         normalized_id = self._uuid(outcome_id)
         with self.session_factory() as session:
-            if self.repository.get_outcome(session, normalized_id) is None:
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             return [
                 self._serialize_correction(item)
                 for item in self.repository.list_corrections(session, normalized_id)
@@ -643,6 +685,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, self._uuid(outcome_id))
             if outcome is None:
                 raise OutcomeNotFound(str(outcome_id))
+            self._require_visible_outcome(session, user, outcome)
             return self._serialize_outcome(
                 outcome,
                 effective_training_eligible=self._is_eligible(
@@ -669,6 +712,7 @@ class OutcomeService:
                 limit=limit,
                 offset=offset,
                 include_superseded=include_superseded,
+                facility_ids=PermissionService.visible_facility_ids(session, user),
             )
             return [
                 self._serialize_outcome(
@@ -1745,6 +1789,23 @@ class OutcomeService:
         )
         session.flush()
 
+    @staticmethod
+    def _require_visible_facility(
+        session: Session, user: AuthenticatedUser, facility: FinancingFacilityModel
+    ) -> None:
+        """Tenant boundary: another organization's facility is simply not found."""
+
+        if not PermissionService.can_view_facility(session, user, facility):
+            raise OutcomeNotFound(str(facility.facility_id))
+
+    @classmethod
+    def _require_visible_outcome(
+        cls, session: Session, user: AuthenticatedUser, outcome: ActualOutcomeModel
+    ) -> None:
+        facility = session.get(FinancingFacilityModel, outcome.facility_id)
+        if facility is None or not PermissionService.can_view_facility(session, user, facility):
+            raise OutcomeNotFound(str(outcome.outcome_id))
+
     def _apply_review_mode(self, session: Session) -> None:
         """Tell the review trigger whether rule-passing outcomes need a reviewer."""
 
@@ -1766,6 +1827,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, normalized_id)
             if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             scope = self._scope_for_provenance(outcome.provenance)
             self._acquire_run_lock(session, scope)
             if self.repository.get_successor(session, normalized_id) is not None:

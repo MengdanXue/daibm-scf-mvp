@@ -194,7 +194,8 @@ def test_workflow_javascript_uses_authenticated_versioned_apis():
     ):
         assert path in javascript
     assert "allowed_actions" in javascript
-    assert "Demo123!" in javascript
+    # No password ships in the page: it is deployment configuration.
+    assert "Demo123!" not in javascript
 
 
 def test_auditor_ledger_exposes_accessible_bilingual_fabric_anchor_controls():

@@ -161,15 +161,16 @@ def _seed_guarded_legacy_value(
             "INSERT INTO financing_facilities ("
             "facility_id, request_id, principal, outstanding_amount, currency, "
             "status, version, current_schedule_version, created_by_user_id, "
-            "created_at, updated_at"
+            "created_at, updated_at, organization_id"
             ") VALUES ("
             ":key, :request_id, 100.00, 100.00, 'USD', :value, 1, 1, "
-            ":user_id, now(), now())"
+            ":user_id, now(), now(), :organization_id)"
         )
         parameters = {
             "key": key,
             "request_id": uuid.uuid4(),
             "user_id": uuid.uuid4(),
+            "organization_id": uuid.uuid4(),
             "value": value,
         }
     else:

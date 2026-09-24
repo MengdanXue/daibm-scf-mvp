@@ -20,14 +20,7 @@ from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from app.domain.risk_operations import (
     ADMIN,
-    ALERT_ASSIGN_ROLES,
-    ALERT_READ_ROLES,
-    ALERT_REVIEW_ROLES,
     ALERT_TRANSITIONS,
-    GLOBAL_ROLES,
-    RULE_READ_ROLES,
-    RULE_WRITE_ROLES,
-    SCAN_ROLES,
     DEFAULT_RULES,
     AlertStatus,
 )
@@ -41,6 +34,7 @@ from app.models_model_governance import OutcomeReviewEventModel, RiskDecisionRec
 from app.models_outcome import ActualOutcomeModel
 from app.models_risk_ops import RiskAlertEventModel, RiskAlertModel, RiskRuleModel
 from app.repositories.ledger import LedgerRepository
+from app.services.permissions import PermissionService
 
 DATA_QUALITY_REASONS = (
     "DATA_QUALITY_INSUFFICIENT",
@@ -68,15 +62,21 @@ class RiskOpsConflict(RiskOpsError):
     pass
 
 
-def require_role(user: AuthenticatedUser, roles: frozenset[str], message: str) -> None:
-    if user.role not in roles:
+def require_role(user: AuthenticatedUser, action: str, message: str) -> None:
+    """Role check through the central permission table."""
+
+    if not PermissionService.allowed(user, action):
         raise RiskOpsForbidden(message)
 
 
-def org_scope(user: AuthenticatedUser) -> uuid.UUID | None:
-    """None means every organization; otherwise the user's own organization."""
+def org_condition(session: Session, user: AuthenticatedUser, column: Any):
+    """Tenant filter for an ``organization_id`` column, from the permission layer."""
 
-    return None if user.role in GLOBAL_ROLES else user.organization_id
+    return PermissionService.organization_condition(column, PermissionService.scope(session, user))
+
+
+def sees_everything(session: Session, user: AuthenticatedUser) -> bool:
+    return PermissionService.scope(session, user).everything
 
 
 def parse_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -203,7 +203,7 @@ class RiskRuleService:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def list_rules(self, user: AuthenticatedUser) -> dict[str, Any]:
-        require_role(user, RULE_READ_ROLES, "Current role cannot view risk rules")
+        require_role(user, "rule:read", "Current role cannot view risk rules")
         now = self.clock()
         with self.session_factory.begin() as session:
             seed_default_rules(session)
@@ -239,7 +239,7 @@ class RiskRuleService:
     ) -> dict[str, Any]:
         """Every change is a new immutable version; nothing is edited in place."""
 
-        require_role(user, RULE_WRITE_ROLES, "Only administrators can change risk rules")
+        require_role(user, "rule:write", "Only administrators can change risk rules")
         now = self.clock()
         with self.session_factory.begin() as session:
             session.execute(text("SELECT pg_advisory_xact_lock(hashtext('risk-rules'))"))
@@ -294,6 +294,35 @@ class RiskRuleService:
             return serialize_rule(rule)
 
 
+    def rollback_rule(
+        self,
+        rule_key: str,
+        user: AuthenticatedUser,
+        *,
+        to_version: int,
+        change_reason: str,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Re-issue an earlier version's settings as a new version (history is kept)."""
+
+        require_role(user, "rule:write", "Only administrators can change risk rules")
+        with self.session_factory() as session:
+            target = session.get(RiskRuleModel, (rule_key, to_version))
+            if target is None:
+                raise RiskOpsNotFound(f"{rule_key} v{to_version}")
+            threshold, severity, enabled = target.threshold, target.severity, target.enabled
+        return self.change_rule(
+            rule_key,
+            user,
+            threshold=threshold,
+            severity=severity,
+            enabled=enabled,
+            effective_from=None,
+            change_reason=f"rollback_to_v{to_version}: {change_reason}",
+            expected_version=expected_version,
+        )
+
+
 # --- Detection -------------------------------------------------------------------------
 
 
@@ -325,7 +354,7 @@ class RiskDetectionService:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def scan_as(self, user: AuthenticatedUser) -> dict[str, Any]:
-        require_role(user, SCAN_ROLES, "Current role cannot run risk detection")
+        require_role(user, "alert:scan", "Current role cannot run risk detection")
         return self.scan(actor=user)
 
     def scan(self, actor: AuthenticatedUser | None = None) -> dict[str, Any]:
@@ -648,9 +677,9 @@ class RiskAlertService:
         facility_id: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        require_role(user, ALERT_READ_ROLES, "Current role cannot view risk alerts")
+        require_role(user, "alert:read", "Current role cannot view risk alerts")
         with self.session_factory() as session:
-            statement = self._visible(user).order_by(
+            statement = self._visible(session, user).order_by(
                 RiskAlertModel.created_at.desc(), RiskAlertModel.alert_id
             )
             if status:
@@ -664,7 +693,7 @@ class RiskAlertService:
             return [self._serialize(item, names) for item in alerts]
 
     def get_alert(self, alert_id: str | uuid.UUID, user: AuthenticatedUser) -> dict[str, Any]:
-        require_role(user, ALERT_READ_ROLES, "Current role cannot view risk alerts")
+        require_role(user, "alert:read", "Current role cannot view risk alerts")
         with self.session_factory() as session:
             alert = self._load(session, alert_id, user)
             return self._detail(session, alert)
@@ -672,7 +701,7 @@ class RiskAlertService:
     def assign(
         self, alert_id: str, user: AuthenticatedUser, *, owner_user_id: str, version: int, comment: str | None
     ) -> dict[str, Any]:
-        require_role(user, ALERT_ASSIGN_ROLES, "Only risk managers and administrators assign alerts")
+        require_role(user, "alert:assign", "Only risk managers and administrators assign alerts")
 
         def apply(session: Session, alert: RiskAlertModel) -> tuple[str, dict[str, Any]]:
             owner = session.get(UserModel, parse_uuid(owner_user_id))
@@ -720,7 +749,7 @@ class RiskAlertService:
         return self._change(alert_id, user, version, resolution, apply)
 
     def close(self, alert_id: str, user: AuthenticatedUser, *, version: int, comment: str) -> dict[str, Any]:
-        require_role(user, ALERT_REVIEW_ROLES, "Only auditors and administrators close alerts")
+        require_role(user, "alert:review", "Only auditors and administrators close alerts")
 
         def apply(session: Session, alert: RiskAlertModel) -> tuple[str, dict[str, Any]]:
             if alert.owner_user_id == user.user_id:
@@ -732,7 +761,7 @@ class RiskAlertService:
         return self._change(alert_id, user, version, comment, apply)
 
     def reopen(self, alert_id: str, user: AuthenticatedUser, *, version: int, comment: str) -> dict[str, Any]:
-        require_role(user, ALERT_REVIEW_ROLES, "Only auditors and administrators return resolutions")
+        require_role(user, "alert:review", "Only auditors and administrators return resolutions")
 
         def apply(session: Session, alert: RiskAlertModel) -> tuple[str, dict[str, Any]]:
             rejected = alert.resolution
@@ -759,7 +788,7 @@ class RiskAlertService:
         comment: str | None,
         apply: Callable[[Session, RiskAlertModel], tuple[str, dict[str, Any]]],
     ) -> dict[str, Any]:
-        require_role(user, ALERT_READ_ROLES, "Current role cannot change risk alerts")
+        require_role(user, "alert:read", "Current role cannot change risk alerts")
         with self.session_factory.begin() as session:
             alert = self._load(session, alert_id, user, for_update=True)
             if alert.version != version:
@@ -817,12 +846,10 @@ class RiskAlertService:
             raise RiskOpsForbidden("Only the alert owner or an administrator can process it")
 
     @staticmethod
-    def _visible(user: AuthenticatedUser):
-        statement = select(RiskAlertModel)
-        scope = org_scope(user)
-        if scope is not None:
-            statement = statement.where(RiskAlertModel.organization_id == scope)
-        return statement
+    def _visible(session: Session, user: AuthenticatedUser):
+        return select(RiskAlertModel).where(
+            org_condition(session, user, RiskAlertModel.organization_id)
+        )
 
     def _load(
         self,
@@ -832,7 +859,7 @@ class RiskAlertService:
         *,
         for_update: bool = False,
     ) -> RiskAlertModel:
-        statement = self._visible(user).where(RiskAlertModel.alert_id == parse_uuid(alert_id))
+        statement = self._visible(session, user).where(RiskAlertModel.alert_id == parse_uuid(alert_id))
         if for_update:
             statement = statement.with_for_update()
         alert = session.scalar(statement)
@@ -933,5 +960,7 @@ __all__ = [
     "RiskOpsNotFound",
     "RiskRuleService",
     "current_rules",
+    "org_condition",
+    "sees_everything",
     "seed_default_rules",
 ]

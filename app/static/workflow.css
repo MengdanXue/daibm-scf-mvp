@@ -460,3 +460,5 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .risk-task-form input, .risk-task-form select { min-width: 0; }
 #riskTrend { display: block; margin: 8px 0; }
 code { overflow-wrap: anywhere; font-size: 11px; }
+.gov-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.gov-tabs [aria-selected="true"] { outline: 2px solid currentColor; }

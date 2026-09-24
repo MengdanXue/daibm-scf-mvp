@@ -22,6 +22,7 @@ if errorlevel 1 exit /b 1
 call "%~dp0start-demo.cmd"
 if errorlevel 1 exit /b 1
 
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do set "%%A=%%B"
 "%~dp0.venv\Scripts\python.exe" "%~dp0scripts\defense_preflight.py" --base-url "%DEMO_URL%"
 if errorlevel 1 goto preflight_failed
 

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -16,6 +18,7 @@ from app.api.outcomes import router as outcome_router
 from app.api.governance import router as governance_router
 from app.api.risk_ops import router as risk_ops_router
 from app.api.auth import router as auth_router
+from app.api.enterprise import router as enterprise_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
 from app.api.workflow import router as workflow_router
@@ -26,6 +29,9 @@ from app.config import (
     ZkpProverSettings,
 )
 from app.database import Database
+from app.identity import AuthenticationRequired
+from app.ops.metrics import Heartbeats, RequestMetrics
+from app.ops.service import OpsService
 from app.schemas import FinancingRequestCreate, IntegrityRecoveryRequest
 from app.service import FinancingService
 from app.services.identity import IdentityService
@@ -53,6 +59,10 @@ from app.services.risk_operations import (
 from app.services.risk_tasks import RiskTaskService
 from app.services.outcomes import OutcomeService
 from app.services.calibration_jobs import CalibrationJobService
+from app.services.config_center import ConfigService
+from app.services.organizations import OrganizationService
+from app.services.permissions import PermissionDenied
+from app.services.security import SecuritySettings, record_security_event
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -74,18 +84,26 @@ def _monitor_interval() -> float:
 
 
 async def _run_risk_monitor(
-    detection: RiskDetectionService, stop_event: asyncio.Event, interval: float
+    detection: RiskDetectionService,
+    stop_event: asyncio.Event,
+    interval: Callable[[], float],
+    heartbeat: Callable[[], None] | None = None,
 ) -> None:
-    """Periodic rule scan inside the existing process; no queue, no scheduler."""
+    """Periodic rule scan inside the existing process; no queue, no scheduler.
+
+    The interval is re-read every cycle so the configuration center applies
+    without a restart."""
 
     while not stop_event.is_set():
+        if heartbeat is not None:
+            heartbeat()
         try:
             await asyncio.to_thread(detection.scan)
         except Exception:
             # A transient database error must not end the monitor.
             pass
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            await asyncio.wait_for(stop_event.wait(), timeout=interval())
         except TimeoutError:
             pass
 
@@ -123,7 +141,25 @@ def create_app(
         research_decision_service,
     )
     integrity_service = IntegrityService(active_database.session_factory)
-    identity_service = IdentityService(active_database.session_factory)
+    _monitor_interval()  # validate the environment default at startup
+    config_service = ConfigService(active_database.session_factory)
+    request_metrics = RequestMetrics()
+    heartbeats = Heartbeats()
+    identity_service = IdentityService(
+        active_database.session_factory,
+        settings_provider=lambda: SecuritySettings.from_env().with_overrides(config_service.values()),
+    )
+    organization_service = OrganizationService(active_database.session_factory)
+
+    def monitor_interval() -> float:
+        return float(config_service.get("risk.monitor_interval_seconds"))
+
+    ops_service = OpsService(
+        active_database.session_factory,
+        metrics=request_metrics,
+        heartbeats=heartbeats,
+        monitor_interval=monitor_interval,
+    )
     prover_settings = ZkpProverSettings.from_env()
     workflow_service = WorkflowService(
         active_database.session_factory,
@@ -146,6 +182,7 @@ def create_app(
         ),
         auto_promotion=_auto_promotion_enabled(),
         manual_review=_flag("OUTCOME_MANUAL_REVIEW", default="false"),
+        policy_provider=config_service.values,
     )
     outcome_governance_service = OutcomeGovernanceService(
         active_database.session_factory, outcome_service=outcome_service
@@ -163,6 +200,7 @@ def create_app(
     calibration_job_service = CalibrationJobService(
         active_database.session_factory,
         outcome_service=outcome_service,
+        heartbeat=lambda: heartbeats.beat("calibration_worker"),
     )
 
     @asynccontextmanager
@@ -186,6 +224,11 @@ def create_app(
         application.state.risk_alert_service = risk_alert_service
         application.state.risk_task_service = risk_task_service
         application.state.risk_insight_service = risk_insight_service
+        application.state.config_service = config_service
+        application.state.organization_service = organization_service
+        application.state.ops_service = ops_service
+        application.state.request_metrics = request_metrics
+        application.state.heartbeats = heartbeats
         if maintenance_mode:
             # The original 8010 maintenance entrypoint must not create demo
             # identities, register missing artifacts, or settle deployments.
@@ -199,11 +242,19 @@ def create_app(
         stop_event: asyncio.Event | None = None
         worker_task: asyncio.Task[None] | None = None
         monitor_task: asyncio.Task[None] | None = None
-        if calibration_worker_enabled and not maintenance_mode:
+        workers_enabled = calibration_worker_enabled and not maintenance_mode
+        heartbeats.enable("calibration_worker", workers_enabled)
+        heartbeats.enable("risk_monitor", workers_enabled)
+        if workers_enabled:
             stop_event = asyncio.Event()
             worker_task = asyncio.create_task(calibration_job_service.run(stop_event))
             monitor_task = asyncio.create_task(
-                _run_risk_monitor(risk_detection_service, stop_event, _monitor_interval())
+                _run_risk_monitor(
+                    risk_detection_service,
+                    stop_event,
+                    monitor_interval,
+                    lambda: heartbeats.beat("risk_monitor"),
+                )
             )
         try:
             yield
@@ -238,6 +289,60 @@ def create_app(
     application.include_router(outcome_router)
     application.include_router(governance_router)
     application.include_router(risk_ops_router)
+    application.include_router(enterprise_router)
+
+    def _audit_denial(request: Request, status: int) -> None:
+        """Every 403 becomes a PERMISSION_DENIED security event, whichever router raised it."""
+
+        state = request.app.state
+        try:
+            user = state.identity_service.authenticate(request.cookies.get("daibm_session"))
+        except AuthenticationRequired:
+            user = None
+        route = request.scope.get("route")
+        with state.database.session_factory.begin() as session:
+            record_security_event(
+                session,
+                "PERMISSION_DENIED",
+                f"{request.method} {getattr(route, 'path', request.url.path)}",
+                user_id=user.user_id if user else None,
+                username=user.username if user else None,
+                organization_id=user.organization_id if user else None,
+                resource_type="http",
+                resource_id=request.url.path[:300],
+                detail={"status": status, "role": user.role if user else None},
+                client_ip=request.client.host if request.client else None,
+            )
+
+    @application.middleware("http")
+    async def enterprise_middleware(request: Request, call_next):
+        started = time.perf_counter()
+        status = 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            return response
+        finally:
+            route = request.scope.get("route")
+            request_metrics.record(
+                request.method,
+                getattr(route, "path", "unmatched"),
+                status,
+                time.perf_counter() - started,
+            )
+            if status == 403:
+                try:
+                    await asyncio.to_thread(_audit_denial, request, status)
+                except Exception:
+                    # Auditing must not turn a denial into a server error.
+                    pass
+
+    @application.exception_handler(PermissionDenied)
+    async def permission_denied(_request: Request, error: PermissionDenied):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": {"code": "forbidden_role", "message": str(error)}},
+        )
 
     @application.get("/", include_in_schema=False)
     def index():
