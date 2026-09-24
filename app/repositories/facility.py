@@ -110,7 +110,7 @@ class FacilityRepository:
             )
         )
         visibility: ColumnElement[bool]
-        if role == "auditor":
+        if role in {"auditor", "admin"}:
             visibility = true()
         elif organization_id is None:
             visibility = false()

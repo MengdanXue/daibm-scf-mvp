@@ -489,8 +489,9 @@ def test_login_has_bilingual_numbered_role_guide():
     html = _html()
     javascript = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
 
-    assert html.count('data-demo-username="') == 5
-    assert html.count('class="demo-role-guide') == 5
+    # Five workflow roles plus the Phase 3 operations administrator.
+    assert html.count('data-demo-username="') == 6
+    assert html.count('class="demo-role-guide') == 6
     assert 'aria-label="Demo role order"' in html
     assert javascript.count("demoRoleGuide:") == 2
     assert 'document.querySelector("#loginButton").focus()' in javascript
@@ -501,7 +502,7 @@ def test_login_role_guide_keeps_native_button_semantics_inside_a_real_list():
     html = _html()
 
     assert '<ol id="demoAccounts" class="account-grid"' in html
-    assert html.count('class="demo-role-item"') == 5
+    assert html.count('class="demo-role-item"') == 6
     assert 'type="button" role="listitem"' not in html
 
 
@@ -601,3 +602,39 @@ def test_governance_pages_expose_model_center_feedback_and_decision_detail():
                     'id="modelRegistryTable"', 'id="activateVersionForm"',
                     'id="rollbackVersionForm"', 'id="modelEvents"', 'id="artifactCheck"'):
         assert element in governance, element
+
+
+def test_risk_operations_pages_are_wired_for_their_roles():
+    html = _html()
+    risk = (HTML_PATH.with_name("risk_ops.js")).read_text(encoding="utf-8")
+    workflow = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+    assert html.index("/static/governance.js") < html.index("/static/risk_ops.js")
+    for view, content in (("riskdash", "riskDashContent"), ("alerts", "alertContent"), ("tasks", "taskContent"),
+                          ("riskdetail", "riskDetailContent"), ("rules", "ruleContent")):
+        assert f'id="view-{view}"' in html and f'id="{content}"' in html, view
+        assert f'data-view-button="{view}"' in html, view
+    for rule in ('riskdash: ["admin", "risk_manager", "auditor", "financier"].includes(role)',
+                 'alerts: ["admin", "risk_manager", "auditor"].includes(role)',
+                 'tasks: ["admin", "risk_manager", "auditor"].includes(role)',
+                 'rules: ["admin", "risk_manager", "auditor"].includes(role)',
+                 "riskdetail: true"):
+        assert rule in workflow, rule
+    assert 'data-demo-username="admin.demo"' in html
+    assert "data-open-risk-detail" in workflow and "window.riskOpsOpenDetail" in risk
+    for path in ("/api/v1/risk/dashboard", "/api/v1/risk/facilities", "/api/v1/risk/alerts",
+                 "/api/v1/risk/alerts/scan", "/api/v1/risk/tasks", "/api/v1/risk/assignees",
+                 "/api/v1/risk/rules", "/versions"):
+        assert path in risk, path
+    for element in ('id="dashAssets"', 'id="dashDistribution"', 'id="dashLifecycle"', 'id="dashLosses"',
+                    'id="dashModel"', 'id="alertTable"', 'id="alertEvents"', 'data-alert-action=',
+                    'id="taskTable"', 'id="taskTabs"', 'data-task-action=', 'id="taskAttachments"',
+                    'id="detailEnterprise"', 'id="detailRisk"', 'id="detailModel"', 'id="detailTimeline"',
+                    'id="detailAudit"', 'id="ruleTable"', 'id="ruleHistory"', "data-rule-form="):
+        assert element in risk, element
+    for key in ("navDashboard", "navAlerts", "navTasks", "navDetail", "navRules", "totalFinanced",
+                "recoveryRate", "latestFailure", "createTask", "resolve", "reopen", "uploadResult",
+                "effectiveFrom", "saveVersion"):
+        assert risk.count(f"{key}:") == 2, key
+    # Only administrators get rule editing; only reviewers get close/reopen.
+    assert 'const admin = has("admin");' in risk
+    assert 'alert.status === "RESOLVED" && has("admin", "auditor")' in risk

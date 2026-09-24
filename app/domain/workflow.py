@@ -9,6 +9,9 @@ class Role(StrEnum):
     FINANCIER = "financier"
     RISK_MANAGER = "risk_manager"
     AUDITOR = "auditor"
+    # Operations administrator: reads everything, configures risk rules, never
+    # acts in the application workflow.
+    ADMIN = "admin"
 
 
 class Status(StrEnum):

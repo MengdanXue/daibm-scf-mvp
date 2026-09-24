@@ -14,6 +14,7 @@ from app.api import facility_router
 from app.api.anchors import router as anchor_router
 from app.api.outcomes import router as outcome_router
 from app.api.governance import router as governance_router
+from app.api.risk_ops import router as risk_ops_router
 from app.api.auth import router as auth_router
 from app.api.dependencies import require_roles
 from app.api.research import router as research_router
@@ -42,6 +43,14 @@ from app.services.integrity import (
 from app.services.anchor_dispatch import AnchorDispatchService, FabricGatewayClient
 from app.services.model_registry import ModelRegistryService
 from app.services.outcome_governance import OutcomeGovernanceService
+from app.services.risk_insight import RiskInsightService
+from app.services.risk_operations import (
+    RiskAlertService,
+    RiskDetectionService,
+    RiskRuleService,
+    seed_default_rules,
+)
+from app.services.risk_tasks import RiskTaskService
 from app.services.outcomes import OutcomeService
 from app.services.calibration_jobs import CalibrationJobService
 
@@ -53,6 +62,32 @@ def _flag(name: str, *, default: str) -> bool:
     if raw not in {"true", "false"}:
         raise ValueError(f"{name} must be true or false")
     return raw == "true"
+
+
+def _monitor_interval() -> float:
+    """RISK_MONITOR_INTERVAL_SECONDS: how often the rules scan recorded data."""
+
+    value = float(os.environ.get("RISK_MONITOR_INTERVAL_SECONDS", "60"))
+    if value < 5:
+        raise ValueError("RISK_MONITOR_INTERVAL_SECONDS must be at least 5")
+    return value
+
+
+async def _run_risk_monitor(
+    detection: RiskDetectionService, stop_event: asyncio.Event, interval: float
+) -> None:
+    """Periodic rule scan inside the existing process; no queue, no scheduler."""
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.to_thread(detection.scan)
+        except Exception:
+            # A transient database error must not end the monitor.
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except TimeoutError:
+            pass
 
 
 def _auto_promotion_enabled() -> bool:
@@ -115,6 +150,13 @@ def create_app(
     outcome_governance_service = OutcomeGovernanceService(
         active_database.session_factory, outcome_service=outcome_service
     )
+    risk_rule_service = RiskRuleService(active_database.session_factory)
+    risk_detection_service = RiskDetectionService(active_database.session_factory)
+    risk_alert_service = RiskAlertService(active_database.session_factory)
+    risk_task_service = RiskTaskService(active_database.session_factory)
+    risk_insight_service = RiskInsightService(
+        active_database.session_factory, facility_service=facility_service
+    )
     model_registry_service = ModelRegistryService(
         active_database.session_factory, outcome_service=outcome_service
     )
@@ -139,6 +181,11 @@ def create_app(
         application.state.calibration_job_service = calibration_job_service
         application.state.model_registry_service = model_registry_service
         application.state.outcome_governance_service = outcome_governance_service
+        application.state.risk_rule_service = risk_rule_service
+        application.state.risk_detection_service = risk_detection_service
+        application.state.risk_alert_service = risk_alert_service
+        application.state.risk_task_service = risk_task_service
+        application.state.risk_insight_service = risk_insight_service
         if maintenance_mode:
             # The original 8010 maintenance entrypoint must not create demo
             # identities, register missing artifacts, or settle deployments.
@@ -147,17 +194,25 @@ def create_app(
             identity_service.seed_demo_accounts()
             research_service.initialize()
             outcome_service.reconcile_deployments()
+            with active_database.session_factory.begin() as session:
+                seed_default_rules(session)
         stop_event: asyncio.Event | None = None
         worker_task: asyncio.Task[None] | None = None
+        monitor_task: asyncio.Task[None] | None = None
         if calibration_worker_enabled and not maintenance_mode:
             stop_event = asyncio.Event()
             worker_task = asyncio.create_task(calibration_job_service.run(stop_event))
+            monitor_task = asyncio.create_task(
+                _run_risk_monitor(risk_detection_service, stop_event, _monitor_interval())
+            )
         try:
             yield
         finally:
             if stop_event is not None and worker_task is not None:
                 stop_event.set()
                 await worker_task
+            if monitor_task is not None:
+                await monitor_task
             if owns_database:
                 active_database.dispose()
 
@@ -182,6 +237,7 @@ def create_app(
     application.include_router(anchor_router)
     application.include_router(outcome_router)
     application.include_router(governance_router)
+    application.include_router(risk_ops_router)
 
     @application.get("/", include_in_schema=False)
     def index():

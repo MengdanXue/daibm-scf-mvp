@@ -252,7 +252,8 @@ def _require_login_page(html: str) -> None:
     if not {"username", "password"} <= parser.login_inputs or not parser.login_submit:
         errors.append("login form")
     expected_usernames = [username for username, _ in ROLE_ACCOUNTS]
-    if parser.guide_usernames != expected_usernames:
+    # The five thesis roles lead the guide in order; operations roles may follow.
+    if parser.guide_usernames[: len(expected_usernames)] != expected_usernames:
         errors.append("five-role guide")
     if errors:
         raise PreflightError("login page is missing: " + ", ".join(errors))

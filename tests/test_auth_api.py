@@ -32,13 +32,14 @@ def test_demo_account_metadata_is_public_without_password_material(auth_client):
     response = auth_client.get("/api/v1/auth/demo-accounts")
 
     assert response.status_code == 200
-    assert len(response.json()) == 5
+    assert len(response.json()) == 6
     assert {account["role"] for account in response.json()} == {
         "supplier",
         "core_enterprise",
         "financier",
         "risk_manager",
         "auditor",
+        "admin",
     }
     assert "password" not in response.text.lower()
     assert "hash" not in response.text.lower()

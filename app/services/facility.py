@@ -1464,6 +1464,8 @@ class FacilityService:
         creator: UserModel,
         user: AuthenticatedUser,
     ) -> bool:
+        if user.role == "admin":
+            return True
         try:
             role = Role(user.role)
         except ValueError:
