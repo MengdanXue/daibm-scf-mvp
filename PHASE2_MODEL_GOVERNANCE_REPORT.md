@@ -110,4 +110,4 @@ Docker 重建验证（本地 8010）的步骤：
 
 ## 7. Commit
 
-- 实现提交：见 PR 中本报告所在分支的前一个提交（报告提交后回填）。
+- 实现提交：`adcc173`（`claude/funny-ptolemy-32pkcy`）
