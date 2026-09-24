@@ -184,7 +184,7 @@ class RiskInsightService:
                     ),
                     "defaulted_exposure": _money(exposure),
                 },
-                "model": self._model_status(session),
+                "model": self._model_status(session, user),
                 "alerts": self._alert_summary(session, user),
                 "tasks": self._task_summary(session, user, now),
             }
@@ -431,27 +431,42 @@ class RiskInsightService:
         }
 
     @staticmethod
-    def _model_status(session: Session) -> dict[str, Any]:
+    def _model_status(session: Session, user: AuthenticatedUser) -> dict[str, Any]:
+        """The caller's organizations' models only; another tenant's model is invisible."""
+
+        owned = PermissionService.organization_filter
         active = list(
             session.scalars(
                 select(RiskModelVersionModel)
-                .where(RiskModelVersionModel.status == "ACTIVE")
+                .where(
+                    RiskModelVersionModel.status == "ACTIVE",
+                    owned(user, RiskModelVersionModel.organization_id),
+                )
                 .order_by(RiskModelVersionModel.scope)
             )
         )
-        last_change = session.scalar(select(func.max(RiskModelVersionTransitionModel.recorded_at)))
+        last_change = session.scalar(
+            select(func.max(RiskModelVersionTransitionModel.recorded_at))
+            .join(
+                RiskModelVersionModel,
+                RiskModelVersionModel.id == RiskModelVersionTransitionModel.model_version_id,
+            )
+            .where(owned(user, RiskModelVersionModel.organization_id))
+        )
         snapshot = session.scalar(
             select(TrainingDatasetSnapshotModel)
+            .where(owned(user, TrainingDatasetSnapshotModel.organization_id))
             .order_by(TrainingDatasetSnapshotModel.created_at.desc())
             .limit(1)
         )
         failed = session.scalar(
             select(CalibrationRunModel)
             .where(
+                owned(user, CalibrationRunModel.organization_id),
                 or_(
                     CalibrationRunModel.status == "failed",
                     CalibrationRunModel.deployment_status.in_(("rejected", "activation_failed")),
-                )
+                ),
             )
             .order_by(CalibrationRunModel.completed_at.desc())
             .limit(1)

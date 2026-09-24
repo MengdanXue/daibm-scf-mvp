@@ -90,15 +90,18 @@
     const registry = state.registry;
     if (!container || !registry) return;
     const auditor = role() === "auditor";
-    const active = ["controlled_demo", "external_verified"].map((scope) => {
-      const model = registry.active_by_scope[scope];
-      return `<article data-active-scope="${esc(scope)}"><span>${esc(scope)}</span><b>${esc(model ? model.label : tr("noActive"))}</b>
+    // Every organization has its own ACTIVE model per scope; show each visible one.
+    const byOrganization = registry.active_by_organization || {};
+    const owners = Object.keys(byOrganization).length ? Object.keys(byOrganization) : [null];
+    const active = owners.flatMap((owner) => ["controlled_demo", "external_verified"].map((scope) => [owner, scope])).map(([owner, scope]) => {
+      const model = owner ? byOrganization[owner][scope] : registry.active_by_scope[scope];
+      return `<article data-active-scope="${esc(scope)}" data-active-organization="${esc(owner || "")}"><span>${esc(owner ? `${owner} · ${scope}` : scope)}</span><b>${esc(model ? model.label : tr("noActive"))}</b>
         <small>${esc(tr("activatedAt"))}: ${esc(model?.activated_at || "—")}</small><small title="${esc(model?.artifact_hash || "")}">${esc(tr("artifactHash"))}: ${esc(short(model?.artifact_hash))}</small>
         <small>${esc(tr("promotionReason"))}: ${esc(model?.promotion_reason || "—")}</small></article>`;
     }).join("");
     const candidates = registry.candidates.map((item) => `<li data-candidate-id="${esc(item.id)}"><b>${esc(item.label)}</b><small>${esc(item.scope)} · n=${esc(item.metrics?.sample_count ?? "—")} · Brier ${esc(brier(item, "holdout_before"))} → ${esc(brier(item, "holdout_after"))} · ${esc(short(item.artifact_hash))}</small></li>`).join("");
     const rows = registry.versions.map((item) => `<tr data-version-id="${esc(item.id)}" class="${state.selected?.id === item.id ? "selected" : ""}">
-      <td><b>${esc(item.label)}</b></td><td>${esc(item.model_type)}</td><td>${esc(item.scope)}</td><td>${chip(item.status)}</td>
+      <td><b>${esc(item.label)}</b>${item.organization_code ? `<br><small>${esc(item.organization_code)}</small>` : ""}</td><td>${esc(item.model_type)}</td><td>${esc(item.scope)}</td><td>${chip(item.status)}</td>
       <td title="${esc(item.training_dataset_version)}">${esc(short(item.training_dataset_version))}</td><td>${esc(item.metrics?.sample_count ?? "—")}</td>
       <td>${esc(brier(item, "holdout_before"))} → ${esc(brier(item, "holdout_after"))}</td>
       <td title="${esc(item.artifact_hash)}">${esc(short(item.artifact_hash))}</td>

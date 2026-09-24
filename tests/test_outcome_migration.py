@@ -134,6 +134,8 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
         "retirement_reason",
         # Revision 0018: the training dataset snapshot the run read.
         "dataset_snapshot_id",
+        # Revision 0021: the organization that owns the run.
+        "organization_id",
     }
     assert outcome_columns["model_version_id"]["nullable"] is True
     assert outcome_columns["risk_engine_version"]["nullable"] is False
@@ -177,6 +179,8 @@ def test_outcome_and_calibration_schema_is_present_at_postgresql_head(
         # Revision 0016: eligibility review and superseding-revision lineage.
         "trg_actual_outcomes_review",
         "trg_actual_outcomes_supersession",
+        # Revision 0021: an outcome may only cite its organization's model.
+        "trg_actual_outcomes_tenant_model",
     }
 
 

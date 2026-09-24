@@ -18,6 +18,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.domain.model_registry import ALLOWED_TRANSITIONS, ModelVersionStatus, model_id_for
 from app.models import FinancingRequestModel, LedgerEventModel
+from app.models_identity import OrganizationModel
 from app.models_model_governance import (
     RiskDecisionRecordModel,
     RiskModelVersionModel,
@@ -97,8 +98,15 @@ def _two_active_versions(session_factory, stack):
 
 
 def _inference(session_factory, scope="controlled_demo"):
+    """A decision of the demo lender, whose outcomes trained these models."""
+
     with session_factory() as session:
-        return AdaptiveRiskInferenceService().assess(session, 0.4, scope)
+        lender = session.scalar(
+            select(OrganizationModel.organization_id).where(
+                OrganizationModel.organization_code == "BANK-001"
+            )
+        )
+        return AdaptiveRiskInferenceService().assess(session, 0.4, scope, lender)
 
 
 # --- Domain / migration contract ------------------------------------------------

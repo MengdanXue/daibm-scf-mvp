@@ -71,6 +71,7 @@ def _application(
                 core_enterprise_organization_id=organizations[
                     "CORE-001"
                 ].organization_id,
+                lender_organization_id=organizations["BANK-001"].organization_id,
             )
         )
     return request_id

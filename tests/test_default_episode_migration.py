@@ -71,7 +71,7 @@ def _migrate(engine, target, *, down=False):
 def _seed(engine, *, restructured=False, second_default=False):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     users = _users(factory)
-    request_id = _approved_application(factory, users)
+    request_id = _approved_application(factory, users, lender=None)
     now = datetime(2026, 9, 7, tzinfo=timezone.utc)
     financier = users["financier.demo"].user_id
     risk = users["risk.demo"].user_id

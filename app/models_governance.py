@@ -3,7 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    FetchedValue,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,6 +52,8 @@ Index("ix_outcome_corrections_recorded_at", OutcomeCorrectionModel.recorded_at)
 
 class CalibrationJobModel(Base):
     __tablename__ = "calibration_jobs"
+    # organization_id is read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         CheckConstraint(
             "deployment_scope IN ('controlled_demo', 'external_verified')",
@@ -94,6 +105,15 @@ class CalibrationJobModel(Base):
     )
 
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    # Owning (lending) organization; the database fills it from the lineage and
+    # rejects rows whose lineage belongs to another organization.
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=FetchedValue(),
+    )
     deployment_scope: Mapped[str] = mapped_column(Text, nullable=False)
     trigger_type: Mapped[str] = mapped_column(Text, nullable=False)
     trigger_outcome_id: Mapped[uuid.UUID | None] = mapped_column(

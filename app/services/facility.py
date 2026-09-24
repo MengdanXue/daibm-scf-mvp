@@ -124,7 +124,12 @@ class FacilityService:
                 request.request_id,
                 for_update=True,
             )
-            if application is None:
+            # Only the lender the application is addressed to can fund it; to
+            # any other organization the application does not exist.
+            if (
+                application is None
+                or application.lender_organization_id != user.organization_id
+            ):
                 raise FacilityNotFound(str(request.request_id))
             replay = self._replay(
                 session,

@@ -104,6 +104,22 @@ def _delete_orphan_outcome(engine: sa.Engine, outcome_id: uuid.UUID) -> None:
         )
 
 
+@pytest.fixture(autouse=True)
+def _single_lender(migrated_engine):
+    """Rows seeded here have no facility lineage; since revision 0021 they
+    belong to the only lending organization, so one must exist."""
+
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO organizations (organization_id, organization_code, name, "
+                "organization_type, created_at) VALUES (:id, 'TEST-LENDER', 'Test lender', "
+                "'financier', now()) ON CONFLICT DO NOTHING"
+            ),
+            {"id": uuid.UUID("00000000-0000-4000-8000-0000000000f1")},
+        )
+
+
 def _seed_result_run(engine: sa.Engine) -> uuid.UUID:
     run_id = uuid.uuid4()
     with engine.begin() as connection:
@@ -286,7 +302,9 @@ def test_lifecycle_governance_revision_is_single_head_and_constrained(
     ]
     assert run_indexes["uq_calibration_runs_active_scope"]["unique"] is True
     assert run_indexes["uq_calibration_runs_active_scope"]["column_names"] == [
-        "deployment_scope"
+        # One ACTIVE run per organization and scope since revision 0021.
+        "organization_id",
+        "deployment_scope",
     ]
     predicate = str(
         run_indexes["uq_calibration_runs_active_scope"]
@@ -436,7 +454,7 @@ def test_database_rejects_two_active_runs_in_the_same_scope(migrated_engine):
         "'daibm.platt-calibration.v3', NULL, 'active', :scope, 'automatic', "
         "now(), NULL, NULL, 'test_activation', now(), now())"
     )
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="uq_calibration_runs_active_scope"):
         with migrated_engine.begin() as connection:
             for suffix in ("a", "b"):
                 connection.execute(

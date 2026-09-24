@@ -51,6 +51,8 @@ class ClaimedJob:
     job_id: uuid.UUID
     deployment_scope: str
     worker_id: str
+    # Training reads, reuses and deploys only within this organization.
+    organization_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -206,6 +208,7 @@ class CalibrationJobService:
                 job_id=job.job_id,
                 deployment_scope=job.deployment_scope,
                 worker_id=worker_id,
+                organization_id=job.organization_id,
             )
 
     def _prepare_run(self, claim: ClaimedJob) -> PreparedRun:
@@ -264,6 +267,7 @@ class CalibrationJobService:
                 created_by=SYSTEM_ACTOR,
                 trigger_job_id=job.job_id,
                 now=fenced_now,
+                organization_id=job.organization_id,
             )
             observations = self.outcome_service.eligibility.training_observations(
                 session, snapshot
@@ -291,6 +295,7 @@ class CalibrationJobService:
                 session,
                 candidate.dataset_sha256,
                 scope=claim.deployment_scope,
+                organization_id=job.organization_id,
             )
             if duplicate is not None:
                 return self._prepared_existing(duplicate, job_id=claim.job_id)
@@ -326,6 +331,7 @@ class CalibrationJobService:
                     calibration_run_id=uuid.uuid4(),
                     trigger_outcome_id=job.trigger_outcome_id,
                     trigger_job_id=job.job_id,
+                    organization_id=job.organization_id,
                     dataset_sha256=candidate.dataset_sha256,
                     sample_count=candidate.sample_count,
                     positive_count=candidate.positive_count,
@@ -461,6 +467,7 @@ class CalibrationJobService:
                 calibration_run_id=uuid.uuid4(),
                 trigger_outcome_id=job.trigger_outcome_id,
                 trigger_job_id=job.job_id,
+                organization_id=job.organization_id,
                 dataset_sha256=summary.dataset_sha256,
                 sample_count=summary.sample_count,
                 positive_count=summary.positive_count,

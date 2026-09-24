@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.outcome_governance import EXCLUSION_REASONS, training_failure_reason
 from app.identity import AuthenticatedUser
+from app.models import FinancingRequestModel
 from app.ledger import canonical_timestamp
 from app.models_governance import OutcomeCorrectionModel
 from app.models_model_governance import (
@@ -71,7 +72,13 @@ class OutcomeGovernanceService:
                 .where(mine)
             ) or 0
             snapshots = session.scalar(
-                select(func.count()).select_from(TrainingDatasetSnapshotModel)
+                select(func.count())
+                .select_from(TrainingDatasetSnapshotModel)
+                .where(
+                    PermissionService.organization_filter(
+                        user, TrainingDatasetSnapshotModel.organization_id
+                    )
+                )
             ) or 0
         return {
             "total_records": int(total),
@@ -142,24 +149,45 @@ class OutcomeGovernanceService:
             }
 
     def eligibility_preview(self, user: AuthenticatedUser, *, scope: str) -> dict[str, Any]:
-        """What training would read right now, and why everything else is left out."""
+        """What each visible organization's training would read right now, and why
+        everything else is left out. Every organization trains on its own pool."""
 
         self._require(user, "outcome:read")
         with self.session_factory() as session:
-            assessment = self.eligibility.assess(session, scope=scope)
-            visible = set(session.scalars(PermissionService.visible_facility_ids(session, user)))
+            pools: list[dict[str, Any]] = []
+            for organization_id in PermissionService.lending_organizations(session, user):
+                assessment = self.eligibility.assess(
+                    session, scope=scope, organization_id=organization_id
+                )
+                pools.append(
+                    {
+                        "organization_id": str(organization_id),
+                        "dataset_hash": assessment.dataset_hash(),
+                        "included_count": len(assessment.included),
+                        "excluded_count": len(assessment.excluded),
+                        "exclusion_summary": assessment.exclusion_summary(),
+                        "outcomes": [
+                            self.eligibility.serialize_verdict(item)
+                            for item in assessment.verdicts
+                        ],
+                    }
+                )
+            summary: dict[str, int] = {}
+            for pool in pools:
+                for reason, count in pool["exclusion_summary"].items():
+                    summary[reason] = summary.get(reason, 0) + count
             return {
                 "scope": scope,
-                "dataset_hash": assessment.dataset_hash(),
-                "included_count": len(assessment.included),
-                "excluded_count": len(assessment.excluded),
-                "exclusion_summary": assessment.exclusion_summary(),
-                # Counts and hash describe the whole pool; rows only the caller's tenants.
-                "outcomes": [
-                    self.eligibility.serialize_verdict(item)
-                    for item in assessment.verdicts
-                    if item.outcome.facility_id in visible
+                # One pool: its dataset hash; several: each pool carries its own.
+                "dataset_hash": pools[0]["dataset_hash"] if len(pools) == 1 else None,
+                "included_count": sum(pool["included_count"] for pool in pools),
+                "excluded_count": sum(pool["excluded_count"] for pool in pools),
+                "exclusion_summary": summary,
+                "organizations": [
+                    {key: value for key, value in pool.items() if key != "outcomes"}
+                    for pool in pools
                 ],
+                "outcomes": [item for pool in pools for item in pool["outcomes"]],
             }
 
     # --- Dataset snapshots ---------------------------------------------------
@@ -175,6 +203,11 @@ class OutcomeGovernanceService:
             )
             if scope is not None:
                 statement = statement.where(TrainingDatasetSnapshotModel.deployment_scope == scope)
+            statement = statement.where(
+                PermissionService.organization_filter(
+                    user, TrainingDatasetSnapshotModel.organization_id
+                )
+            )
             snapshots = list(session.scalars(statement))
             usage = self._usage(session, [item.snapshot_id for item in snapshots])
             return [
@@ -189,7 +222,9 @@ class OutcomeGovernanceService:
         normalized = _uuid(snapshot_id)
         with self.session_factory() as session:
             snapshot = session.get(TrainingDatasetSnapshotModel, normalized)
-            if snapshot is None:
+            if snapshot is None or not PermissionService.can_access_organization(
+                session, user, snapshot.organization_id
+            ):
                 raise OutcomeNotFound(str(snapshot_id))
             items = session.execute(
                 select(TrainingDatasetSnapshotItemModel, ActualOutcomeModel)
@@ -241,16 +276,34 @@ class OutcomeGovernanceService:
             record = session.get(RiskDecisionRecordModel, normalized)
             if record is None:
                 raise OutcomeNotFound(str(decision_record_id))
+            # The decision belongs to the application's lender; without one
+            # (legacy rows) to the facility's owner, else only to admin.
+            lender = session.scalar(
+                select(FinancingRequestModel.lender_organization_id).where(
+                    FinancingRequestModel.request_id == record.request_id
+                )
+            )
             facility = session.scalar(
                 select(FinancingFacilityModel).where(FinancingFacilityModel.request_id == record.request_id)
             )
-            if facility is not None and not PermissionService.can_view_facility(session, user, facility):
-                raise OutcomeNotFound(str(decision_record_id))
+            if lender is not None:
+                allowed = PermissionService.can_access_organization(session, user, lender)
+            elif facility is not None:
+                allowed = PermissionService.can_view_facility(session, user, facility)
+            else:
+                allowed = PermissionService.scope(session, user).everything
             version = (
                 session.get(RiskModelVersionModel, record.model_version_id)
                 if record.model_version_id is not None
                 else None
             )
+            if not allowed or (
+                version is not None
+                and not PermissionService.can_access_organization(
+                    session, user, version.organization_id
+                )
+            ):
+                raise OutcomeNotFound(str(decision_record_id))
             snapshot = (
                 session.get(TrainingDatasetSnapshotModel, version.dataset_snapshot_id)
                 if version is not None and version.dataset_snapshot_id is not None
@@ -309,6 +362,7 @@ class OutcomeGovernanceService:
     def _snapshot_entry(snapshot: TrainingDatasetSnapshotModel) -> dict[str, Any]:
         return {
             "snapshot_id": str(snapshot.snapshot_id),
+            "organization_id": str(snapshot.organization_id),
             "scope": snapshot.deployment_scope,
             "dataset_hash": snapshot.dataset_hash,
             "eligibility_policy": snapshot.eligibility_policy,

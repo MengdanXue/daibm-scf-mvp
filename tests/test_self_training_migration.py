@@ -122,7 +122,9 @@ def test_self_training_schema_has_constrained_single_active_deployment(
     assert "uq_calibration_runs_active_scope" in indexes
     assert indexes["uq_calibration_runs_active_scope"]["unique"] is True
     assert indexes["uq_calibration_runs_active_scope"]["column_names"] == [
-        "deployment_scope"
+        # One ACTIVE run per organization and scope since revision 0021.
+        "organization_id",
+        "deployment_scope",
     ]
     predicate = str(
         indexes["uq_calibration_runs_active_scope"]
