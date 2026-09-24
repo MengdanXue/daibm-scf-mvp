@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+
+from sqlalchemy import text
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
@@ -33,6 +35,7 @@ DEMO_USERS = (
     ("financier.demo", "Кредитный аналитик · Елена", "financier", "BANK-001"),
     ("risk.demo", "Риск-менеджер · Павел", "risk_manager", "BANK-001"),
     ("auditor.demo", "Аудитор · Ирина", "auditor", "AUDIT-001"),
+    ("admin.demo", "Администратор · Ольга", "admin", "BANK-001"),
 )
 
 
@@ -75,7 +78,12 @@ class IdentityService:
                 organizations[code] = organization
             session.flush()
 
+            supported = self._supported_roles(session)
             for username, display_name, role, organization_code in DEMO_USERS:
+                if role not in supported:
+                    # A database still at an older revision (maintenance
+                    # startup, migration tests) has no such role yet.
+                    continue
                 if self.repository.get_user_by_username(session, username):
                     continue
                 password_hash, password_salt = hash_password(DEMO_PASSWORD)
@@ -94,6 +102,19 @@ class IdentityService:
                         created_at=now,
                     )
                 )
+
+    @staticmethod
+    def _supported_roles(session) -> set[str]:
+        definition = session.scalar(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'ck_users_role'"
+            )
+        )
+        roles = {role for _, _, role, _ in DEMO_USERS}
+        if definition is None:
+            return roles
+        return {role for role in roles if f"'{role}'" in definition}
 
     def login(self, username: str, password: str) -> LoginResult:
         normalized_username = username.strip().lower()

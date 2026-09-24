@@ -20,7 +20,7 @@
       selectApplication: "Выберите заявку", selectApplicationHint: "Здесь появятся реквизиты, допустимые действия и полная история передачи между ролями.",
       workflowTimeline: "История передачи ответственности", timelineHint: "Каждый переход выполняется атомарно и фиксируется вместе с ролью исполнителя.",
       timelineEmpty: "Выберите заявку, чтобы увидеть историю.", roleSupplier: "Поставщик", roleCoreEnterprise: "Якорная компания",
-      roleFinancier: "Финансист", roleRiskManager: "Риск-менеджер", roleAuditor: "Аудитор",
+      roleFinancier: "Финансист", roleRiskManager: "Риск-менеджер", roleAuditor: "Аудитор", roleAdmin: "Администратор", openRiskDetail: "Риск-профиль", adminMission: "Видит весь портфель, настраивает правила риска и распределяет работу.",
       stageCreate: "Создание и подача", stageConfirm: "Подтверждение сделки", stageDecide: "Оценка и решение", stageControl: "Контроль", stageAudit: "Проверка следа",
       supplierMission: "Создайте заявку, проверьте реквизиты и передайте её якорной компании.",
       coreMission: "Подтвердите реальность договора и счёта-фактуры либо верните заявку поставщику.",
@@ -99,7 +99,7 @@
       transactions30d: "近30天交易数", invoiceMismatch: "存在单据不一致", saveDraft: "保存草稿", updateDraft: "保存修改",
       applicationQueue: "申请队列", selectApplication: "请选择申请", selectApplicationHint: "这里将显示交易信息、当前角色允许的操作和完整交接历史。",
       workflowTimeline: "责任交接历史", timelineHint: "每次状态变更均以原子事务执行，并记录操作角色。", timelineEmpty: "选择申请后查看历史。",
-      roleSupplier: "供应商", roleCoreEnterprise: "核心企业", roleFinancier: "融资方", roleRiskManager: "风险经理", roleAuditor: "审计员",
+      roleSupplier: "供应商", roleCoreEnterprise: "核心企业", roleFinancier: "融资方", roleRiskManager: "风险经理", roleAuditor: "审计员", roleAdmin: "管理员", openRiskDetail: "风险详情", adminMission: "查看全部风险数据、配置风险规则并分派处理任务。",
       stageCreate: "创建与提交", stageConfirm: "交易确认", stageDecide: "评估与决策", stageControl: "风险控制", stageAudit: "审计核验",
       supplierMission: "创建申请、核对交易信息，并提交给核心企业。", coreMission: "确认合同与发票真实性，或将申请退回供应商。",
       financierMission: "执行风险评估、查看模型结果并作出融资决策。", riskMission: "根据决策设置控制措施并写入日志。",
@@ -164,7 +164,8 @@
     core_enterprise: { key: "roleCoreEnterprise", mission: "coreMission", seal: "C", color: "#7a5ce0", order: 1 },
     financier: { key: "roleFinancier", mission: "financierMission", seal: "F", color: "#15976c", order: 2 },
     risk_manager: { key: "roleRiskManager", mission: "riskMission", seal: "R", color: "#d48a16", order: 3 },
-    auditor: { key: "roleAuditor", mission: "auditorMission", seal: "A", color: "#b94650", order: 4 }
+    auditor: { key: "roleAuditor", mission: "auditorMission", seal: "A", color: "#b94650", order: 4 },
+    admin: { key: "roleAdmin", mission: "adminMission", seal: "M", color: "#334155", order: 5 }
   };
 
   const STATUS_STAGE = {
@@ -370,10 +371,15 @@
       review: role === "financier" || role === "auditor",
       research: role === "financier" || role === "auditor",
       ledger: role === "auditor",
-      governance: ["auditor", "risk_manager", "financier"].includes(role),
+      governance: ["auditor", "risk_manager", "financier", "admin"].includes(role),
       feedback: role === "auditor" || role === "risk_manager",
       snapshots: ["auditor", "risk_manager", "financier"].includes(role),
-      model: true
+      model: true,
+      riskdash: ["admin", "risk_manager", "auditor", "financier"].includes(role),
+      alerts: ["admin", "risk_manager", "auditor"].includes(role),
+      tasks: ["admin", "risk_manager", "auditor"].includes(role),
+      rules: ["admin", "risk_manager", "auditor"].includes(role),
+      riskdetail: true
     };
     document.querySelectorAll("[data-view-button]").forEach((button) => {
       button.hidden = !rules[button.dataset.viewButton];
@@ -401,11 +407,13 @@
   async function enterWorkbench() {
     const role = ROLE_META[state.user.role];
     document.body.dataset.workflowRole = state.user.role;
+    document.body.dataset.workflowUserId = state.user.user_id;
+    document.body.dataset.workflowUsername = state.user.username;
     renderCurrentUser();
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
     document.querySelector("#view-facilities").style.setProperty("--role-color", role.color);
     configureRoleNavigation();
-    window.switchView("workflow");
+    window.switchView(state.user.role === "admin" ? "riskdash" : "workflow");
     state.coreEnterprises = state.user.role === "supplier"
       ? await wfApi("/api/v1/organizations/core-enterprises")
       : [];
@@ -869,7 +877,7 @@
       : `<p class="facility-empty-copy">${escapeHtml(tr("facilityNoAction"))}</p>`;
     container.innerHTML = `<div class="facility-detail-head">
       <div><span class="status-chip" data-status="${escapeHtml(facility.status)}">${escapeHtml(tr(facility.status))}</span><h2>${exactFacilityMoney(facility.principal, facility.currency)}</h2><p>${escapeHtml(facility.facility_id)}</p></div>
-      <div class="detail-version"><span>${escapeHtml(tr("facilityVersion"))}</span><b>v${facility.version}</b></div>
+      <div class="detail-version"><span>${escapeHtml(tr("facilityVersion"))}</span><b>v${facility.version}</b><button class="btn btn-secondary" type="button" data-open-risk-detail="${escapeHtml(facility.facility_id)}" onclick="window.riskOpsOpenDetail && window.riskOpsOpenDetail(this.dataset.openRiskDetail)">${escapeHtml(tr("openRiskDetail"))}</button></div>
     </div>
     <section id="facilityMoneyRail" class="facility-money-rail" aria-label="Exact facility balance rail">
       <div class="facility-money-flow">

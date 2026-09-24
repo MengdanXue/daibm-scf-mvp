@@ -273,6 +273,9 @@
         <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="auditor.demo" data-demo-role="auditor">
           <span class="account-step">05</span><span><b data-demo-role-label>Аудитор</b><small data-demo-account-detail>auditor.demo · AUDIT-001</small></span><span class="account-arrow">↘</span>
         </button></li>
+        <li class="demo-role-item"><button class="demo-role-guide account-card" type="button" data-demo-username="admin.demo" data-demo-role="admin">
+          <span class="account-step">06</span><span><b data-demo-role-label>Администратор</b><small data-demo-account-detail>admin.demo · BANK-001</small></span><span class="account-arrow">↘</span>
+        </button></li>
       </ol>
       <p id="demoRoleAnnouncement" class="sr-only" role="status" aria-live="polite"></p>
       <div class="auth-divider"><span data-wf-i18n="orCredentials">или введите учётные данные</span></div>
@@ -299,6 +302,11 @@
       <button data-view-button="ledger" onclick="switchView('ledger')"><span class="nav-icon">◇</span><span data-i18n="navLedger">Аудиторский реестр</span></button>
       <button data-view-button="governance" onclick="switchView('governance')"><span class="nav-icon">⚖</span><span data-gov-i18n="navGovernance">Центр моделей</span></button>
       <button data-view-button="feedback" onclick="switchView('feedback')"><span class="nav-icon">⟲</span><span data-gov-i18n="navFeedback">Обратная связь данных</span></button>
+      <button data-view-button="riskdash" onclick="switchView('riskdash')"><span class="nav-icon">◉</span><span data-risk-i18n="navDashboard">Риск-панель</span></button>
+      <button data-view-button="alerts" onclick="switchView('alerts')"><span class="nav-icon">⚠</span><span data-risk-i18n="navAlerts">Центр оповещений</span></button>
+      <button data-view-button="tasks" onclick="switchView('tasks')"><span class="nav-icon">☑</span><span data-risk-i18n="navTasks">Задачи</span></button>
+      <button data-view-button="riskdetail" onclick="switchView('riskdetail')"><span class="nav-icon">◎</span><span data-risk-i18n="navDetail">Риск-профиль</span></button>
+      <button data-view-button="rules" onclick="switchView('rules')"><span class="nav-icon">⚙</span><span data-risk-i18n="navRules">Правила риска</span></button>
       <button data-view-button="snapshots" onclick="switchView('snapshots')"><span class="nav-icon">▦</span><span data-gov-i18n="navSnapshots">Снимки данных</span></button>
       <button data-view-button="model" onclick="switchView('model')"><span class="nav-icon">≋</span><span data-i18n="navModel">Методика</span></button>
     </nav>
@@ -558,6 +566,26 @@
         <div class="facility-heading"><div><span class="eyebrow" data-gov-i18n="snEyebrow">ДАННЫЕ ОБУЧЕНИЯ</span><h1 data-gov-i18n="snTitle">Снимки обучающих данных</h1><p data-gov-i18n="snSubtitle">Каждое обучение читает только неизменяемый снимок проверенных результатов.</p></div><button id="refreshSnapshots" class="btn btn-secondary" type="button" data-gov-i18n="refresh">Обновить</button></div>
         <div id="snapshotContent" class="governance-content"></div>
       </section>
+      <section id="view-riskdash" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-risk-i18n="dashEyebrow"></span><h1 data-risk-i18n="dashTitle"></h1><p data-risk-i18n="dashSubtitle"></p></div><button class="btn btn-secondary" type="button" data-risk-refresh="riskdash" data-risk-i18n="refresh">Обновить</button></div>
+        <div id="riskDashContent" class="governance-content"></div>
+      </section>
+      <section id="view-alerts" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-risk-i18n="alertEyebrow"></span><h1 data-risk-i18n="alertTitle"></h1><p data-risk-i18n="alertSubtitle"></p></div><button class="btn btn-secondary" type="button" data-risk-refresh="alerts" data-risk-i18n="refresh">Обновить</button></div>
+        <div id="alertContent" class="governance-content"></div>
+      </section>
+      <section id="view-tasks" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-risk-i18n="taskEyebrow"></span><h1 data-risk-i18n="taskTitle"></h1><p data-risk-i18n="taskSubtitle"></p></div><button class="btn btn-secondary" type="button" data-risk-refresh="tasks" data-risk-i18n="refresh">Обновить</button></div>
+        <div id="taskContent" class="governance-content"></div>
+      </section>
+      <section id="view-riskdetail" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-risk-i18n="detailEyebrow"></span><h1 data-risk-i18n="detailTitle"></h1><p data-risk-i18n="detailSubtitle"></p></div><button class="btn btn-secondary" type="button" data-risk-refresh="riskdetail" data-risk-i18n="refresh">Обновить</button></div>
+        <div id="riskDetailContent" class="governance-content"></div>
+      </section>
+      <section id="view-rules" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-risk-i18n="ruleEyebrow"></span><h1 data-risk-i18n="ruleTitle"></h1><p data-risk-i18n="ruleSubtitle"></p></div><button class="btn btn-secondary" type="button" data-risk-refresh="rules" data-risk-i18n="refresh">Обновить</button></div>
+        <div id="ruleContent" class="governance-content"></div>
+      </section>
       <section id="view-model" class="view">
         <div class="page-heading"><div><h1 data-i18n="modelTitle">Методика демонстрационного прототипа</h1><p data-i18n="modelSub">Что именно подтверждает MVP и где проходят границы доказательства</p></div><button class="btn btn-soft" onclick="window.open('/docs','_blank')">OpenAPI ↗</button></div>
         <div class="model-grid">
@@ -774,5 +802,6 @@
 </script>
 <script src="/static/workflow.js"></script>
 <script src="/static/governance.js"></script>
+  <script src="/static/risk_ops.js"></script>
 </body>
 </html>

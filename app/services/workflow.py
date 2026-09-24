@@ -824,7 +824,7 @@ class WorkflowService:
                 Status.CONTROLLED.value,
                 Status.AUDITED.value,
             }
-        return role == Role.AUDITOR
+        return role in {Role.AUDITOR, Role.ADMIN}
 
     def _advance(
         self,

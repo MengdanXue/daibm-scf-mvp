@@ -445,3 +445,18 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .gov-cards b { display: block; margin: 4px 0; font-size: 18px; overflow-wrap: anywhere; }
 .workflow-evidence.risk-decision-detail { display: block; }
 .gov-note { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: #6d7890; }
+/* Phase 3 risk operations */
+.risk-bars { display: grid; gap: 8px; }
+.risk-bar { display: grid; grid-template-columns: 90px 1fr 40px; align-items: center; gap: 8px; font-size: 12px; }
+.risk-bar i { display: block; height: 10px; border-radius: 6px; background: #15976c; min-width: 2px; }
+.risk-bar[data-risk-class="WATCH"] i { background: #d48a16; }
+.risk-bar[data-risk-class="HIGH_RISK"] i { background: #d24b50; }
+.risk-bar[data-risk-class="DEFAULTED"] i { background: #5b1a1f; }
+.risk-chip[data-risk-value="CRITICAL"], .risk-chip[data-risk-value="DEFAULTED"] { background: #5b1a1f; color: #fff; }
+.risk-chip[data-risk-value="HIGH"], .risk-chip[data-risk-value="HIGH_RISK"], .risk-chip[data-risk-value="OPEN"] { background: #fbe8e9; color: #d24b50; }
+.risk-chip[data-risk-value="MEDIUM"], .risk-chip[data-risk-value="WATCH"], .risk-chip[data-risk-value="PROCESSING"], .risk-chip[data-risk-value="IN_PROGRESS"] { background: #fdf3e1; color: #b8730f; }
+.risk-chip[data-risk-value="NORMAL"], .risk-chip[data-risk-value="CLOSED"], .risk-chip[data-risk-value="COMPLETED"], .risk-chip[data-risk-value="RESOLVED"] { background: #e3f5ee; color: #15976c; }
+.risk-overdue { color: #d24b50; font-weight: 800; }
+.risk-task-form input, .risk-task-form select { min-width: 0; }
+#riskTrend { display: block; margin: 8px 0; }
+code { overflow-wrap: anywhere; font-size: 11px; }

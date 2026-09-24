@@ -38,7 +38,7 @@ class UserModel(Base):
     __table_args__ = (
         CheckConstraint(
             "role IN ('supplier', 'core_enterprise', 'financier', "
-            "'risk_manager', 'auditor')",
+            "'risk_manager', 'auditor', 'admin')",
             name="ck_users_role",
         ),
     )
