@@ -88,11 +88,18 @@ def _snapshot(engine):
     with engine.connect() as connection:
         return tuple(
             tuple(
-                connection.scalars(
-                    sa.text(f"SELECT row_to_json(t)::text FROM {table} t ORDER BY 1")
-                )
+                connection.scalars(sa.text(f"SELECT {projection} FROM {table} t ORDER BY 1"))
             )
-            for table in ("ledger_events", "actual_outcomes")
+            for table, projection in (
+                ("ledger_events", "row_to_json(t)::text"),
+                # Revision 0016 appends revision columns; every original byte
+                # must still be identical.
+                (
+                    "actual_outcomes",
+                    "(to_jsonb(t) - 'revision' - 'supersedes_outcome_id' "
+                    "- 'correction_reason_code' - 'correction_comment')::text",
+                ),
+            )
         )
 
 

@@ -3,8 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func, or_, select, text, true
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnElement
+
+from app.domain.governance import TRAINING_ELIGIBLE_STATUSES
 
 from app.models_facility import FinancingFacilityModel
 from app.models_governance import (
@@ -12,7 +15,32 @@ from app.models_governance import (
     CalibrationRunObservationModel,
     OutcomeCorrectionModel,
 )
+from app.models_model_governance import OutcomeReviewEventModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
+
+
+def review_status_expression():
+    """Latest governed review status of the correlated outcome row."""
+
+    return (
+        select(OutcomeReviewEventModel.status)
+        .where(OutcomeReviewEventModel.outcome_id == ActualOutcomeModel.outcome_id)
+        .order_by(OutcomeReviewEventModel.event_id.desc())
+        .limit(1)
+        .correlate(ActualOutcomeModel)
+        .scalar_subquery()
+    )
+
+
+def review_eligible() -> ColumnElement[bool]:
+    """Training requires a passed eligibility review, never the raw outcome."""
+
+    return review_status_expression().in_(TRAINING_ELIGIBLE_STATUSES)
+
+
+def is_effective() -> ColumnElement[bool]:
+    successor = aliased(ActualOutcomeModel)
+    return ~exists().where(successor.supersedes_outcome_id == ActualOutcomeModel.outcome_id)
 
 
 class OutcomeRepository:
@@ -286,9 +314,10 @@ class OutcomeRepository:
         facility_id: uuid.UUID,
     ) -> ActualOutcomeModel | None:
         return session.scalar(
-            select(ActualOutcomeModel).where(
-                ActualOutcomeModel.facility_id == facility_id
-            )
+            select(ActualOutcomeModel)
+            .where(ActualOutcomeModel.facility_id == facility_id)
+            .order_by(ActualOutcomeModel.revision.desc())
+            .limit(1)
         )
 
     def get_by_idempotency_key(
@@ -375,6 +404,7 @@ class OutcomeRepository:
                 .where(
                     ActualOutcomeModel.provenance == provenance,
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
+                    review_eligible(),
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
@@ -420,6 +450,7 @@ class OutcomeRepository:
                 .where(
                     ActualOutcomeModel.provenance == provenance,
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
+                    review_eligible(),
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
@@ -485,6 +516,7 @@ class OutcomeRepository:
                     or_(
                         ActualOutcomeModel.provenance != provenance,
                         latest_action == "EXCLUDE",
+                        ~review_eligible(),
                     )
                 ),
             )
@@ -738,7 +770,8 @@ class OutcomeRepository:
         *,
         limit: int,
         offset: int,
-    ) -> list[tuple[ActualOutcomeModel, bool]]:
+        include_superseded: bool = False,
+    ) -> list[tuple[ActualOutcomeModel, bool, str | None, str | None]]:
         latest_action = (
             select(OutcomeCorrectionModel.action)
             .where(
@@ -755,10 +788,20 @@ class OutcomeRepository:
         statement = (
             select(
                 ActualOutcomeModel,
-                or_(latest_action.is_(None), latest_action == "REINSTATE").label(
-                    "effective_training_eligible"
-                ),
+                and_(
+                    or_(latest_action.is_(None), latest_action == "REINSTATE"),
+                    review_eligible(),
+                ).label("effective_training_eligible"),
+                review_status_expression().label("review_status"),
+                select(OutcomeReviewEventModel.reason_code)
+                .where(OutcomeReviewEventModel.outcome_id == ActualOutcomeModel.outcome_id)
+                .order_by(OutcomeReviewEventModel.event_id.desc())
+                .limit(1)
+                .correlate(ActualOutcomeModel)
+                .scalar_subquery()
+                .label("review_reason"),
             )
+            .where(true() if include_superseded else is_effective())
             .order_by(
                 ActualOutcomeModel.recorded_at.desc(),
                 ActualOutcomeModel.outcome_id,
@@ -767,8 +810,8 @@ class OutcomeRepository:
             .offset(offset)
         )
         return [
-            (outcome, bool(eligible))
-            for outcome, eligible in session.execute(statement)
+            (outcome, bool(eligible), status, reason)
+            for outcome, eligible, status, reason in session.execute(statement)
         ]
 
     def list_all_outcomes(self, session: Session) -> list[ActualOutcomeModel]:
@@ -840,6 +883,74 @@ class OutcomeRepository:
     ) -> None:
         session.add_all(observations)
         session.flush()
+
+    def get_successor(
+        self, session: Session, outcome_id: uuid.UUID
+    ) -> ActualOutcomeModel | None:
+        return session.scalar(
+            select(ActualOutcomeModel).where(
+                ActualOutcomeModel.supersedes_outcome_id == outcome_id
+            )
+        )
+
+    def list_revision_chain(
+        self, session: Session, facility_id: uuid.UUID
+    ) -> list[ActualOutcomeModel]:
+        return list(
+            session.scalars(
+                select(ActualOutcomeModel)
+                .where(ActualOutcomeModel.facility_id == facility_id)
+                .order_by(ActualOutcomeModel.revision)
+            )
+        )
+
+    def list_review_events(
+        self, session: Session, outcome_ids: list[uuid.UUID]
+    ) -> list[OutcomeReviewEventModel]:
+        if not outcome_ids:
+            return []
+        return list(
+            session.scalars(
+                select(OutcomeReviewEventModel)
+                .where(OutcomeReviewEventModel.outcome_id.in_(outcome_ids))
+                .order_by(OutcomeReviewEventModel.event_id)
+            )
+        )
+
+    def review_status(self, session: Session, outcome_id: uuid.UUID) -> tuple[str | None, str | None]:
+        row = session.execute(
+            select(OutcomeReviewEventModel.status, OutcomeReviewEventModel.reason_code)
+            .where(OutcomeReviewEventModel.outcome_id == outcome_id)
+            .order_by(OutcomeReviewEventModel.event_id.desc())
+            .limit(1)
+        ).first()
+        return (row[0], row[1]) if row is not None else (None, None)
+
+    def review_summary(self, session: Session) -> list[tuple[str, str | None, str | None, bool, int]]:
+        """(provenance, status, reason, effective, count) over latest review status."""
+
+        latest_status = review_status_expression()
+        latest_reason = (
+            select(OutcomeReviewEventModel.reason_code)
+            .where(OutcomeReviewEventModel.outcome_id == ActualOutcomeModel.outcome_id)
+            .order_by(OutcomeReviewEventModel.event_id.desc())
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        effective = is_effective()
+        rows = session.execute(
+            select(
+                ActualOutcomeModel.provenance,
+                latest_status.label("status"),
+                latest_reason.label("reason"),
+                effective.label("effective"),
+                func.count(),
+            ).group_by(
+                ActualOutcomeModel.provenance, "status", "reason", "effective"
+            )
+        ).all()
+        return [(row[0], row[1], row[2], bool(row[3]), int(row[4])) for row in rows]
 
     @staticmethod
     def _provenance_for_scope(scope: str) -> str:

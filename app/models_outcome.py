@@ -43,6 +43,20 @@ class ActualOutcomeModel(Base):
             "original_risk_score BETWEEN 0 AND 1",
             name="ck_actual_outcomes_original_score",
         ),
+        CheckConstraint(
+            "revision >= 1 AND (revision = 1) = (supersedes_outcome_id IS NULL) "
+            "AND (revision = 1) = (correction_reason_code IS NULL) "
+            "AND (revision = 1) = (correction_comment IS NULL)",
+            name="ck_actual_outcomes_revision_chain",
+        ),
+        UniqueConstraint("facility_id", "revision", name="uq_actual_outcomes_facility_id_revision"),
+        UniqueConstraint("request_id", "revision", name="uq_actual_outcomes_request_id_revision"),
+        UniqueConstraint(
+            "risk_assessment_id", "revision", name="uq_actual_outcomes_risk_assessment_id_revision"
+        ),
+        UniqueConstraint(
+            "supersedes_outcome_id", name="uq_actual_outcomes_supersedes_outcome_id"
+        ),
     )
 
     outcome_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -50,18 +64,15 @@ class ActualOutcomeModel(Base):
         UUID(as_uuid=True),
         ForeignKey("financing_facilities.facility_id", ondelete="RESTRICT"),
         nullable=False,
-        unique=True,
     )
     request_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("financing_requests.request_id", ondelete="RESTRICT"),
         nullable=False,
-        unique=True,
     )
     risk_assessment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         nullable=False,
-        unique=True,
     )
     model_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -85,6 +96,15 @@ class ActualOutcomeModel(Base):
     risk_engine_version: Mapped[str] = mapped_column(Text, nullable=False)
     risk_input_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    supersedes_outcome_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("actual_outcomes.outcome_id", ondelete="RESTRICT"),
+    )
+    correction_reason_code: Mapped[str | None] = mapped_column(Text)
+    correction_comment: Mapped[str | None] = mapped_column(Text)
 
 
 Index("ix_actual_outcomes_recorded_at", ActualOutcomeModel.recorded_at.desc())
@@ -150,6 +170,13 @@ class CalibrationRunModel(Base):
             "AND deactivated_at IS NOT NULL))",
             name="ck_calibration_runs_deployment_contract",
         ),
+        CheckConstraint(
+            "(retired_at IS NULL) = (retired_by_user_id IS NULL) "
+            "AND (retired_at IS NULL) = (retirement_reason IS NULL) "
+            "AND (retired_at IS NULL OR deployment_status <> 'active') "
+            "AND (rolled_back_at IS NULL OR deployment_status <> 'active')",
+            name="ck_calibration_runs_registry_contract",
+        ),
         ForeignKeyConstraint(
             ["trigger_job_id"],
             ["calibration_jobs.job_id"],
@@ -211,6 +238,12 @@ class CalibrationRunModel(Base):
     )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retired_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT")
+    )
+    retirement_reason: Mapped[str | None] = mapped_column(Text)
 
 
 Index("ix_calibration_runs_completed_at", CalibrationRunModel.completed_at.desc())
@@ -225,6 +258,7 @@ Index(
     unique=True,
     postgresql_where=text("deployment_status = 'active'"),
 )
+Index("ix_calibration_runs_retired_by_user_id", CalibrationRunModel.retired_by_user_id)
 Index("ix_calibration_runs_trigger_outcome_id", CalibrationRunModel.trigger_outcome_id)
 Index("ix_calibration_runs_trigger_job_id", CalibrationRunModel.trigger_job_id)
 Index(

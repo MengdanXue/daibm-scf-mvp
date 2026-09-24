@@ -548,3 +548,32 @@ def test_facility_ui_covers_governed_lifecycle_actions_bilingually():
     assert javascript.count("await hashEvidenceReference(reference)") >= 3
     assert "facility.status_history" in javascript
     assert "facility.contract_versions" in javascript
+
+
+def test_governance_pages_expose_model_center_feedback_and_decision_detail():
+    html = _html()
+    governance = (HTML_PATH.with_name("governance.js")).read_text(encoding="utf-8")
+    workflow = WORKFLOW_JS_PATH.read_text(encoding="utf-8")
+
+    for element in ('id="view-governance"', 'id="view-feedback"', 'id="governanceContent"',
+                    'id="feedbackContent"', '<script src="/static/governance.js"></script>'):
+        assert element in html
+    assert html.index("/static/workflow.js") < html.index("/static/governance.js")
+    for path in (
+        "/api/v1/model-registry",
+        "/api/v1/calibration-deployments/rollback",
+        "/retire",
+        "/api/v1/outcome-governance/summary",
+        "/lineage",
+        "include_superseded=",
+        "/risk-decisions",
+    ):
+        assert path in governance, path
+    for key in ("navGovernance", "navFeedback", "rollback", "retire", "decisionTitle",
+                "scopeCheck", "artifactHash", "ROLLED_BACK", "TRAINING_USED"):
+        assert governance.count(f"{key}:") == 2, key
+    assert 'id="riskDecisionDetail"' in workflow
+    assert "window.governanceRiskDecision" in workflow
+    # Destructive actions are offered only to auditors and only when allowed.
+    assert 'auditor && model.can_rollback' in governance
+    assert 'auditor && model.can_retire' in governance

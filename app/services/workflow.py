@@ -21,6 +21,8 @@ from app.domain.workflow import (
 from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
 from app.models import FinancingRequestModel, LedgerEventModel
+from app.models_identity import UserModel
+from app.models_model_governance import RiskDecisionRecordModel
 from app.models_outcome import CalibrationRunModel
 from app.models_workflow import WorkflowActionModel
 from app.repositories.identity import IdentityRepository
@@ -385,6 +387,34 @@ class WorkflowService:
                 application.features
             )
             application.risk_assessed_at = datetime.now(timezone.utc)
+            session.add(
+                RiskDecisionRecordModel(
+                    decision_record_id=uuid.uuid4(),
+                    request_id=application.request_id,
+                    risk_assessment_id=application.risk_assessment_id,
+                    assessed_by_user_id=user.user_id,
+                    actor_role=user.role,
+                    request_scope=application.assessment_scope,
+                    input_sha256=application.risk_input_sha256,
+                    input_snapshot=application.features,
+                    engine_version=application.risk_engine_version,
+                    raw_score=adaptive_result.raw_score,
+                    final_score=adaptive_result.final_score,
+                    band=band_for_score(adaptive_result.final_score),
+                    calibration_run_id=application.calibration_run_id,
+                    calibration_artifact_sha256=adaptive_result.artifact_sha256,
+                    model_scope=adaptive_result.model_scope,
+                    scope_result=adaptive_result.scope_result,
+                    scope_reason=adaptive_result.scope_reason,
+                    attempted_calibration_run_id=(
+                        uuid.UUID(adaptive_result.attempted_calibration_run_id)
+                        if adaptive_result.attempted_calibration_run_id is not None
+                        else None
+                    ),
+                    fallback_code=adaptive_result.fallback_code,
+                    recorded_at=application.risk_assessed_at,
+                )
+            )
             self._advance(
                 session,
                 application,
@@ -403,6 +433,9 @@ class WorkflowService:
                     "deployment_scope": adaptive_result.deployment_scope,
                     "assessment_scope": application.assessment_scope,
                     "calibration_fallback_code": adaptive_result.fallback_code,
+                    "calibration_artifact_sha256": adaptive_result.artifact_sha256,
+                    "scope_result": adaptive_result.scope_result,
+                    "scope_reason": adaptive_result.scope_reason,
                     "assessment_id": str(application.risk_assessment_id),
                     "input_sha256": application.risk_input_sha256,
                     "provenance": "DEMO_WORKFLOW",
@@ -441,11 +474,98 @@ class WorkflowService:
                                 "attempted_calibration_run_id": (
                                     adaptive_result.attempted_calibration_run_id
                                 ),
+                                "model_scope": adaptive_result.model_scope,
+                                "scope_result": adaptive_result.scope_result,
+                                "scope_reason": adaptive_result.scope_reason,
                             },
                         )
                     ],
                 )
         return self.get(normalized_id, user)
+
+    def risk_decisions(
+        self,
+        request_id: str | uuid.UUID,
+        user: AuthenticatedUser,
+    ) -> list[dict[str, Any]]:
+        """Why the application got its risk level: every immutable scoring record."""
+
+        normalized_id = self._normalize_id(request_id)
+        with self.session_factory() as session:
+            application = self.workflow_repository.get_application(session, normalized_id)
+            if application is None or not self._can_view(application, user):
+                raise ApplicationNotFound(str(normalized_id))
+            records = list(
+                session.scalars(
+                    select(RiskDecisionRecordModel)
+                    .where(RiskDecisionRecordModel.request_id == application.request_id)
+                    .order_by(RiskDecisionRecordModel.recorded_at)
+                )
+            )
+            usernames = {
+                row.user_id: row.username
+                for row in session.scalars(
+                    select(UserModel).where(
+                        UserModel.user_id.in_([item.assessed_by_user_id for item in records])
+                    )
+                )
+            }
+            ledger = {
+                (event.payload or {}).get("assessment_id"): event
+                for event in session.scalars(
+                    select(LedgerEventModel)
+                    .where(
+                        LedgerEventModel.entity_id == application.request_id,
+                        LedgerEventModel.event_type.in_(
+                            [
+                                "RISK_ASSESSMENT",
+                                "RISK_CALIBRATION_APPLIED",
+                                "RISK_CALIBRATION_FALLBACK",
+                            ]
+                        ),
+                    )
+                    .order_by(LedgerEventModel.id)
+                )
+                if event.event_type != "RISK_ASSESSMENT"
+            }
+            return [
+                {
+                    "decision_record_id": str(item.decision_record_id),
+                    "risk_assessment_id": str(item.risk_assessment_id),
+                    "assessed_by": usernames.get(item.assessed_by_user_id),
+                    "actor_role": item.actor_role,
+                    "request_scope": item.request_scope,
+                    "input_sha256": item.input_sha256,
+                    "input_snapshot": item.input_snapshot,
+                    "engine_version": item.engine_version,
+                    "raw_score": item.raw_score,
+                    "final_score": item.final_score,
+                    "band": item.band,
+                    "calibration_run_id": (
+                        str(item.calibration_run_id) if item.calibration_run_id else None
+                    ),
+                    "calibration_artifact_sha256": item.calibration_artifact_sha256,
+                    "model_scope": item.model_scope,
+                    "scope_result": item.scope_result,
+                    "scope_reason": item.scope_reason,
+                    "attempted_calibration_run_id": (
+                        str(item.attempted_calibration_run_id)
+                        if item.attempted_calibration_run_id
+                        else None
+                    ),
+                    "fallback_code": item.fallback_code,
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                    "calibration_ledger_event": (
+                        {
+                            "event_type": ledger[str(item.risk_assessment_id)].event_type,
+                            "event_hash": ledger[str(item.risk_assessment_id)].event_hash,
+                        }
+                        if str(item.risk_assessment_id) in ledger
+                        else None
+                    ),
+                }
+                for item in records
+            ]
 
     def decide(
         self,

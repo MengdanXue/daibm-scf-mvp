@@ -370,6 +370,8 @@
       review: role === "financier" || role === "auditor",
       research: role === "financier" || role === "auditor",
       ledger: role === "auditor",
+      governance: ["auditor", "risk_manager", "financier"].includes(role),
+      feedback: role === "auditor" || role === "risk_manager",
       model: true
     };
     document.querySelectorAll("[data-view-button]").forEach((button) => {
@@ -628,8 +630,12 @@
       </div>
       <div class="risk-result"><span>${escapeHtml(tr("risk"))}<strong>${escapeHtml(risk)}</strong></span><span>${escapeHtml(tr("decision"))}<strong>${escapeHtml(application.decision ? tr(application.decision) : "—")}</strong></span></div>
       ${evidenceMarkup}
+      ${riskEvidence ? `<div id="riskDecisionDetail" class="workflow-evidence risk-decision-detail" data-request-id="${escapeHtml(application.request_id)}"></div>` : ""}
       ${proofMarkup}
       ${renderActionStation(application)}`;
+    if (riskEvidence && typeof window.governanceRiskDecision === "function") {
+      window.governanceRiskDecision(application.request_id);
+    }
   }
 
   function renderActionStation(application) {
