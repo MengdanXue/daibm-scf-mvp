@@ -565,7 +565,7 @@ def test_governance_pages_expose_model_center_feedback_and_decision_detail():
         "/api/v1/model-versions/activation-history",
         "/${action}",
         "/retire",
-        "/api/v1/outcome-governance/summary",
+        "/api/v1/outcome-governance/overview",
         "/lineage",
         "include_superseded=",
         "/risk-decisions",
@@ -581,6 +581,22 @@ def test_governance_pages_expose_model_center_feedback_and_decision_detail():
     assert 'auditor && model.can_rollback' in governance
     assert 'auditor && model.can_activate' in governance
     assert 'auditor && retirable' in governance
+    # Phase 2.2: outcome governance and dataset snapshot pages.
+    for element in ('id="view-snapshots"', 'id="snapshotContent"', 'data-view-button="snapshots"'):
+        assert element in html, element
+    assert 'snapshots: ["auditor", "risk_manager", "financier"].includes(role)' in workflow
+    for path in ("/api/v1/outcome-governance/overview", "/api/v1/outcome-governance/review-queue",
+                 "/api/v1/outcome-governance/eligibility", "/review-history", "/review`",
+                 "/api/v1/dataset-snapshots"):
+        assert path in governance, path
+    for element in ('id="outcomeGovernanceCounts"', 'id="outcomeReviewQueue"', 'data-review-form=',
+                    'id="trainingDataTable"', 'id="exclusionReasons"', 'id="outcomeReviewHistory"',
+                    'id="datasetSnapshotTable"', 'id="snapshotItems"', 'id="modelSnapshot"',
+                    'id="decisionSnapshot"'):
+        assert element in governance, element
+    for key in ("reviewingCount", "rejectedCount", "correctionCount", "approve", "reject",
+                "trainingData", "usedByModels", "datasetSnapshot", "navSnapshots"):
+        assert governance.count(f"{key}:") == 2, key
     for element in ('id="governanceActive"', 'id="modelCandidates"', 'id="activationHistory"',
                     'id="modelRegistryTable"', 'id="activateVersionForm"',
                     'id="rollbackVersionForm"', 'id="modelEvents"', 'id="artifactCheck"'):

@@ -41,19 +41,24 @@ from app.services.integrity import (
 )
 from app.services.anchor_dispatch import AnchorDispatchService, FabricGatewayClient
 from app.services.model_registry import ModelRegistryService
+from app.services.outcome_governance import OutcomeGovernanceService
 from app.services.outcomes import OutcomeService
 from app.services.calibration_jobs import CalibrationJobService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+def _flag(name: str, *, default: str) -> bool:
+    raw = os.environ.get(name, default).strip().lower()
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return raw == "true"
+
+
 def _auto_promotion_enabled() -> bool:
     """CALIBRATION_AUTO_PROMOTION=false holds validated candidates for an auditor."""
 
-    raw = os.environ.get("CALIBRATION_AUTO_PROMOTION", "true").strip().lower()
-    if raw not in {"true", "false"}:
-        raise ValueError("CALIBRATION_AUTO_PROMOTION must be true or false")
-    return raw == "true"
+    return _flag("CALIBRATION_AUTO_PROMOTION", default="true")
 
 
 def create_app(
@@ -105,6 +110,10 @@ def create_app(
             / "calibration"
         ),
         auto_promotion=_auto_promotion_enabled(),
+        manual_review=_flag("OUTCOME_MANUAL_REVIEW", default="false"),
+    )
+    outcome_governance_service = OutcomeGovernanceService(
+        active_database.session_factory, outcome_service=outcome_service
     )
     model_registry_service = ModelRegistryService(
         active_database.session_factory, outcome_service=outcome_service
@@ -129,6 +138,7 @@ def create_app(
         application.state.outcome_service = outcome_service
         application.state.calibration_job_service = calibration_job_service
         application.state.model_registry_service = model_registry_service
+        application.state.outcome_governance_service = outcome_governance_service
         if maintenance_mode:
             # The original 8010 maintenance entrypoint must not create demo
             # identities, register missing artifacts, or settle deployments.

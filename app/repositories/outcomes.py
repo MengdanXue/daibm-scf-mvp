@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import and_, exists, func, or_, select, text, true
 from sqlalchemy.orm import Session, aliased
@@ -41,6 +42,30 @@ def review_eligible() -> ColumnElement[bool]:
 def is_effective() -> ColumnElement[bool]:
     successor = aliased(ActualOutcomeModel)
     return ~exists().where(successor.supersedes_outcome_id == ActualOutcomeModel.outcome_id)
+
+
+def rule_reason_expression():
+    """Live re-check of the database eligibility rules (NULL when they pass)."""
+
+    return func.outcome_eligibility_reason(ActualOutcomeModel.outcome_id)
+
+
+def training_rules_pass() -> ColumnElement[bool]:
+    return and_(is_effective(), rule_reason_expression().is_(None))
+
+
+def _latest_correction(column):
+    return (
+        select(column)
+        .where(OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id)
+        .order_by(
+            OutcomeCorrectionModel.recorded_at.desc(),
+            OutcomeCorrectionModel.correction_id.desc(),
+        )
+        .limit(1)
+        .correlate(ActualOutcomeModel)
+        .scalar_subquery()
+    )
 
 
 class OutcomeRepository:
@@ -378,6 +403,44 @@ class OutcomeRepository:
             )
         )
 
+    def eligibility_population(
+        self,
+        session: Session,
+        *,
+        scope: str,
+    ) -> list[tuple[Any, ...]]:
+        """Every outcome of the scope with the facts the eligibility service judges.
+
+        Rows: (outcome, correction head id, correction head action, review
+        status, review reason, live rule reason, is effective).
+        """
+
+        provenance = self._provenance_for_scope(scope)
+        review_reason = (
+            select(OutcomeReviewEventModel.reason_code)
+            .where(OutcomeReviewEventModel.outcome_id == ActualOutcomeModel.outcome_id)
+            .order_by(OutcomeReviewEventModel.event_id.desc())
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        return [
+            tuple(row)
+            for row in session.execute(
+                select(
+                    ActualOutcomeModel,
+                    _latest_correction(OutcomeCorrectionModel.correction_id),
+                    _latest_correction(OutcomeCorrectionModel.action),
+                    review_status_expression(),
+                    review_reason,
+                    rule_reason_expression(),
+                    is_effective(),
+                )
+                .where(ActualOutcomeModel.provenance == provenance)
+                .order_by(ActualOutcomeModel.outcome_id)
+            )
+        ]
+
     def list_eligible_outcomes(
         self,
         session: Session,
@@ -405,6 +468,7 @@ class OutcomeRepository:
                     ActualOutcomeModel.provenance == provenance,
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
                     review_eligible(),
+                    training_rules_pass(),
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
@@ -451,6 +515,7 @@ class OutcomeRepository:
                     ActualOutcomeModel.provenance == provenance,
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
                     review_eligible(),
+                    training_rules_pass(),
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
@@ -517,6 +582,7 @@ class OutcomeRepository:
                         ActualOutcomeModel.provenance != provenance,
                         latest_action == "EXCLUDE",
                         ~review_eligible(),
+                        ~training_rules_pass(),
                     )
                 ),
             )
@@ -791,6 +857,7 @@ class OutcomeRepository:
                 and_(
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
                     review_eligible(),
+                    training_rules_pass(),
                 ).label("effective_training_eligible"),
                 review_status_expression().label("review_status"),
                 select(OutcomeReviewEventModel.reason_code)

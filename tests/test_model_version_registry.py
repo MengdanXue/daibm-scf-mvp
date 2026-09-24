@@ -15,7 +15,6 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
 
 from app.domain.model_registry import ALLOWED_TRANSITIONS, ModelVersionStatus, model_id_for
 from app.models import FinancingRequestModel, LedgerEventModel
@@ -523,19 +522,21 @@ def test_migration_backfills_existing_artifacts_as_versions(isolated_postgres_en
     with engine.connect() as connection:
         config.attributes["connection"] = connection
         command.upgrade(config, "20260925_0016")
-        with Session(bind=connection) as session:
-            session.add(CalibrationRunModel(
-                calibration_run_id=run_id, trigger_outcome_id=None, trigger_job_id=None,
-                dataset_sha256="a" * 64, sample_count=30, positive_count=10, negative_count=20,
-                metrics_before={"brier": 0.2}, metrics_after={"brier": 0.1}, configuration={},
-                status="eligible_candidate", artifact_locator="/artifacts/a.json",
-                artifact_sha256="b" * 64, artifact_schema="daibm.platt-calibration.v3",
-                failure_code=None, deployment_status="active",
-                deployment_scope="controlled_demo", activation_mode="automatic",
-                activation_reason="oof_improved", activated_at=START, deactivated_at=None,
-                previous_active_run_id=None, started_at=START, completed_at=START,
-            ))
-            session.commit()
+        # Raw SQL: the ORM already knows columns added by later revisions.
+        connection.execute(
+            text(
+                "INSERT INTO calibration_runs (calibration_run_id, dataset_sha256, sample_count, "
+                "positive_count, negative_count, metrics_before, metrics_after, configuration, "
+                "status, artifact_locator, artifact_sha256, artifact_schema, deployment_status, "
+                "deployment_scope, activation_mode, activation_reason, activated_at, "
+                "started_at, completed_at) VALUES (:id, :dataset, 30, 10, 20, "
+                "'{\"brier\": 0.2}', '{\"brier\": 0.1}', '{}', 'eligible_candidate', "
+                "'/artifacts/a.json', :artifact, 'daibm.platt-calibration.v3', 'active', "
+                "'controlled_demo', 'automatic', 'oof_improved', :at, :at, :at)"
+            ),
+            {"id": run_id, "dataset": "a" * 64, "artifact": "b" * 64, "at": START},
+        )
+        connection.commit()
         command.upgrade(config, "20260926_0017")
         row = connection.execute(
             text(

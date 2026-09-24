@@ -125,6 +125,7 @@ class ModelRegistryRepository:
             created_by=created_by,
             created_by_user_id=created_by_user_id,
             created_at=now,
+            dataset_snapshot_id=run.dataset_snapshot_id,
         )
         session.add(version)
         session.flush()

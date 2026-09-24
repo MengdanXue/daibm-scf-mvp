@@ -85,3 +85,7 @@ CREATED → REVIEWING → REJECTED
 
 自迁移 `20260926_0017` 起，`risk_model_versions` 是部署模型的记录源：每个校准工件注册为一个版本（`calibration:{scope}@vN`），生命周期为 DRAFT → EVALUATING → CANDIDATE → ACTIVE → ROLLED_BACK → RETIRED（另有 REJECTED）。每次状态变化都经过 `transition_model_version` 写入不可变的 `risk_model_version_transitions`；推理按 scope 查询 ACTIVE 版本。人工激活会重新校验工件哈希。详见 [PHASE2.1_MODEL_REGISTRY_REPORT.md](../../PHASE2.1_MODEL_REGISTRY_REPORT.md)。
 
+## Phase 2.2：结果数据治理
+
+自迁移 `20260927_0018` 起，训练只经过 `OutcomeEligibilityService`：每次校准先冻结一份不可变的训练数据快照（纳入与排除的结果及原因、数据集哈希），训练只读取快照中纳入的行；calibration run 与模型版本都关联该快照。每条审核事件记录 from/to 状态、操作人、角色、时间与原因；审计员或风险经理可以人工通过或拒绝结果。详见 [PHASE2.2_OUTCOME_GOVERNANCE_REPORT.md](../../PHASE2.2_OUTCOME_GOVERNANCE_REPORT.md)。
+

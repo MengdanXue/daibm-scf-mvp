@@ -22,7 +22,7 @@ from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
 from app.models import FinancingRequestModel, LedgerEventModel
 from app.models_identity import UserModel
-from app.models_model_governance import RiskDecisionRecordModel
+from app.models_model_governance import RiskDecisionRecordModel, RiskModelVersionModel
 from app.models_outcome import CalibrationRunModel
 from app.models_workflow import WorkflowActionModel
 from app.repositories.identity import IdentityRepository
@@ -515,6 +515,16 @@ class WorkflowService:
                     )
                 )
             }
+            versions = {
+                row.id: row
+                for row in session.scalars(
+                    select(RiskModelVersionModel).where(
+                        RiskModelVersionModel.id.in_(
+                            [item.model_version_id for item in records if item.model_version_id]
+                        )
+                    )
+                )
+            }
             ledger = {
                 (event.payload or {}).get("assessment_id"): event
                 for event in session.scalars(
@@ -552,6 +562,18 @@ class WorkflowService:
                     "calibration_artifact_sha256": item.calibration_artifact_sha256,
                     "model_version_id": (
                         str(item.model_version_id) if item.model_version_id else None
+                    ),
+                    "model_version_label": (
+                        f"{versions[item.model_version_id].model_id}"
+                        f"@v{versions[item.model_version_id].version}"
+                        if item.model_version_id in versions
+                        else None
+                    ),
+                    "dataset_snapshot_id": (
+                        str(versions[item.model_version_id].dataset_snapshot_id)
+                        if item.model_version_id in versions
+                        and versions[item.model_version_id].dataset_snapshot_id
+                        else None
                     ),
                     "model_scope": item.model_scope,
                     "scope_result": item.scope_result,

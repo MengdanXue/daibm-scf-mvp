@@ -49,12 +49,14 @@ class CalibrationJobModel(Base):
             name="ck_calibration_jobs_deployment_scope",
         ),
         CheckConstraint(
-            "trigger_type IN ('outcome_submitted', 'correction_exclude', 'correction_reinstate')",
+            "trigger_type IN ('outcome_submitted', 'correction_exclude', "
+            "'correction_reinstate', 'outcome_reviewed')",
             name="ck_calibration_jobs_trigger_type",
         ),
         CheckConstraint(
             "attempt_count BETWEEN 0 AND 3 AND "
-            "((trigger_type = 'outcome_submitted' AND trigger_outcome_id IS NOT NULL "
+            "((trigger_type IN ('outcome_submitted', 'outcome_reviewed') "
+            "AND trigger_outcome_id IS NOT NULL "
             "AND trigger_correction_id IS NULL) OR "
             "(trigger_type IN ('correction_exclude', 'correction_reinstate') "
             "AND trigger_outcome_id IS NULL AND trigger_correction_id IS NOT NULL)) AND "
