@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.domain.facility import exact_money
+from app.domain.facility import RecoverySource, exact_money
 
 
 def _parse_money(value: object) -> Decimal:
@@ -155,3 +155,22 @@ class DeclareDefaultRequest(EvidenceCommand):
 
 class WriteOffRequest(EvidenceCommand):
     pass
+
+
+class LifecycleDecisionRequest(EvidenceCommand):
+    """Open or close risk disposal, or start recovery, with governed evidence."""
+
+
+class RecordRecoveryRequest(VersionedFacilityCommand):
+    amount: Money
+    source: RecoverySource
+    recovery_reference: str = Field(min_length=1, max_length=120)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("recovery_reference")
+    @classmethod
+    def recovery_reference_must_not_be_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("recovery reference must not be blank")
+        return normalized

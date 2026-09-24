@@ -16,9 +16,11 @@ from app.domain.facility import (
     FacilityStatus,
     InstallmentStatus,
     InvalidFacilityTransition,
+    LifecycleFacts,
     PaymentStatus,
     derive_closure_reason,
     next_facility_status,
+    settlement_classification,
 )
 from app.domain.workflow import Role
 from app.identity import AuthenticatedUser
@@ -32,9 +34,13 @@ from app.models_facility import (
 )
 from app.models_identity import UserModel
 from app.models_lifecycle import (
+    FacilityContractVersionModel,
     FacilityDefaultModel,
     FacilityDelinquencyModel,
+    FacilityLifecycleDecisionModel,
+    FacilityRecoveryModel,
     FacilityRestructureModel,
+    FacilityStatusTransitionModel,
     FacilityWriteOffModel,
 )
 from app.repositories.facility import FacilityRepository
@@ -44,7 +50,9 @@ from app.schemas_facility import (
     CreateFacilityRequest,
     DeclareDefaultRequest,
     DecisionPaymentRequest,
+    LifecycleDecisionRequest,
     MarkOverdueRequest,
+    RecordRecoveryRequest,
     RestructureFacilityRequest,
     SubmitPaymentRequest,
     VersionedFacilityCommand,
@@ -166,6 +174,39 @@ class FacilityService:
                     for item in request.installments
                 ]
             )
+            session.add(
+                self._contract_version(
+                    facility,
+                    contract_version=1,
+                    origin="origination",
+                    outstanding_at_start=Decimal(facility.principal),
+                    schedule=[
+                        {
+                            "sequence": item.sequence,
+                            "due_date": item.due_date.isoformat(),
+                            "amount": self._money(item.amount),
+                        }
+                        for item in request.installments
+                    ],
+                    superseded_schedule=None,
+                    restructure_id=None,
+                    user=user,
+                    now=now,
+                )
+            )
+            session.add(
+                FacilityStatusTransitionModel(
+                    facility_id=facility.facility_id,
+                    from_status=None,
+                    to_status=facility.status,
+                    trigger_action=FacilityAction.CREATE.value,
+                    actor_user_id=user.user_id,
+                    actor_role=user.role,
+                    resulting_version=facility.version,
+                    reason_code=None,
+                    recorded_at=now,
+                )
+            )
             self._record(
                 session,
                 facility,
@@ -215,6 +256,7 @@ class FacilityService:
                 return replay
             self._check_version(facility, command.version)
             target = self._next(
+                session,
                 facility,
                 FacilityAction.INITIATE_DISBURSEMENT,
                 user,
@@ -226,7 +268,7 @@ class FacilityService:
                 reference.encode("utf-8")
             ).hexdigest()
             facility.disbursement_initiated_at = now
-            self._advance(facility, target, now)
+            self._advance(session, facility, target, now, user, FacilityAction.INITIATE_DISBURSEMENT)
             self._record(
                 session,
                 facility,
@@ -274,13 +316,14 @@ class FacilityService:
                 return replay
             self._check_version(facility, command.version)
             target = self._next(
+                session,
                 facility,
                 FacilityAction.CONFIRM_DISBURSEMENT,
                 user,
             )
             now = self._now()
             facility.disbursed_at = now
-            self._advance(facility, target, now)
+            self._advance(session, facility, target, now, user, FacilityAction.CONFIRM_DISBURSEMENT)
             self._record(
                 session,
                 facility,
@@ -330,7 +373,7 @@ class FacilityService:
             if replay is not None:
                 return replay
             self._check_version(facility, request.version)
-            self._next(facility, FacilityAction.SUBMIT_PAYMENT, user)
+            self._next(session, facility, FacilityAction.SUBMIT_PAYMENT, user)
             installment = self._load_installment(
                 session,
                 facility.facility_id,
@@ -449,12 +492,13 @@ class FacilityService:
             payment.decision_comment = request.comment
             if request.decision == PaymentStatus.REJECTED.value:
                 target = self._next(
+                    session,
                     facility,
                     FacilityAction.REJECT_PAYMENT,
                     user,
                 )
                 payment.status = PaymentStatus.REJECTED.value
-                self._advance(facility, target, now)
+                self._advance(session, facility, target, now, user, FacilityAction.REJECT_PAYMENT)
                 action = FacilityAction.REJECT_PAYMENT
                 events = [
                     (
@@ -485,19 +529,31 @@ class FacilityService:
                     if is_final
                     else FacilityAction.CONFIRM_PAYMENT
                 )
-                target = self._next(facility, action, user)
+                target = self._next(session, facility, action, user)
                 payment.status = PaymentStatus.CONFIRMED.value
                 installment.paid_amount = new_installment_paid
-                installment.status = (
-                    InstallmentStatus.PAID.value
-                    if new_installment_paid == Decimal(installment.amount)
-                    else InstallmentStatus.PARTIALLY_PAID.value
-                )
+                if new_installment_paid == Decimal(installment.amount):
+                    installment.status = InstallmentStatus.PAID.value
+                elif installment.status != InstallmentStatus.OVERDUE.value:
+                    # A partial payment never clears an overdue marker.
+                    installment.status = InstallmentStatus.PARTIALLY_PAID.value
                 installment.updated_at = now
                 facility.outstanding_amount = new_outstanding
-                if is_final:
+                trigger = action
+                cured = False
+                if (
+                    not is_final
+                    and target == FacilityStatus.OVERDUE
+                    and not self._arrears(session, facility, now)
+                ):
+                    target = self._next(
+                        session, facility, FacilityAction.CURE_OVERDUE, user
+                    )
+                    trigger = FacilityAction.CURE_OVERDUE
+                    cured = True
+                if target == FacilityStatus.REPAID:
                     facility.repaid_at = now
-                self._advance(facility, target, now)
+                self._advance(session, facility, target, now, user, trigger)
                 confirmation_payload = {
                     "payment_id": str(payment.payment_id),
                     "installment_id": str(installment.installment_id),
@@ -505,10 +561,22 @@ class FacilityService:
                     "outstanding_amount": self._money(new_outstanding),
                 }
                 events = [("REPAYMENT_CONFIRMED", confirmation_payload)]
+                if cured:
+                    events.append(
+                        (
+                            "FACILITY_OVERDUE_CURED",
+                            {
+                                "cured_by_payment_id": str(payment.payment_id),
+                                "resulting_status": target.value,
+                            },
+                        )
+                    )
                 if is_final:
                     events.append(
                         (
-                            "FACILITY_REPAID",
+                            "FACILITY_REPAID"
+                            if target == FacilityStatus.REPAID
+                            else "FACILITY_RECOVERED",
                             {
                                 "outstanding_amount": "0.00",
                                 "final_payment_id": str(payment.payment_id),
@@ -578,7 +646,7 @@ class FacilityService:
                 )
             if installment.due_date >= now.date():
                 raise FacilityConflict("The installment is not past due")
-            target = self._next(facility, FacilityAction.MARK_OVERDUE, user)
+            target = self._next(session, facility, FacilityAction.MARK_OVERDUE, user)
             installment.status = InstallmentStatus.OVERDUE.value
             installment.updated_at = now
             session.add(
@@ -593,7 +661,7 @@ class FacilityService:
                     recorded_at=now,
                 )
             )
-            self._advance(facility, target, now)
+            self._advance(session, facility, target, now, user, FacilityAction.MARK_OVERDUE)
             self._record(
                 session,
                 facility,
@@ -638,7 +706,7 @@ class FacilityService:
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
-            target = self._next(facility, FacilityAction.RESTRUCTURE, user)
+            target = self._next(session, facility, FacilityAction.RESTRUCTURE, user)
             outstanding = Decimal(facility.outstanding_amount)
             if command.schedule_total != outstanding:
                 raise FacilityConflict(
@@ -679,6 +747,18 @@ class FacilityService:
                 )
             old_version = facility.current_schedule_version
             new_version = old_version + 1
+            # Freeze the prior contract state before supersession marks it.
+            superseded_schedule = [
+                {
+                    "installment_id": str(item.installment_id),
+                    "sequence": item.sequence,
+                    "due_date": item.due_date.isoformat(),
+                    "amount": self._money(item.amount),
+                    "paid_amount": self._money(item.paid_amount),
+                    "status_before": item.status,
+                }
+                for item in sorted(unpaid_rows, key=lambda row: row.sequence)
+            ]
             for installment in unpaid_rows:
                 installment.status = InstallmentStatus.SUPERSEDED.value
                 installment.updated_at = now
@@ -699,21 +779,51 @@ class FacilityService:
                     for item in command.installments
                 ]
             )
-            session.add(
-                FacilityRestructureModel(
-                    restructure_id=uuid.uuid4(),
-                    facility_id=facility.facility_id,
-                    restructured_by_user_id=user.user_id,
-                    old_schedule_version=old_version,
-                    new_schedule_version=new_version,
-                    reason_code=command.reason_code,
-                    comment=command.comment,
-                    evidence_sha256=command.evidence_sha256,
-                    recorded_at=now,
-                )
+            restructure = FacilityRestructureModel(
+                restructure_id=uuid.uuid4(),
+                facility_id=facility.facility_id,
+                restructured_by_user_id=user.user_id,
+                old_schedule_version=old_version,
+                new_schedule_version=new_version,
+                reason_code=command.reason_code,
+                comment=command.comment,
+                evidence_sha256=command.evidence_sha256,
+                recorded_at=now,
             )
+            session.add(restructure)
+            session.flush()
+            previous_contract = self.repository.get_contract_version(
+                session, facility.facility_id, old_version
+            )
+            contract = self._contract_version(
+                facility,
+                contract_version=new_version,
+                origin="restructure",
+                outstanding_at_start=outstanding,
+                schedule=[
+                    {
+                        "sequence": item.sequence,
+                        "due_date": item.due_date.isoformat(),
+                        "amount": self._money(item.amount),
+                    }
+                    for item in command.installments
+                ],
+                superseded_schedule=superseded_schedule,
+                restructure_id=restructure.restructure_id,
+                user=user,
+                now=now,
+            )
+            session.add(contract)
             facility.current_schedule_version = new_version
-            self._advance(facility, target, now)
+            self._advance(
+                session,
+                facility,
+                target,
+                now,
+                user,
+                FacilityAction.RESTRUCTURE,
+                reason_code=command.reason_code,
+            )
             self._record(
                 session,
                 facility,
@@ -731,6 +841,12 @@ class FacilityService:
                             "outstanding_amount": self._money(outstanding),
                             "reason_code": command.reason_code,
                             "evidence_sha256": command.evidence_sha256,
+                            "previous_contract_sha256": (
+                                previous_contract.terms_sha256
+                                if previous_contract is not None
+                                else None
+                            ),
+                            "contract_sha256": contract.terms_sha256,
                         },
                     )
                 ],
@@ -759,7 +875,7 @@ class FacilityService:
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
-            target = self._next(facility, FacilityAction.DECLARE_DEFAULT, user)
+            target = self._next(session, facility, FacilityAction.DECLARE_DEFAULT, user)
             if any(
                 item.schedule_version == facility.current_schedule_version
                 for item in self.repository.list_defaults_batch(session, [facility.facility_id])
@@ -787,7 +903,10 @@ class FacilityService:
                     recorded_at=now,
                 )
             )
-            self._advance(facility, target, now)
+            self._advance(
+                session, facility, target, now, user,
+                FacilityAction.DECLARE_DEFAULT, reason_code=command.reason_code,
+            )
             self._record(
                 session,
                 facility,
@@ -837,7 +956,7 @@ class FacilityService:
             if replay is not None:
                 return replay
             self._check_version(facility, command.version)
-            target = self._next(facility, FacilityAction.WRITE_OFF, user)
+            target = self._next(session, facility, FacilityAction.WRITE_OFF, user)
             payments = self.repository.list_payments(
                 session, facility.facility_id
             )
@@ -869,7 +988,10 @@ class FacilityService:
                 )
             )
             facility.outstanding_amount = Decimal("0.00")
-            self._advance(facility, target, now)
+            self._advance(
+                session, facility, target, now, user,
+                FacilityAction.WRITE_OFF, reason_code=command.reason_code,
+            )
             self._record(
                 session,
                 facility,
@@ -923,7 +1045,7 @@ class FacilityService:
             verification = self.ledger_repository.verify(session)
             if not verification["valid"]:
                 raise FacilityConflict("Facility audit ledger verification failed")
-            target = self._next(facility, FacilityAction.CLOSE, user)
+            target = self._next(session, facility, FacilityAction.CLOSE, user)
             default_event = self.repository.get_default(
                 session, facility.facility_id
             )
@@ -942,7 +1064,7 @@ class FacilityService:
             now = self._now()
             facility.closed_at = now
             facility.closure_reason = closure_reason
-            self._advance(facility, target, now)
+            self._advance(session, facility, target, now, user, FacilityAction.CLOSE)
             self._record(
                 session,
                 facility,
@@ -957,6 +1079,282 @@ class FacilityService:
                         {
                             "verified_ledger_head": verification["head_hash"],
                             "closure_reason": closure_reason,
+                        },
+                    )
+                ],
+            )
+            return self._serialize(session, facility, user)
+
+    def open_disposal(
+        self,
+        facility_id: str | uuid.UUID,
+        command: LifecycleDecisionRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """Move an overdue facility into governed risk disposal (workout)."""
+
+        def precondition(session: Session, facility: FinancingFacilityModel) -> None:
+            if not self._arrears(session, facility, self._now()):
+                raise FacilityConflict(
+                    "Risk disposal requires a past-due unpaid current-schedule installment"
+                )
+
+        return self._lifecycle_decision(
+            facility_id,
+            command,
+            user,
+            action=FacilityAction.OPEN_DISPOSAL,
+            decision_type="disposal_opened",
+            event_type="FACILITY_DISPOSAL_OPENED",
+            precondition=precondition,
+        )
+
+    def close_disposal(
+        self,
+        facility_id: str | uuid.UUID,
+        command: LifecycleDecisionRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """Return a facility from disposal to performing once arrears are cleared."""
+
+        def precondition(session: Session, facility: FinancingFacilityModel) -> None:
+            if self._arrears(session, facility, self._now()):
+                raise FacilityConflict(
+                    "Risk disposal can close only after every arrear is cleared"
+                )
+
+        return self._lifecycle_decision(
+            facility_id,
+            command,
+            user,
+            action=FacilityAction.CLOSE_DISPOSAL,
+            decision_type="disposal_closed",
+            event_type="FACILITY_DISPOSAL_CLOSED",
+            precondition=precondition,
+        )
+
+    def start_recovery(
+        self,
+        facility_id: str | uuid.UUID,
+        command: LifecycleDecisionRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """Start recovery (追偿) on a facility defaulted on its current contract."""
+
+        def precondition(session: Session, facility: FinancingFacilityModel) -> None:
+            defaults = self.repository.list_defaults_batch(session, [facility.facility_id])
+            if not any(
+                item.schedule_version == facility.current_schedule_version
+                for item in defaults
+            ):
+                raise FacilityConflict(
+                    "Recovery requires a default on the current contract version"
+                )
+
+        return self._lifecycle_decision(
+            facility_id,
+            command,
+            user,
+            action=FacilityAction.START_RECOVERY,
+            decision_type="recovery_started",
+            event_type="FACILITY_RECOVERY_STARTED",
+            precondition=precondition,
+        )
+
+    def record_recovery(
+        self,
+        facility_id: str | uuid.UUID,
+        request: RecordRecoveryRequest,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """Record third-party recovery cash, before or after write-off."""
+
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            FacilityAction.RECORD_RECOVERY.value,
+            {"facility_id": str(normalized_id)},
+            request,
+        )
+        with self.session_factory.begin() as session:
+            replay = self._replay(session, request.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._require_role(user, Role.FINANCIER)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(session, request.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._check_version(facility, request.version)
+            status = FacilityStatus(facility.status)
+            if status == FacilityStatus.IN_RECOVERY:
+                if any(
+                    item.status == PaymentStatus.SUBMITTED.value
+                    for item in self.repository.list_payments(session, facility.facility_id)
+                ):
+                    raise FacilityConflict(
+                        "Pending payment decisions must be resolved before recording recovery"
+                    )
+                outstanding = Decimal(facility.outstanding_amount)
+                if request.amount > outstanding:
+                    raise FacilityConflict("Recovery exceeds the exact outstanding balance")
+                new_outstanding = outstanding - request.amount
+                action = (
+                    FacilityAction.RECORD_FINAL_RECOVERY
+                    if new_outstanding == Decimal("0.00")
+                    else FacilityAction.RECORD_RECOVERY
+                )
+                applied_to = "outstanding"
+            elif status == FacilityStatus.WRITTEN_OFF:
+                writeoff = self.repository.get_writeoff(session, facility.facility_id)
+                if writeoff is None:
+                    raise FacilityConflict("Written-off claim has no write-off record")
+                collected = sum(
+                    (
+                        Decimal(item.amount)
+                        for item in self.repository.list_recoveries_batch(
+                            session, [facility.facility_id]
+                        )
+                        if item.applied_to == "written_off"
+                    ),
+                    Decimal("0.00"),
+                )
+                if request.amount > Decimal(writeoff.amount) - collected:
+                    raise FacilityConflict(
+                        "Recovery exceeds the remaining written-off claim"
+                    )
+                new_outstanding = Decimal(facility.outstanding_amount)
+                action = FacilityAction.RECORD_RECOVERY
+                applied_to = "written_off"
+            else:
+                raise FacilityConflict(
+                    f"{user.role} cannot {FacilityAction.RECORD_RECOVERY.value} "
+                    f"from {facility.status}"
+                )
+            target = self._next(session, facility, action, user)
+            duplicate = session.scalar(
+                select(FacilityRecoveryModel.recovery_id).where(
+                    FacilityRecoveryModel.facility_id == facility.facility_id,
+                    FacilityRecoveryModel.recovery_reference == request.recovery_reference,
+                )
+            )
+            if duplicate is not None:
+                raise FacilityConflict("Recovery reference already exists")
+            now = self._now()
+            recovery = FacilityRecoveryModel(
+                recovery_id=uuid.uuid4(),
+                facility_id=facility.facility_id,
+                amount=request.amount,
+                applied_to=applied_to,
+                source=request.source.value,
+                recovery_reference=request.recovery_reference,
+                evidence_sha256=request.evidence_sha256,
+                recorded_by_user_id=user.user_id,
+                recorded_at=now,
+            )
+            session.add(recovery)
+            facility.outstanding_amount = new_outstanding
+            self._advance(session, facility, target, now, user, action)
+            events: list[tuple[str, dict[str, Any]]] = [
+                (
+                    "FACILITY_RECOVERY_RECORDED",
+                    {
+                        "recovery_id": str(recovery.recovery_id),
+                        "amount": self._money(request.amount),
+                        "source": request.source.value,
+                        "applied_to": applied_to,
+                        "recovery_reference": request.recovery_reference,
+                        "evidence_sha256": request.evidence_sha256,
+                        "outstanding_amount": self._money(new_outstanding),
+                    },
+                )
+            ]
+            if target == FacilityStatus.RECOVERED:
+                events.append(
+                    (
+                        "FACILITY_RECOVERED",
+                        {
+                            "outstanding_amount": "0.00",
+                            "final_recovery_id": str(recovery.recovery_id),
+                        },
+                    )
+                )
+            self._record(
+                session,
+                facility,
+                user,
+                action=action,
+                idempotency_key=request.idempotency_key,
+                expected_version=request.version,
+                semantic=semantic,
+                event_types=events,
+            )
+            return self._serialize(session, facility, user)
+
+    def _lifecycle_decision(
+        self,
+        facility_id: str | uuid.UUID,
+        command: LifecycleDecisionRequest,
+        user: AuthenticatedUser,
+        *,
+        action: FacilityAction,
+        decision_type: str,
+        event_type: str,
+        precondition: Callable[[Session, FinancingFacilityModel], None],
+    ) -> dict[str, Any]:
+        normalized_id = self._normalize_uuid(facility_id)
+        semantic = self._command_semantic(
+            action.value,
+            {"facility_id": str(normalized_id)},
+            command,
+        )
+        with self.session_factory.begin() as session:
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._require_role(user, Role.RISK_MANAGER)
+            facility = self._load_for_command(session, normalized_id, user)
+            replay = self._replay(session, command.idempotency_key, user, semantic)
+            if replay is not None:
+                return replay
+            self._check_version(facility, command.version)
+            target = self._next(session, facility, action, user)
+            precondition(session, facility)
+            now = self._now()
+            decision = FacilityLifecycleDecisionModel(
+                decision_id=uuid.uuid4(),
+                facility_id=facility.facility_id,
+                decision_type=decision_type,
+                schedule_version=facility.current_schedule_version,
+                decided_by_user_id=user.user_id,
+                reason_code=command.reason_code,
+                comment=command.comment,
+                evidence_sha256=command.evidence_sha256,
+                recorded_at=now,
+            )
+            session.add(decision)
+            self._advance(
+                session, facility, target, now, user, action,
+                reason_code=command.reason_code,
+            )
+            self._record(
+                session,
+                facility,
+                user,
+                action=action,
+                idempotency_key=command.idempotency_key,
+                expected_version=command.version,
+                semantic=semantic,
+                event_types=[
+                    (
+                        event_type,
+                        {
+                            "decision_id": str(decision.decision_id),
+                            "schedule_version": decision.schedule_version,
+                            "reason_code": command.reason_code,
+                            "evidence_sha256": command.evidence_sha256,
+                            "outstanding_amount": self._money(
+                                facility.outstanding_amount
+                            ),
                         },
                     )
                 ],
@@ -1098,8 +1496,9 @@ class FacilityService:
                 f"current version {facility.version}"
             )
 
-    @staticmethod
     def _next(
+        self,
+        session: Session,
         facility: FinancingFacilityModel,
         action: FacilityAction,
         user: AuthenticatedUser,
@@ -1109,9 +1508,96 @@ class FacilityService:
                 FacilityStatus(facility.status),
                 action,
                 Role(user.role),
+                facts=self._facts(session, facility),
             )
         except (InvalidFacilityTransition, ValueError) as error:
             raise FacilityConflict(str(error)) from error
+
+    @staticmethod
+    def _facts(
+        session: Session,
+        facility: FinancingFacilityModel,
+    ) -> LifecycleFacts:
+        has_default = (
+            session.scalar(
+                select(FacilityDefaultModel.default_id)
+                .where(FacilityDefaultModel.facility_id == facility.facility_id)
+                .limit(1)
+            )
+            is not None
+        )
+        return LifecycleFacts(
+            has_default_history=has_default,
+            schedule_version=facility.current_schedule_version,
+        )
+
+    def _arrears(
+        self,
+        session: Session,
+        facility: FinancingFacilityModel,
+        now: datetime,
+    ) -> list[InstallmentModel]:
+        return self._arrears_from(
+            self.repository.list_installments(session, facility.facility_id),
+            facility.current_schedule_version,
+            now,
+        )
+
+    @staticmethod
+    def _arrears_from(
+        installments: list[InstallmentModel],
+        schedule_version: int,
+        now: datetime,
+    ) -> list[InstallmentModel]:
+        """Current-schedule installments past due and not fully paid."""
+
+        return [
+            item
+            for item in installments
+            if item.schedule_version == schedule_version
+            and item.status != InstallmentStatus.SUPERSEDED.value
+            and item.due_date < now.date()
+            and Decimal(item.paid_amount) < Decimal(item.amount)
+        ]
+
+    def _contract_version(
+        self,
+        facility: FinancingFacilityModel,
+        *,
+        contract_version: int,
+        origin: str,
+        outstanding_at_start: Decimal,
+        schedule: list[dict[str, Any]],
+        superseded_schedule: list[dict[str, Any]] | None,
+        restructure_id: uuid.UUID | None,
+        user: AuthenticatedUser,
+        now: datetime,
+    ) -> FacilityContractVersionModel:
+        material = {
+            "facility_id": str(facility.facility_id),
+            "contract_version": contract_version,
+            "principal": self._money(facility.principal),
+            "outstanding_at_start": self._money(outstanding_at_start),
+            "currency": facility.currency,
+            "schedule": schedule,
+        }
+        return FacilityContractVersionModel(
+            contract_version_id=uuid.uuid4(),
+            facility_id=facility.facility_id,
+            contract_version=contract_version,
+            origin=origin,
+            principal=facility.principal,
+            outstanding_at_start=outstanding_at_start,
+            currency=facility.currency,
+            schedule=schedule,
+            superseded_schedule=superseded_schedule,
+            restructure_id=restructure_id,
+            terms_sha256=hashlib.sha256(
+                canonical_json(material).encode("utf-8")
+            ).hexdigest(),
+            created_by_user_id=user.user_id,
+            recorded_at=now,
+        )
 
     @staticmethod
     def _load_installment(
@@ -1131,13 +1617,39 @@ class FacilityService:
 
     @staticmethod
     def _advance(
+        session: Session,
         facility: FinancingFacilityModel,
         target: FacilityStatus,
         now: datetime,
+        user: AuthenticatedUser,
+        trigger: FacilityAction,
+        *,
+        reason_code: str | None = None,
     ) -> None:
+        """Apply a command's state change; a status change is always audited.
+
+        PostgreSQL rejects both an illegal status pair and any status change
+        without a matching transition row at the same resulting version.
+        """
+
+        previous = facility.status
         facility.status = target.value
         facility.version += 1
         facility.updated_at = now
+        if previous != target.value:
+            session.add(
+                FacilityStatusTransitionModel(
+                    facility_id=facility.facility_id,
+                    from_status=previous,
+                    to_status=target.value,
+                    trigger_action=trigger.value,
+                    actor_user_id=user.user_id,
+                    actor_role=user.role,
+                    resulting_version=facility.version,
+                    reason_code=reason_code,
+                    recorded_at=now,
+                )
+            )
 
     def _record(
         self,
@@ -1213,51 +1725,61 @@ class FacilityService:
         related: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if related is None:
-            installments = self.repository.list_installments(
-                session,
-                facility.facility_id,
-            )
-            payments = self.repository.list_payments(session, facility.facility_id)
-            delinquencies = self.repository.list_delinquencies(
-                session, facility.facility_id
-            )
-            restructures = self.repository.list_restructures(
-                session, facility.facility_id
-            )
-            default_history = self.repository.list_defaults_batch(
-                session, [facility.facility_id]
-            )
-            writeoff_event = self.repository.get_writeoff(
-                session, facility.facility_id
-            )
-        else:
-            facility_id = facility.facility_id
-            installments = related["installments"].get(facility_id, [])
-            payments = related["payments"].get(facility_id, [])
-            delinquencies = related["delinquencies"].get(facility_id, [])
-            restructures = related["restructures"].get(facility_id, [])
-            default_history = related["defaults"].get(facility_id, [])
-            writeoff_event = related["writeoffs"].get(facility_id)
+            related = self._load_related_batch(session, [facility])
+        facility_id = facility.facility_id
+        installments = related["installments"].get(facility_id, [])
+        payments = related["payments"].get(facility_id, [])
+        delinquencies = related["delinquencies"].get(facility_id, [])
+        restructures = related["restructures"].get(facility_id, [])
+        default_history = related["defaults"].get(facility_id, [])
+        writeoff_event = related["writeoffs"].get(facility_id)
+        recoveries = related["recoveries"].get(facility_id, [])
+        contract_versions = related["contract_versions"].get(facility_id, [])
+        transitions = related["transitions"].get(facility_id, [])
+        decisions = related["decisions"].get(facility_id, [])
         default_event = default_history[0] if default_history else None
-        recovered = sum(
+        repaid_cash = sum(
             (Decimal(item.amount) for item in payments if item.status == PaymentStatus.CONFIRMED.value),
             Decimal("0.00"),
         )
+        recovery_cash = sum(
+            (Decimal(item.amount) for item in recoveries if item.applied_to == "outstanding"),
+            Decimal("0.00"),
+        )
+        post_writeoff_recovery = sum(
+            (Decimal(item.amount) for item in recoveries if item.applied_to == "written_off"),
+            Decimal("0.00"),
+        )
         written_off = Decimal(writeoff_event.amount) if writeoff_event else Decimal("0.00")
-        if Decimal(facility.principal) != Decimal(facility.outstanding_amount) + recovered + written_off:
+        if (
+            Decimal(facility.principal)
+            != Decimal(facility.outstanding_amount) + repaid_cash + recovery_cash + written_off
+        ):
             raise FacilityConflict("Facility principal conservation failed")
+        now = self._now()
+        arrears = self._arrears_from(installments, facility.current_schedule_version, now)
         return {
             "facility_id": str(facility.facility_id),
             "request_id": str(facility.request_id),
             "principal": self._money(facility.principal),
             "outstanding_amount": self._money(facility.outstanding_amount),
             "outstanding_balance": self._money(facility.outstanding_amount),
-            "recovered_amount": self._money(recovered),
+            "recovered_amount": self._money(repaid_cash),
+            "recovery_collected_amount": self._money(recovery_cash),
+            "post_writeoff_recovery_amount": self._money(post_writeoff_recovery),
             "written_off_amount": self._money(written_off),
             "realized_loss": self._money(written_off),
+            "net_loss": self._money(written_off - post_writeoff_recovery),
+            "arrears_amount": self._money(
+                sum(
+                    (Decimal(item.amount) - Decimal(item.paid_amount) for item in arrears),
+                    Decimal("0.00"),
+                )
+            ),
             "settlement_classification": (
-                ("WRITTEN_OFF" if writeoff_event else "NORMAL_SETTLED")
-                if facility.status == FacilityStatus.CLOSED.value else None
+                settlement_classification(facility.closure_reason)
+                if facility.status == FacilityStatus.CLOSED.value
+                else None
             ),
             "default_history": [self._serialize_default(item) for item in default_history],
             "currency": facility.currency,
@@ -1275,7 +1797,18 @@ class FacilityService:
             "disbursed_at": self._timestamp(facility.disbursed_at),
             "repaid_at": self._timestamp(facility.repaid_at),
             "closed_at": self._timestamp(facility.closed_at),
-            "allowed_actions": self._allowed_actions(facility, payments, user),
+            "allowed_actions": self._allowed_actions(
+                facility,
+                payments,
+                user,
+                arrears=bool(arrears),
+                default_history=default_history,
+                writeoff_remaining=(
+                    written_off - post_writeoff_recovery
+                    if writeoff_event is not None
+                    else Decimal("0.00")
+                ),
+            ),
             "installments": [
                 {
                     "installment_id": str(item.installment_id),
@@ -1346,6 +1879,65 @@ class FacilityService:
                 if writeoff_event is not None
                 else None
             ),
+            "recoveries": [
+                {
+                    "recovery_id": str(item.recovery_id),
+                    "amount": self._money(item.amount),
+                    "applied_to": item.applied_to,
+                    "source": item.source,
+                    "recovery_reference": item.recovery_reference,
+                    "evidence_sha256": item.evidence_sha256,
+                    "recorded_by_user_id": str(item.recorded_by_user_id),
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                }
+                for item in recoveries
+            ],
+            "lifecycle_decisions": [
+                {
+                    "decision_id": str(item.decision_id),
+                    "decision_type": item.decision_type,
+                    "schedule_version": item.schedule_version,
+                    "decided_by_user_id": str(item.decided_by_user_id),
+                    "reason_code": item.reason_code,
+                    "comment": item.comment,
+                    "evidence_sha256": item.evidence_sha256,
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                }
+                for item in decisions
+            ],
+            "contract_versions": [
+                {
+                    "contract_version": item.contract_version,
+                    "origin": item.origin,
+                    "principal": self._money(item.principal),
+                    "outstanding_at_start": (
+                        self._money(item.outstanding_at_start)
+                        if item.outstanding_at_start is not None
+                        else None
+                    ),
+                    "currency": item.currency,
+                    "schedule": item.schedule,
+                    "superseded_schedule": item.superseded_schedule,
+                    "restructure_id": (
+                        str(item.restructure_id) if item.restructure_id else None
+                    ),
+                    "terms_sha256": item.terms_sha256,
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                }
+                for item in contract_versions
+            ],
+            "status_history": [
+                {
+                    "from_status": item.from_status,
+                    "to_status": item.to_status,
+                    "trigger_action": item.trigger_action,
+                    "actor_role": item.actor_role,
+                    "resulting_version": item.resulting_version,
+                    "reason_code": item.reason_code,
+                    "recorded_at": canonical_timestamp(item.recorded_at),
+                }
+                for item in transitions
+            ],
         }
 
     def _load_related_batch(
@@ -1378,6 +1970,18 @@ class FacilityService:
             ),
             "defaults": grouped(defaults),
             "writeoffs": {row.facility_id: row for row in writeoffs},
+            "recoveries": grouped(
+                self.repository.list_recoveries_batch(session, facility_ids)
+            ),
+            "contract_versions": grouped(
+                self.repository.list_contract_versions_batch(session, facility_ids)
+            ),
+            "transitions": grouped(
+                self.repository.list_transitions_batch(session, facility_ids)
+            ),
+            "decisions": grouped(
+                self.repository.list_lifecycle_decisions_batch(session, facility_ids)
+            ),
         }
 
     @staticmethod
@@ -1385,63 +1989,77 @@ class FacilityService:
         facility: FinancingFacilityModel,
         payments: list[PaymentModel],
         user: AuthenticatedUser,
+        *,
+        arrears: bool,
+        default_history: list[FacilityDefaultModel],
+        writeoff_remaining: Decimal,
     ) -> list[str]:
+        """Commands the current role can issue now, given state and preconditions."""
+
         status = FacilityStatus(facility.status)
-        if user.role == Role.FINANCIER.value:
-            if status == FacilityStatus.READY:
-                return [FacilityAction.INITIATE_DISBURSEMENT.value]
-            if status == FacilityStatus.DISBURSED:
-                return [FacilityAction.CONFIRM_DISBURSEMENT.value]
-            if status in {FacilityStatus.ACTIVE, FacilityStatus.RESTRUCTURED}:
-                actions = [FacilityAction.MARK_OVERDUE.value]
-                if any(
-                    item.status == PaymentStatus.SUBMITTED.value
-                    for item in payments
-                ):
-                    actions.extend(
-                        [
-                            FacilityAction.CONFIRM_PAYMENT.value,
-                            FacilityAction.REJECT_PAYMENT.value,
-                        ]
-                    )
-                return actions
-            if status in {FacilityStatus.OVERDUE, FacilityStatus.DEFAULTED} and any(
-                item.status == PaymentStatus.SUBMITTED.value for item in payments
-            ):
-                return [
-                    FacilityAction.CONFIRM_PAYMENT.value,
-                    FacilityAction.REJECT_PAYMENT.value,
-                ]
-        if user.role == Role.SUPPLIER.value and status in {
+        pending = any(item.status == PaymentStatus.SUBMITTED.value for item in payments)
+        payment_states = {
             FacilityStatus.ACTIVE,
             FacilityStatus.OVERDUE,
+            FacilityStatus.IN_DISPOSAL,
             FacilityStatus.RESTRUCTURED,
             FacilityStatus.DEFAULTED,
-        }:
-            return [FacilityAction.SUBMIT_PAYMENT.value]
-        if user.role == Role.RISK_MANAGER.value:
-            if status == FacilityStatus.DEFAULTED:
-                return [] if any(
-                    item.status == PaymentStatus.SUBMITTED.value for item in payments
-                ) else [FacilityAction.RESTRUCTURE.value]
-            if status == FacilityStatus.OVERDUE:
-                return [
-                    FacilityAction.RESTRUCTURE.value,
-                    FacilityAction.DECLARE_DEFAULT.value,
-                ]
-            if status == FacilityStatus.RESTRUCTURED:
-                return [FacilityAction.DECLARE_DEFAULT.value]
-        if user.role == Role.AUDITOR.value:
-            if status == FacilityStatus.DEFAULTED:
-                if any(
-                    item.status == PaymentStatus.SUBMITTED.value
-                    for item in payments
-                ):
-                    return []
-                return [FacilityAction.WRITE_OFF.value]
-            if status in {FacilityStatus.REPAID, FacilityStatus.WRITTEN_OFF}:
-                return [FacilityAction.CLOSE.value]
-        return []
+            FacilityStatus.IN_RECOVERY,
+        }
+        defaulted_on_current = any(
+            item.schedule_version == facility.current_schedule_version
+            for item in default_history
+        )
+        actions: list[FacilityAction] = []
+        if user.role == Role.FINANCIER.value:
+            if status == FacilityStatus.READY:
+                actions.append(FacilityAction.INITIATE_DISBURSEMENT)
+            elif status == FacilityStatus.DISBURSED:
+                actions.append(FacilityAction.CONFIRM_DISBURSEMENT)
+            if status in {FacilityStatus.ACTIVE, FacilityStatus.RESTRUCTURED}:
+                actions.append(FacilityAction.MARK_OVERDUE)
+            if status in payment_states and pending:
+                actions.extend(
+                    [FacilityAction.CONFIRM_PAYMENT, FacilityAction.REJECT_PAYMENT]
+                )
+            if (
+                status == FacilityStatus.IN_RECOVERY
+                and not pending
+                and Decimal(facility.outstanding_amount) > 0
+            ) or (status == FacilityStatus.WRITTEN_OFF and writeoff_remaining > 0):
+                actions.append(FacilityAction.RECORD_RECOVERY)
+        elif user.role == Role.SUPPLIER.value:
+            if status in payment_states:
+                actions.append(FacilityAction.SUBMIT_PAYMENT)
+        elif user.role == Role.RISK_MANAGER.value:
+            if status == FacilityStatus.OVERDUE and arrears:
+                actions.append(FacilityAction.OPEN_DISPOSAL)
+            elif status == FacilityStatus.IN_DISPOSAL:
+                if not arrears:
+                    actions.append(FacilityAction.CLOSE_DISPOSAL)
+                if not pending:
+                    actions.append(FacilityAction.RESTRUCTURE)
+                if not defaulted_on_current:
+                    actions.append(FacilityAction.DECLARE_DEFAULT)
+            elif status == FacilityStatus.DEFAULTED:
+                if not pending:
+                    actions.append(FacilityAction.RESTRUCTURE)
+                if defaulted_on_current:
+                    actions.append(FacilityAction.START_RECOVERY)
+        elif user.role == Role.AUDITOR.value:
+            if (
+                status == FacilityStatus.IN_RECOVERY
+                and not pending
+                and Decimal(facility.outstanding_amount) > 0
+            ):
+                actions.append(FacilityAction.WRITE_OFF)
+            if status in {
+                FacilityStatus.REPAID,
+                FacilityStatus.RECOVERED,
+                FacilityStatus.WRITTEN_OFF,
+            }:
+                actions.append(FacilityAction.CLOSE)
+        return [action.value for action in actions]
 
     @staticmethod
     def _serialize_default(item: FacilityDefaultModel) -> dict[str, Any]:

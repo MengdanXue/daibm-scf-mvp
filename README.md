@@ -139,7 +139,7 @@ Offline research pipeline
 - `POST /api/v1/applications/{id}/decision` — финансовое решение / 融资决策；
 - `POST /api/v1/applications/{id}/control-action` — контроль риск-менеджера / 风险控制；
 - `POST /api/v1/applications/{id}/audit-review` — итоговая проверка аудитора / 审计核验；
-- `GET|POST /api/v1/facilities` и команды `initiate-disbursement`, `confirm-disbursement`, `payments`, `mark-overdue`, `close` — ролевой имитатор жизненного цикла / 按角色授权的融资生命周期模拟；
+- `GET|POST /api/v1/facilities` и команды `initiate-disbursement`, `confirm-disbursement`, `payments`, `mark-overdue`, `open-disposal`, `close-disposal`, `restructure`, `declare-default`, `start-recovery`, `recoveries`, `write-off`, `close` — ролевой имитатор жизненного цикла / 按角色授权的融资生命周期模拟（状态机见 [docs/product/facility-lifecycle.md](docs/product/facility-lifecycle.md)，`GET /api/v1/facilities/state-machine`）；
 - `GET /api/dashboard` — показатели / 演示指标；
 - `POST /api/requests` — новая оценка / 创建并评估申请；
 - `GET /api/requests` — реестр заявок / 申请列表；

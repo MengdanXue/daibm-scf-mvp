@@ -30,6 +30,7 @@ from app.schemas_facility import (
     CreateFacilityRequest,
     DeclareDefaultRequest,
     DecisionPaymentRequest,
+    LifecycleDecisionRequest,
     MarkOverdueRequest,
     RestructureFacilityRequest,
     SubmitPaymentRequest,
@@ -261,9 +262,36 @@ def _defaulted(
         users,
         _activate(service, users, request_id, amounts=amounts),
     )
+    facility = _open_disposal(service, users, facility)
     return service.declare_default(
         facility["facility_id"],
         _declare_default(facility["version"]),
+        users["risk.demo"],
+    )
+
+
+def _lifecycle(version: int, reason: str = "RISK_REVIEW", *, key=None):
+    return LifecycleDecisionRequest(
+        version=version,
+        idempotency_key=key or uuid.uuid4(),
+        reason_code=reason,
+        comment="Governed lifecycle decision",
+        evidence_sha256="c" * 64,
+    )
+
+
+def _open_disposal(service: FacilityService, users, facility: dict) -> dict:
+    return service.open_disposal(
+        facility["facility_id"],
+        _lifecycle(facility["version"], "ARREARS_WORKOUT"),
+        users["risk.demo"],
+    )
+
+
+def _start_recovery(service: FacilityService, users, facility: dict) -> dict:
+    return service.start_recovery(
+        facility["facility_id"],
+        _lifecycle(facility["version"], "LEGAL_RECOVERY"),
         users["risk.demo"],
     )
 
@@ -820,6 +848,7 @@ def test_restructure_preserves_paid_history_and_replaces_exact_outstanding(
         users["financier.demo"],
     )
     facility = _mark_overdue(service, users, facility, installment_index=1)
+    facility = _open_disposal(service, users, facility)
 
     result = service.restructure(
         facility["facility_id"],
@@ -841,6 +870,23 @@ def test_restructure_preserves_paid_history_and_replaces_exact_outstanding(
     assert result["restructures"][0]["old_schedule_version"] == 1
     assert result["restructures"][0]["new_schedule_version"] == 2
     assert result["delinquencies"][0]["days_past_due"] == 45
+    original, replacement = result["contract_versions"]
+    assert (original["contract_version"], original["origin"]) == (1, "origination")
+    assert [row["amount"] for row in original["schedule"]] == ["500.00", "500.00"]
+    assert (replacement["contract_version"], replacement["origin"]) == (2, "restructure")
+    assert replacement["restructure_id"] == result["restructures"][0]["restructure_id"]
+    assert replacement["outstanding_at_start"] == "500.00"
+    assert replacement["superseded_schedule"] == [
+        {
+            "installment_id": old_rows[1]["installment_id"],
+            "sequence": 2,
+            "due_date": old_rows[1]["due_date"],
+            "amount": "500.00",
+            "paid_amount": "0.00",
+            "status_before": "overdue",
+        }
+    ]
+    assert original["terms_sha256"] != replacement["terms_sha256"]
 
 
 def test_database_rejects_unfunded_balance_reduction(facility_context):
@@ -908,10 +954,11 @@ def test_default_restructure_recovery_preserves_episode_and_conserves_cash(facil
         facility["facility_id"], facility["payments"][-1]["payment_id"],
         _decision(facility["version"]), users["financier.demo"],
     )
+    assert facility["status"] == "recovered"
     closed = service.close(
         facility["facility_id"], _command(facility["version"]), users["auditor.demo"],
     )
-    assert closed["settlement_classification"] == "NORMAL_SETTLED"
+    assert closed["settlement_classification"] == "SETTLED_AFTER_DEFAULT"
     assert closed["closure_reason"] == "settled_after_default"
     assert closed["default_history"] == [original]
     assert closed["outstanding_balance"] == "0.00"
@@ -929,6 +976,7 @@ def test_replacement_schedule_can_default_again_and_restructure_again(facility_c
     )
     service.clock = lambda: datetime(2027, 2, 1, tzinfo=timezone.utc)
     facility = _mark_overdue(service, users, facility, installment_index=2)
+    facility = _open_disposal(service, users, facility)
     facility = service.declare_default(
         facility["facility_id"], _declare_default(facility["version"]), users["risk.demo"],
     )
@@ -958,6 +1006,7 @@ def test_replacement_schedule_can_default_again_and_restructure_again(facility_c
 def test_default_recovery_and_close_retain_default_evidence(facility_context):
     service, users, request_id = facility_context
     facility = _mark_overdue(service, users, _activate(service, users, request_id))
+    facility = _open_disposal(service, users, facility)
     facility = service.declare_default(
         facility["facility_id"],
         _declare_default(facility["version"]),
@@ -978,7 +1027,9 @@ def test_default_recovery_and_close_retain_default_evidence(facility_context):
             _decision(facility["version"]),
             users["financier.demo"],
         )
-    assert facility["status"] == "repaid"
+    # A zero balance never erases the default: settlement lands in recovered.
+    assert facility["status"] == "recovered"
+    assert facility["repaid_at"] is None
     assert facility["outstanding_amount"] == "0.00"
     assert facility["default_event"]["default_id"] == default_id
 
@@ -989,6 +1040,7 @@ def test_default_recovery_and_close_retain_default_evidence(facility_context):
     )
     assert closed["status"] == "closed"
     assert closed["closure_reason"] == "settled_after_default"
+    assert closed["settlement_classification"] == "SETTLED_AFTER_DEFAULT"
     assert closed["default_event"]["default_id"] == default_id
 
 
@@ -997,11 +1049,19 @@ def test_writeoff_records_exact_remaining_balance_and_closes_from_history(
 ):
     service, users, request_id = facility_context
     facility = _mark_overdue(service, users, _activate(service, users, request_id))
+    facility = _open_disposal(service, users, facility)
     facility = service.declare_default(
         facility["facility_id"],
         _declare_default(facility["version"]),
         users["risk.demo"],
     )
+    with pytest.raises(FacilityConflict, match="cannot write_off from defaulted"):
+        service.write_off(
+            facility["facility_id"],
+            _write_off(facility["version"]),
+            users["auditor.demo"],
+        )
+    facility = _start_recovery(service, users, facility)
     with pytest.raises(ForbiddenFacility):
         service.write_off(
             facility["facility_id"],
@@ -1038,6 +1098,8 @@ def test_writeoff_records_exact_remaining_balance_and_closes_from_history(
         users["auditor.demo"],
     )
     assert closed["closure_reason"] == "written_off"
+    assert closed["settlement_classification"] == "WRITTEN_OFF"
+    assert closed["repaid_at"] is None
 
 
 def test_lifecycle_conflicts_and_replays_preserve_all_transactional_records(
@@ -1045,6 +1107,7 @@ def test_lifecycle_conflicts_and_replays_preserve_all_transactional_records(
 ):
     service, users, request_id = facility_context
     facility = _mark_overdue(service, users, _activate(service, users, request_id))
+    facility = _open_disposal(service, users, facility)
     facility_uuid = uuid.UUID(facility["facility_id"])
     with service.session_factory() as session:
         before = (
@@ -1131,7 +1194,7 @@ def test_writeoff_rejects_pending_recovery_without_any_transactional_change(
     facility_context,
 ):
     service, users, request_id = facility_context
-    facility = _defaulted(service, users, request_id)
+    facility = _start_recovery(service, users, _defaulted(service, users, request_id))
     facility = service.submit_payment(
         facility["facility_id"],
         _submit(facility, 0, "100.00", "PENDING-BEFORE-WRITEOFF"),
@@ -1170,6 +1233,7 @@ def test_partial_default_recovery_writes_off_exact_remaining_balance(
     )
     assert facility["status"] == "defaulted"
     assert facility["outstanding_amount"] == "600.00"
+    facility = _start_recovery(service, users, facility)
 
     written_off = service.write_off(
         facility["facility_id"],
@@ -1232,53 +1296,100 @@ def test_allowed_actions_role_state_and_pending_payment_matrix(session_factory):
         "risk.demo",
         "auditor.demo",
     )
-    expected_by_status = {
-        "ready_for_disbursement": {
+    default_on_v1 = [FacilityDefaultModel(schedule_version=1)]
+    # (status, arrears, default history, write-off remaining) -> role -> actions
+    cases = (
+        ("ready_for_disbursement", False, [], "0.00", {
             "financier.demo": ["initiate_disbursement"],
-        },
-        "disbursed": {
+        }),
+        ("disbursed", False, [], "0.00", {
             "financier.demo": ["confirm_disbursement"],
-        },
-        "active": {
+        }),
+        ("active", False, [], "0.00", {
             "supplier.demo": ["submit_payment"],
             "financier.demo": ["mark_overdue"],
-        },
-        "overdue": {
+        }),
+        ("overdue", True, [], "0.00", {
+            "supplier.demo": ["submit_payment"],
+            "risk.demo": ["open_disposal"],
+        }),
+        ("in_disposal", True, [], "0.00", {
             "supplier.demo": ["submit_payment"],
             "risk.demo": ["restructure", "declare_default"],
-        },
-        "restructured": {
+        }),
+        ("in_disposal", False, [], "0.00", {
+            "supplier.demo": ["submit_payment"],
+            "risk.demo": ["close_disposal", "restructure", "declare_default"],
+        }),
+        ("restructured", False, [], "0.00", {
             "supplier.demo": ["submit_payment"],
             "financier.demo": ["mark_overdue"],
-            "risk.demo": ["declare_default"],
-        },
-        "defaulted": {
+        }),
+        ("defaulted", True, default_on_v1, "0.00", {
             "supplier.demo": ["submit_payment"],
-            "risk.demo": ["restructure"],
+            "risk.demo": ["restructure", "start_recovery"],
+        }),
+        ("in_recovery", True, default_on_v1, "0.00", {
+            "supplier.demo": ["submit_payment"],
+            "financier.demo": ["record_recovery"],
             "auditor.demo": ["write_off"],
-        },
-        "repaid": {"auditor.demo": ["close"]},
-        "written_off": {"auditor.demo": ["close"]},
-        "closed": {},
-    }
-    for status, role_expectations in expected_by_status.items():
-        facility = FinancingFacilityModel(status=status)
+        }),
+        ("repaid", False, [], "0.00", {"auditor.demo": ["close"]}),
+        ("recovered", False, default_on_v1, "0.00", {"auditor.demo": ["close"]}),
+        ("written_off", False, default_on_v1, "250.00", {
+            "financier.demo": ["record_recovery"],
+            "auditor.demo": ["close"],
+        }),
+        ("written_off", False, default_on_v1, "0.00", {"auditor.demo": ["close"]}),
+        ("closed", False, [], "0.00", {}),
+    )
+    for status, arrears, defaults, remaining, role_expectations in cases:
+        facility = FinancingFacilityModel(
+            status=status,
+            current_schedule_version=1,
+            outstanding_amount=Decimal("0.00" if status in {
+                "repaid", "recovered", "written_off", "closed"
+            } else "100.00"),
+        )
         for role in roles:
             assert FacilityService._allowed_actions(
-                facility, [], users[role]
-            ) == role_expectations.get(role, [])
+                facility,
+                [],
+                users[role],
+                arrears=arrears,
+                default_history=defaults,
+                writeoff_remaining=Decimal(remaining),
+            ) == role_expectations.get(role, []), (status, arrears, role)
 
-    defaulted = FinancingFacilityModel(status="defaulted")
     pending = [PaymentModel(status="submitted")]
+    for status in ("defaulted", "in_recovery"):
+        facility = FinancingFacilityModel(
+            status=status,
+            current_schedule_version=1,
+            outstanding_amount=Decimal("100.00"),
+        )
+        kwargs = {
+            "arrears": True,
+            "default_history": default_on_v1,
+            "writeoff_remaining": Decimal("0.00"),
+        }
+        assert FacilityService._allowed_actions(
+            facility, pending, users["supplier.demo"], **kwargs
+        ) == ["submit_payment"]
+        assert FacilityService._allowed_actions(
+            facility, pending, users["financier.demo"], **kwargs
+        ) == ["confirm_payment", "reject_payment"]
+        assert FacilityService._allowed_actions(
+            facility, pending, users["auditor.demo"], **kwargs
+        ) == []
     assert FacilityService._allowed_actions(
-        defaulted, pending, users["supplier.demo"]
-    ) == ["submit_payment"]
-    assert FacilityService._allowed_actions(
-        defaulted, pending, users["financier.demo"]
-    ) == ["confirm_payment", "reject_payment"]
-    assert FacilityService._allowed_actions(
-        defaulted, pending, users["auditor.demo"]
-    ) == []
+        FinancingFacilityModel(status="defaulted", current_schedule_version=1),
+        pending,
+        users["risk.demo"],
+        arrears=True,
+        default_history=default_on_v1,
+        writeoff_remaining=Decimal("0.00"),
+    ) == ["start_recovery"]
 
 
 def test_each_new_lifecycle_command_rejects_a_stale_version(facility_context):
@@ -1296,26 +1407,48 @@ def test_each_new_lifecycle_command_rejects_a_stale_version(facility_context):
             _declare_default(overdue["version"] - 1),
             users["risk.demo"],
         )
+    with pytest.raises(FacilityConflict, match="Expected version"):
+        service.open_disposal(
+            overdue["facility_id"],
+            _lifecycle(overdue["version"] - 1),
+            users["risk.demo"],
+        )
+    disposal = _open_disposal(service, users, overdue)
+    with pytest.raises(FacilityConflict, match="Expected version"):
+        service.close_disposal(
+            disposal["facility_id"],
+            _lifecycle(disposal["version"] - 1),
+            users["risk.demo"],
+        )
     defaulted = service.declare_default(
-        overdue["facility_id"],
-        _declare_default(overdue["version"]),
+        disposal["facility_id"],
+        _declare_default(disposal["version"]),
         users["risk.demo"],
     )
-    before = _persistence_snapshot(service, defaulted["facility_id"])
+    with pytest.raises(FacilityConflict, match="Expected version"):
+        service.start_recovery(
+            defaulted["facility_id"],
+            _lifecycle(defaulted["version"] - 1),
+            users["risk.demo"],
+        )
+    recovery = _start_recovery(service, users, defaulted)
+    before = _persistence_snapshot(service, recovery["facility_id"])
     with pytest.raises(FacilityConflict, match="Expected version"):
         service.write_off(
-            defaulted["facility_id"],
-            _write_off(defaulted["version"] - 1),
+            recovery["facility_id"],
+            _write_off(recovery["version"] - 1),
             users["auditor.demo"],
         )
-    assert _persistence_snapshot(service, defaulted["facility_id"]) == before
+    assert _persistence_snapshot(service, recovery["facility_id"]) == before
 
 
 def test_restructure_semantic_replay_does_not_duplicate_any_record(
     facility_context,
 ):
     service, users, request_id = facility_context
-    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+    overdue = _open_disposal(
+        service, users, _mark_overdue(service, users, _activate(service, users, request_id))
+    )
     key = uuid.uuid4()
     command = _restructure(overdue["version"], total="1000.00", key=key)
     first = service.restructure(overdue["facility_id"], command, users["risk.demo"])
@@ -1333,7 +1466,9 @@ def test_concurrent_default_and_writeoff_return_one_conflict_not_integrity_error
     facility_context,
 ):
     service, users, request_id = facility_context
-    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+    overdue = _open_disposal(
+        service, users, _mark_overdue(service, users, _activate(service, users, request_id))
+    )
 
     def race(commands, operation):
         barrier = threading.Barrier(2)
@@ -1355,7 +1490,9 @@ def test_concurrent_default_and_writeoff_return_one_conflict_not_integrity_error
         ),
     )
     assert sorted(row[0] for row in default_results) == ["conflict", "ok"]
-    defaulted = next(row[1] for row in default_results if row[0] == "ok")
+    defaulted = _start_recovery(
+        service, users, next(row[1] for row in default_results if row[0] == "ok")
+    )
 
     writeoff_results = race(
         [_write_off(defaulted["version"]), _write_off(defaulted["version"])],
@@ -1382,11 +1519,15 @@ def test_flushed_writeoff_failure_rolls_back_aggregate_and_every_child_record(
     facility_context,
 ):
     service, users, request_id = facility_context
-    defaulted = _defaulted(service, users, request_id)
+    defaulted = _start_recovery(service, users, _defaulted(service, users, request_id))
     before = _persistence_snapshot(service, defaulted["facility_id"])
 
     class FlushThenFailRepository(FacilityRepository):
         def list_installments(self, session, facility_id):
+            session.flush()
+            raise RuntimeError("injected failure after flush")
+
+        def list_installments_batch(self, session, facility_ids):
             session.flush()
             raise RuntimeError("injected failure after flush")
 
@@ -1442,7 +1583,8 @@ def test_list_paginates_in_sql_and_uses_bounded_real_query_count(
     ]
     assert len(wide_page) == 6
     assert narrow_query_count == wide_query_count
-    assert wide_query_count <= 7
+    # One page query plus ten batched child reads, independent of page size.
+    assert wide_query_count <= 11
 
 
 def test_list_uses_facility_id_as_stable_tiebreaker_across_pages(
@@ -1508,7 +1650,9 @@ def test_replay_holds_aggregate_lock_until_all_child_reads_finish(
     facility_context,
 ):
     service, users, request_id = facility_context
-    overdue = _mark_overdue(service, users, _activate(service, users, request_id))
+    overdue = _open_disposal(
+        service, users, _mark_overdue(service, users, _activate(service, users, request_id))
+    )
     key = uuid.uuid4()
     command = _restructure(overdue["version"], total="1000.00", key=key)
     first = service.restructure(
@@ -1518,11 +1662,11 @@ def test_replay_holds_aggregate_lock_until_all_child_reads_finish(
     allow_child_reads = threading.Event()
 
     class PausingReplayRepository(FacilityRepository):
-        def list_installments(self, session, facility_id):
+        def list_installments_batch(self, session, facility_ids):
             child_reads_started.set()
             if not allow_child_reads.wait(timeout=5):
                 raise TimeoutError("replay child reads were not released")
-            return super().list_installments(session, facility_id)
+            return super().list_installments_batch(session, facility_ids)
 
     replay_service = FacilityService(
         service.session_factory,

@@ -118,11 +118,16 @@ def test_payment_actions_preserve_state_until_final_confirmation():
 def test_restructure_default_recovery_writeoff_and_close_transitions():
     assert next_facility_status(
         FacilityStatus.OVERDUE,
+        FacilityAction.OPEN_DISPOSAL,
+        Role.RISK_MANAGER,
+    ) is FacilityStatus.IN_DISPOSAL
+    assert next_facility_status(
+        FacilityStatus.IN_DISPOSAL,
         FacilityAction.RESTRUCTURE,
         Role.RISK_MANAGER,
     ) is FacilityStatus.RESTRUCTURED
     assert next_facility_status(
-        FacilityStatus.RESTRUCTURED,
+        FacilityStatus.IN_DISPOSAL,
         FacilityAction.DECLARE_DEFAULT,
         Role.RISK_MANAGER,
     ) is FacilityStatus.DEFAULTED
@@ -135,9 +140,14 @@ def test_restructure_default_recovery_writeoff_and_close_transitions():
         FacilityStatus.DEFAULTED,
         FacilityAction.CONFIRM_FINAL_PAYMENT,
         Role.FINANCIER,
-    ) is FacilityStatus.REPAID
+    ) is FacilityStatus.RECOVERED
     assert next_facility_status(
         FacilityStatus.DEFAULTED,
+        FacilityAction.START_RECOVERY,
+        Role.RISK_MANAGER,
+    ) is FacilityStatus.IN_RECOVERY
+    assert next_facility_status(
+        FacilityStatus.IN_RECOVERY,
         FacilityAction.WRITE_OFF,
         Role.AUDITOR,
     ) is FacilityStatus.WRITTEN_OFF
