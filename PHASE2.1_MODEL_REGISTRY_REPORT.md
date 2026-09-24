@@ -118,4 +118,4 @@ Docker 验证（本地 8010）的步骤：
 
 ## 7. Commit
 
-- 实现提交：见 PR #12 更新
+- 实现提交：`7f9612d`（`claude/funny-ptolemy-32pkcy`，随 PR #12 一并合并）
