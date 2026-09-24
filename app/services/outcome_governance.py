@@ -18,13 +18,13 @@ from app.models_model_governance import (
     TrainingDatasetSnapshotItemModel,
     TrainingDatasetSnapshotModel,
 )
+from app.models_facility import FinancingFacilityModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.repositories.outcomes import OutcomeRepository, is_effective, review_status_expression
 from app.services.outcome_eligibility import OutcomeEligibilityService
 from app.services.outcomes import ForbiddenOutcome, OutcomeNotFound, OutcomeService
+from app.services.permissions import PermissionService
 
-REVIEW_ROLES = {"auditor", "risk_manager"}
-SNAPSHOT_ROLES = {"auditor", "risk_manager", "financier"}
 STATUSES = ("CREATED", "REVIEWING", "ELIGIBLE", "TRAINING_USED", "REJECTED")
 
 
@@ -46,24 +46,29 @@ class OutcomeGovernanceService:
     def overview(self, user: AuthenticatedUser) -> dict[str, Any]:
         """Headline counts over effective outcomes, plus corrections and snapshots."""
 
-        self._require(user, REVIEW_ROLES)
+        self._require(user, "outcome:read")
         with self.session_factory() as session:
+            visible = PermissionService.visible_facility_ids(session, user)
             by_status = dict.fromkeys(STATUSES, 0)
             for status, count in session.execute(
                 select(review_status_expression().label("status"), func.count())
                 .select_from(ActualOutcomeModel)
-                .where(is_effective())
+                .where(is_effective(), ActualOutcomeModel.facility_id.in_(visible))
                 .group_by("status")
             ):
                 by_status[status or "CREATED"] = by_status.get(status or "CREATED", 0) + count
-            total = session.scalar(select(func.count()).select_from(ActualOutcomeModel)) or 0
+            mine = ActualOutcomeModel.facility_id.in_(visible)
+            total = session.scalar(select(func.count()).select_from(ActualOutcomeModel).where(mine)) or 0
             superseded = session.scalar(
                 select(func.count())
                 .select_from(ActualOutcomeModel)
-                .where(ActualOutcomeModel.supersedes_outcome_id.is_not(None))
+                .where(ActualOutcomeModel.supersedes_outcome_id.is_not(None), mine)
             ) or 0
             corrections = session.scalar(
-                select(func.count()).select_from(OutcomeCorrectionModel)
+                select(func.count())
+                .select_from(OutcomeCorrectionModel)
+                .join(ActualOutcomeModel, ActualOutcomeModel.outcome_id == OutcomeCorrectionModel.outcome_id)
+                .where(mine)
             ) or 0
             snapshots = session.scalar(
                 select(func.count()).select_from(TrainingDatasetSnapshotModel)
@@ -87,14 +92,18 @@ class OutcomeGovernanceService:
     def review_queue(
         self, user: AuthenticatedUser, *, status: str = "REVIEWING", limit: int = 100
     ) -> list[dict[str, Any]]:
-        self._require(user, REVIEW_ROLES)
+        self._require(user, "outcome:read")
         if status not in STATUSES:
             raise ValueError("unknown review status")
         with self.session_factory() as session:
             latest = review_status_expression()
             rows = session.scalars(
                 select(ActualOutcomeModel)
-                .where(is_effective(), latest == status)
+                .where(
+                    is_effective(),
+                    latest == status,
+                    ActualOutcomeModel.facility_id.in_(PermissionService.visible_facility_ids(session, user)),
+                )
                 .order_by(ActualOutcomeModel.recorded_at.desc(), ActualOutcomeModel.outcome_id)
                 .limit(limit)
             ).all()
@@ -117,11 +126,13 @@ class OutcomeGovernanceService:
             ]
 
     def review_history(self, outcome_id: str | uuid.UUID, user: AuthenticatedUser) -> dict[str, Any]:
-        self._require(user, REVIEW_ROLES)
+        self._require(user, "outcome:read")
         normalized = _uuid(outcome_id)
         with self.session_factory() as session:
-            if self.repository.get_outcome(session, normalized) is None:
+            outcome = self.repository.get_outcome(session, normalized)
+            if outcome is None:
                 raise OutcomeNotFound(str(outcome_id))
+            OutcomeService._require_visible_outcome(session, user, outcome)
             status, reason = self.repository.review_status(session, normalized)
             return {
                 "outcome_id": str(normalized),
@@ -133,16 +144,22 @@ class OutcomeGovernanceService:
     def eligibility_preview(self, user: AuthenticatedUser, *, scope: str) -> dict[str, Any]:
         """What training would read right now, and why everything else is left out."""
 
-        self._require(user, REVIEW_ROLES)
+        self._require(user, "outcome:read")
         with self.session_factory() as session:
             assessment = self.eligibility.assess(session, scope=scope)
+            visible = set(session.scalars(PermissionService.visible_facility_ids(session, user)))
             return {
                 "scope": scope,
                 "dataset_hash": assessment.dataset_hash(),
                 "included_count": len(assessment.included),
                 "excluded_count": len(assessment.excluded),
                 "exclusion_summary": assessment.exclusion_summary(),
-                "outcomes": [self.eligibility.serialize_verdict(item) for item in assessment.verdicts],
+                # Counts and hash describe the whole pool; rows only the caller's tenants.
+                "outcomes": [
+                    self.eligibility.serialize_verdict(item)
+                    for item in assessment.verdicts
+                    if item.outcome.facility_id in visible
+                ],
             }
 
     # --- Dataset snapshots ---------------------------------------------------
@@ -150,7 +167,7 @@ class OutcomeGovernanceService:
     def list_snapshots(
         self, user: AuthenticatedUser, *, scope: str | None = None
     ) -> list[dict[str, Any]]:
-        self._require(user, SNAPSHOT_ROLES)
+        self._require(user, "snapshot:read")
         with self.session_factory() as session:
             statement = select(TrainingDatasetSnapshotModel).order_by(
                 TrainingDatasetSnapshotModel.created_at.desc(),
@@ -168,7 +185,7 @@ class OutcomeGovernanceService:
     def get_snapshot(
         self, snapshot_id: str | uuid.UUID, user: AuthenticatedUser
     ) -> dict[str, Any]:
-        self._require(user, SNAPSHOT_ROLES)
+        self._require(user, "snapshot:read")
         normalized = _uuid(snapshot_id)
         with self.session_factory() as session:
             snapshot = session.get(TrainingDatasetSnapshotModel, normalized)
@@ -180,7 +197,10 @@ class OutcomeGovernanceService:
                     ActualOutcomeModel,
                     ActualOutcomeModel.outcome_id == TrainingDatasetSnapshotItemModel.outcome_id,
                 )
-                .where(TrainingDatasetSnapshotItemModel.snapshot_id == normalized)
+                .where(
+                    TrainingDatasetSnapshotItemModel.snapshot_id == normalized,
+                    ActualOutcomeModel.facility_id.in_(PermissionService.visible_facility_ids(session, user)),
+                )
                 .order_by(
                     TrainingDatasetSnapshotItemModel.included.desc(),
                     ActualOutcomeModel.observed_at,
@@ -215,11 +235,16 @@ class OutcomeGovernanceService:
     ) -> dict[str, Any]:
         """Risk decision -> model version -> dataset snapshot -> training outcomes."""
 
-        self._require(user, SNAPSHOT_ROLES)
+        self._require(user, "snapshot:read")
         normalized = _uuid(decision_record_id)
         with self.session_factory() as session:
             record = session.get(RiskDecisionRecordModel, normalized)
             if record is None:
+                raise OutcomeNotFound(str(decision_record_id))
+            facility = session.scalar(
+                select(FinancingFacilityModel).where(FinancingFacilityModel.request_id == record.request_id)
+            )
+            if facility is not None and not PermissionService.can_view_facility(session, user, facility):
                 raise OutcomeNotFound(str(decision_record_id))
             version = (
                 session.get(RiskModelVersionModel, record.model_version_id)
@@ -236,9 +261,16 @@ class OutcomeGovernanceService:
                     str(outcome_id)
                     for outcome_id in session.scalars(
                         select(TrainingDatasetSnapshotItemModel.outcome_id)
+                        .join(
+                            ActualOutcomeModel,
+                            ActualOutcomeModel.outcome_id == TrainingDatasetSnapshotItemModel.outcome_id,
+                        )
                         .where(
                             TrainingDatasetSnapshotItemModel.snapshot_id == snapshot.snapshot_id,
                             TrainingDatasetSnapshotItemModel.included.is_(True),
+                            ActualOutcomeModel.facility_id.in_(
+                                PermissionService.visible_facility_ids(session, user)
+                            ),
                         )
                         .order_by(TrainingDatasetSnapshotItemModel.outcome_id)
                     )
@@ -328,8 +360,8 @@ class OutcomeGovernanceService:
         return usage
 
     @staticmethod
-    def _require(user: AuthenticatedUser, roles: set[str]) -> None:
-        if user.role not in roles:
+    def _require(user: AuthenticatedUser, action: str) -> None:
+        if not PermissionService.allowed(user, action):
             raise ForbiddenOutcome("Current role cannot view outcome governance")
 
 

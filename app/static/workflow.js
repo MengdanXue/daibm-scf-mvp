@@ -8,7 +8,7 @@
       researchBoundary: "Демонстрационный прототип на синтетических данных · PostgreSQL · проверяемый журнал событий",
       demoAccess: "Демонстрационный доступ", chooseRole: "Выберите роль", demoRoleGuide: "Порядок демонстрационных ролей", demoRoleSelected: "Выбрана роль: {role}. Проверьте данные и нажмите кнопку входа.", orCredentials: "или введите учётные данные",
       username: "Имя пользователя", password: "Пароль", signIn: "Войти в систему", logout: "Выйти",
-      commonPassword: "Общий пароль демо-ролей:", navWorkflow: "Рабочий контур",
+      commonPassword: "Пароль демо-ролей задаётся при развёртывании (DAIBM_DEMO_PASSWORD).", navWorkflow: "Рабочий контур",
       workflowEyebrow: "РОЛЕВОЙ БИЗНЕС-ПРОЦЕСС", workflowTitle: "Финансирование цепи поставок", refresh: "Обновить данные",
       currentStation: "Текущая рабочая станция", allApplications: "Доступные заявки", myTasks: "Мои задачи",
       activeStatus: "Активных статусов", database: "Хранилище", newApplication: "Новая заявка на финансирование",
@@ -38,7 +38,7 @@
       confirmTrade: "Подтвердить сделку", returnTrade: "Вернуть поставщику", assessRisk: "Выполнить оценку риска",
       approve: "Одобрить", manualReview: "Ручная проверка", reject: "Отклонить", applyControl: "Зафиксировать контроль",
       auditReview: "Завершить аудит", created: "Черновик сохранён", updated: "Изменения сохранены", actionComplete: "Действие выполнено",
-      sessionExpired: "Сессия завершена. Войдите снова.", loginFailed: "Не удалось войти. Проверьте имя пользователя и пароль.",
+      sessionExpired: "Сессия завершена. Войдите снова.", loginFailed: "Не удалось войти. Проверьте имя пользователя и пароль.", accountLocked: "Учётная запись временно заблокирована после нескольких неудачных попыток входа. Повторите позже.", account_locked: "Учётная запись временно заблокирована.",
       requestFailed: "Операция не выполнена", loading: "Загрузка…", signedIn: "Вход выполнен", taskReady: "требует действия",
       timelineCreate: "Создание заявки", days: "дн.", cancelEdit: "Новый черновик",
       draft: "Черновик", submitted: "Подана", trade_returned: "Возвращена", trade_confirmed: "Сделка подтверждена",
@@ -90,7 +90,7 @@
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
       researchBoundary: "基于合成数据的演示原型 · PostgreSQL · 可验证事件日志", demoAccess: "演示访问", chooseRole: "选择角色", demoRoleGuide: "演示角色顺序", demoRoleSelected: "已选择角色：{role}。请检查账户信息后点击登录。",
       orCredentials: "或输入账户信息", username: "用户名", password: "密码", signIn: "登录系统", logout: "退出",
-      commonPassword: "演示角色通用密码：", navWorkflow: "业务工作台", workflowEyebrow: "基于角色的业务流程",
+      commonPassword: "演示角色密码由部署配置 DAIBM_DEMO_PASSWORD 设定。", navWorkflow: "业务工作台", workflowEyebrow: "基于角色的业务流程",
       workflowTitle: "供应链融资", refresh: "刷新数据", currentStation: "当前工作站", allApplications: "可查看申请",
       myTasks: "我的待办", activeStatus: "活跃状态", database: "数据存储", newApplication: "新建融资申请",
       newApplicationHint: "填写交易信息。申请将先保存为草稿，确认后可提交。", coreEnterpriseCode: "核心企业代码",
@@ -113,7 +113,7 @@
       edit: "修改草稿", submit: "提交申请", confirmTrade: "确认交易", returnTrade: "退回供应商", assessRisk: "执行风险评估",
       approve: "批准", manualReview: "人工复核", reject: "拒绝", applyControl: "记录控制措施", auditReview: "完成审计",
       created: "草稿已保存", updated: "修改已保存", actionComplete: "操作已完成", sessionExpired: "会话已结束，请重新登录。",
-      loginFailed: "登录失败，请检查用户名和密码。", requestFailed: "操作失败", loading: "加载中……", signedIn: "登录成功",
+      loginFailed: "登录失败，请检查用户名和密码。", accountLocked: "连续登录失败次数过多，账号已被临时锁定，请稍后再试。", account_locked: "账号已被临时锁定。", requestFailed: "操作失败", loading: "加载中……", signedIn: "登录成功",
       taskReady: "需要处理", timelineCreate: "创建申请", days: "天", cancelEdit: "新建草稿",
       draft: "草稿", submitted: "已提交", trade_returned: "已退回", trade_confirmed: "交易已确认", risk_assessed: "风险已评估",
       approved: "已批准", manual_review: "人工复核", rejected: "已拒绝", controlled: "已设置控制", audited: "审计已完成",
@@ -301,7 +301,7 @@
     const username = button.dataset.demoUsername;
     const role = ROLE_META[button.dataset.demoRole];
     document.querySelector('#loginForm input[name="username"]').value = username;
-    document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
+    document.querySelector('#loginForm input[name="password"]').focus();
     const announcement = document.querySelector("#demoRoleAnnouncement");
     if (announcement) {
       announcement.textContent = tr("demoRoleSelected").replace("{role}", tr(role?.key || button.dataset.demoRole));
@@ -319,7 +319,7 @@
       document.body.classList.add("authenticated");
       await enterWorkbench();
       notify(tr("signedIn"));
-    } catch (_) {
+    } catch (loginError) {
       if (state.user) {
         try { await wfApi("/api/v1/auth/logout", { method: "POST" }); }
         catch (_) { /* the local rollback still applies */ }
@@ -333,7 +333,7 @@
         document.body.classList.remove("authenticated");
         renderAccounts();
       }
-      errorElement.textContent = tr("loginFailed");
+      errorElement.textContent = loginError?.status === 423 ? tr("accountLocked") : tr("loginFailed");
     } finally {
       setBusy(false);
     }
@@ -358,7 +358,6 @@
     delete document.body.dataset.workflowRole;
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
-    document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
     renderAccounts();
   }
 
@@ -379,7 +378,8 @@
       alerts: ["admin", "risk_manager", "auditor"].includes(role),
       tasks: ["admin", "risk_manager", "auditor"].includes(role),
       rules: ["admin", "risk_manager", "auditor"].includes(role),
-      riskdetail: true
+      riskdetail: true,
+      admin: role === "admin" || role === "auditor"
     };
     document.querySelectorAll("[data-view-button]").forEach((button) => {
       button.hidden = !rules[button.dataset.viewButton];

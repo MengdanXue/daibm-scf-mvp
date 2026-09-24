@@ -2,6 +2,12 @@ from collections.abc import Iterator
 import os
 import uuid
 
+# The application has no built-in password; tests configure the demo one.
+os.environ.setdefault("DAIBM_DEMO_PASSWORD", "Demo123!")
+# ``app.main`` builds its module-level app at import; the engine is lazy and
+# tests pass their own database, so a placeholder secret is enough here.
+os.environ.setdefault("POSTGRES_PASSWORD", "unused-test-placeholder")
+
 import pytest
 from alembic import command
 from alembic.config import Config

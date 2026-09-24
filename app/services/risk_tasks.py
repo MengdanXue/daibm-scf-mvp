@@ -22,12 +22,13 @@ from app.models_risk_ops import (
     RiskTaskModel,
 )
 from app.repositories.ledger import LedgerRepository
+from app.services.permissions import PermissionService
 from app.services.risk_operations import (
     RiskOpsConflict,
     RiskOpsForbidden,
     RiskOpsNotFound,
     facility_organization,
-    org_scope,
+    org_condition,
     parse_uuid,
     require_role,
     ts,
@@ -54,7 +55,7 @@ class RiskTaskService:
     # --- Queries -----------------------------------------------------------
 
     def assignees(self, user: AuthenticatedUser) -> list[dict[str, Any]]:
-        require_role(user, TASK_ROLES, "Current role cannot use the task center")
+        require_role(user, "task:use", "Current role cannot use the task center")
         with self.session_factory() as session:
             return [
                 {
@@ -73,9 +74,9 @@ class RiskTaskService:
     def list_tasks(
         self, user: AuthenticatedUser, *, view: str = "mine", limit: int = 200
     ) -> list[dict[str, Any]]:
-        require_role(user, TASK_ROLES, "Current role cannot use the task center")
+        require_role(user, "task:use", "Current role cannot use the task center")
         with self.session_factory() as session:
-            statement = self._visible(user)
+            statement = self._visible(session, user)
             if view == "mine":
                 statement = statement.where(
                     RiskTaskModel.assignee_user_id == user.user_id,
@@ -100,14 +101,14 @@ class RiskTaskService:
             return [self._serialize(item, names, now) for item in tasks]
 
     def get_task(self, task_id: str, user: AuthenticatedUser) -> dict[str, Any]:
-        require_role(user, TASK_ROLES, "Current role cannot use the task center")
+        require_role(user, "task:use", "Current role cannot use the task center")
         with self.session_factory() as session:
             return self._detail(session, self._load(session, task_id, user))
 
     def attachment(
         self, task_id: str, attachment_id: str, user: AuthenticatedUser
     ) -> tuple[str, str, bytes]:
-        require_role(user, TASK_ROLES, "Current role cannot use the task center")
+        require_role(user, "task:use", "Current role cannot use the task center")
         with self.session_factory() as session:
             task = self._load(session, task_id, user)
             row = session.get(RiskTaskAttachmentModel, parse_uuid(attachment_id))
@@ -129,7 +130,7 @@ class RiskTaskService:
         alert_id: str | None = None,
         facility_id: str | None = None,
     ) -> dict[str, Any]:
-        require_role(user, TASK_ROLES, "Current role cannot create tasks")
+        require_role(user, "task:use", "Current role cannot create tasks")
         now = self.clock()
         with self.session_factory.begin() as session:
             assignee = self._assignee(session, assignee_user_id)
@@ -138,8 +139,9 @@ class RiskTaskService:
             organization_id = None
             if alert_id:
                 alert = session.get(RiskAlertModel, parse_uuid(alert_id))
-                scope = org_scope(user)
-                if alert is None or (scope is not None and alert.organization_id != scope):
+                if alert is None or not PermissionService.scope(session, user).allows(
+                    alert.organization_id
+                ):
                     raise RiskOpsNotFound(str(alert_id))
                 facility_uuid = facility_uuid or alert.facility_id
                 organization_id = alert.organization_id
@@ -147,8 +149,7 @@ class RiskTaskService:
                 if session.get(FinancingFacilityModel, facility_uuid) is None:
                     raise RiskOpsNotFound(str(facility_uuid))
                 organization_id = organization_id or facility_organization(session, facility_uuid)
-                scope = org_scope(user)
-                if scope is not None and organization_id != scope:
+                if not PermissionService.scope(session, user).allows(organization_id):
                     raise RiskOpsNotFound(str(facility_uuid))
             task = RiskTaskModel(
                 task_id=uuid.uuid4(),
@@ -288,7 +289,7 @@ class RiskTaskService:
         comment: str | None,
         apply: Callable[[Session, RiskTaskModel], tuple[str, dict[str, Any]]],
     ) -> dict[str, Any]:
-        require_role(user, TASK_ROLES, "Current role cannot use the task center")
+        require_role(user, "task:use", "Current role cannot use the task center")
         with self.session_factory.begin() as session:
             task = self._load(session, task_id, user, for_update=True)
             if task.version != version:
@@ -380,26 +381,21 @@ class RiskTaskService:
             raise RiskOpsForbidden("Only task participants can add notes")
 
     @staticmethod
-    def _visible(user: AuthenticatedUser):
-        statement = select(RiskTaskModel)
-        if user.role == ADMIN:
-            return statement
-        conditions = [
-            RiskTaskModel.assignee_user_id == user.user_id,
-            RiskTaskModel.created_by_user_id == user.user_id,
-        ]
-        scope = org_scope(user)
-        if scope is not None:
-            conditions.append(RiskTaskModel.organization_id == scope)
-        else:
-            # Auditors review work across organizations.
-            return statement
-        return statement.where(or_(*conditions))
+    def _visible(session: Session, user: AuthenticatedUser):
+        """Own tasks plus every task of an organization in the caller's scope."""
+
+        return select(RiskTaskModel).where(
+            or_(
+                RiskTaskModel.assignee_user_id == user.user_id,
+                RiskTaskModel.created_by_user_id == user.user_id,
+                org_condition(session, user, RiskTaskModel.organization_id),
+            )
+        )
 
     def _load(
         self, session: Session, task_id: str, user: AuthenticatedUser, *, for_update: bool = False
     ) -> RiskTaskModel:
-        statement = self._visible(user).where(RiskTaskModel.task_id == parse_uuid(task_id))
+        statement = self._visible(session, user).where(RiskTaskModel.task_id == parse_uuid(task_id))
         if for_update:
             statement = statement.with_for_update()
         task = session.scalar(statement)

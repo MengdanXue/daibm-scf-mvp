@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import argparse
 import uuid
 from datetime import date, timedelta
@@ -10,7 +12,8 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8010"
 DEFAULT_SCREENSHOT = Path("output/facility-lifecycle-clone-acceptance.png")
-PASSWORD = "Demo123!"
+# The demo password is deployment configuration, never a literal.
+PASSWORD = os.environ.get("DAIBM_DEMO_PASSWORD", "")
 
 
 def _parser() -> argparse.ArgumentParser:

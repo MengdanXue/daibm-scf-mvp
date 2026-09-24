@@ -64,6 +64,9 @@ class PreparedRun:
 class CalibrationJobService:
     """Process durable calibration jobs without coupling them to HTTP requests."""
 
+    # Liveness signal for /api/v1/ops/health; called once per worker loop.
+    heartbeat: Callable[[], None] | None = None
+
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -74,6 +77,7 @@ class CalibrationJobService:
         clock: Callable[[], datetime] | None = None,
         lease_duration: timedelta = timedelta(minutes=5),
         idle_interval: float = 0.5,
+        heartbeat: Callable[[], None] | None = None,
     ) -> None:
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
@@ -86,6 +90,7 @@ class CalibrationJobService:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.lease_duration = lease_duration
         self.idle_interval = idle_interval
+        self.heartbeat = heartbeat
 
     def process_next(self, worker_id: str) -> bool:
         excluded_job_ids: set[uuid.UUID] = set()
@@ -161,6 +166,8 @@ class CalibrationJobService:
     async def run(self, stop_event: asyncio.Event) -> None:
         worker_id = f"calibration-{uuid.uuid4()}"
         while not stop_event.is_set():
+            if self.heartbeat is not None:
+                self.heartbeat()
             try:
                 processed = await asyncio.to_thread(self.process_next, worker_id)
             except Exception:

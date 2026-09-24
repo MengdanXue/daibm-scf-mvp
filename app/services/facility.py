@@ -43,6 +43,7 @@ from app.models_lifecycle import (
     FacilityStatusTransitionModel,
     FacilityWriteOffModel,
 )
+from app.services.permissions import PermissionService
 from app.repositories.facility import FacilityRepository
 from app.repositories.ledger import LedgerRepository
 from app.repositories.workflow import WorkflowRepository
@@ -154,6 +155,7 @@ class FacilityService:
                 status=FacilityStatus.READY.value,
                 version=1,
                 created_by_user_id=user.user_id,
+                organization_id=user.organization_id,
                 created_at=now,
                 updated_at=now,
             )
@@ -1373,6 +1375,7 @@ class FacilityService:
                 normalized_id,
                 role=user.role,
                 organization_id=user.organization_id,
+                visibility=self._visibility(session, user),
             )
             if facility is None:
                 raise FacilityNotFound(str(facility_id))
@@ -1395,6 +1398,7 @@ class FacilityService:
                 organization_id=user.organization_id,
                 limit=limit,
                 offset=offset,
+                visibility=self._visibility(session, user),
             )
             related = self._load_related_batch(session, facilities)
             return [
@@ -1413,7 +1417,7 @@ class FacilityService:
         if facility is None:
             raise FacilityNotFound(str(facility_id))
         application, creator = self._scope_models(session, facility)
-        if not self._can_view(application, creator, user):
+        if not PermissionService.can_view_facility(session, user, facility, application):
             raise FacilityNotFound(str(facility_id))
         return facility
 
@@ -1443,9 +1447,15 @@ class FacilityService:
         if facility is None:
             raise FacilityNotFound(str(action.facility_id))
         application, creator = self._scope_models(session, facility)
-        if not self._can_view(application, creator, user):
+        if not PermissionService.can_view_facility(session, user, facility, application):
             raise FacilityNotFound(str(action.facility_id))
         return self._serialize(session, facility, user)
+
+    @staticmethod
+    def _visibility(session: Session, user: AuthenticatedUser):
+        return PermissionService.facility_condition(
+            PermissionService.scope(session, user), user.role
+        )
 
     @staticmethod
     def _scope_models(

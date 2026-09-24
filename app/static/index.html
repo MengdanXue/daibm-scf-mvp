@@ -281,11 +281,11 @@
       <div class="auth-divider"><span data-wf-i18n="orCredentials">или введите учётные данные</span></div>
       <form id="loginForm" class="login-form">
         <label><span data-wf-i18n="username">Имя пользователя</span><input name="username" autocomplete="username" value="supplier.demo" required></label>
-        <label><span data-wf-i18n="password">Пароль</span><input name="password" type="password" autocomplete="current-password" value="Demo123!" required></label>
+        <label><span data-wf-i18n="password">Пароль</span><input name="password" type="password" autocomplete="current-password" required></label>
         <button id="loginButton" class="btn btn-primary" type="submit" data-wf-i18n="signIn">Войти в систему</button>
         <p id="loginError" class="form-error" role="alert"></p>
       </form>
-      <p class="demo-password"><span data-wf-i18n="commonPassword">Общий пароль демо-ролей:</span> <code>Demo123!</code></p>
+      <p class="demo-password"><span data-wf-i18n="commonPassword">Пароль демо-ролей задаётся при развёртывании (DAIBM_DEMO_PASSWORD).</span></p>
     </div>
   </div>
 </section>
@@ -307,6 +307,7 @@
       <button data-view-button="tasks" onclick="switchView('tasks')"><span class="nav-icon">☑</span><span data-risk-i18n="navTasks">Задачи</span></button>
       <button data-view-button="riskdetail" onclick="switchView('riskdetail')"><span class="nav-icon">◎</span><span data-risk-i18n="navDetail">Риск-профиль</span></button>
       <button data-view-button="rules" onclick="switchView('rules')"><span class="nav-icon">⚙</span><span data-risk-i18n="navRules">Правила риска</span></button>
+      <button data-view-button="admin" onclick="switchView('admin')"><span class="nav-icon">⌘</span><span data-admin-i18n="navAdmin">Администрирование</span></button>
       <button data-view-button="snapshots" onclick="switchView('snapshots')"><span class="nav-icon">▦</span><span data-gov-i18n="navSnapshots">Снимки данных</span></button>
       <button data-view-button="model" onclick="switchView('model')"><span class="nav-icon">≋</span><span data-i18n="navModel">Методика</span></button>
     </nav>
@@ -586,6 +587,16 @@
         <div class="facility-heading"><div><span class="eyebrow" data-risk-i18n="ruleEyebrow"></span><h1 data-risk-i18n="ruleTitle"></h1><p data-risk-i18n="ruleSubtitle"></p></div><button class="btn btn-secondary" type="button" data-risk-refresh="rules" data-risk-i18n="refresh">Обновить</button></div>
         <div id="ruleContent" class="governance-content"></div>
       </section>
+      <section id="view-admin" class="view governance-view">
+        <div class="facility-heading"><div><span class="eyebrow" data-admin-i18n="adminEyebrow"></span><h1 data-admin-i18n="adminTitle"></h1><p data-admin-i18n="adminSubtitle"></p></div><button class="btn btn-secondary" type="button" data-admin-refresh data-admin-i18n="refresh">Обновить</button></div>
+        <div class="gov-tabs" role="tablist">
+          <button type="button" class="btn btn-soft" data-admin-tab="organizations" data-admin-i18n="tabOrganizations"></button>
+          <button type="button" class="btn btn-soft" data-admin-tab="security" data-admin-i18n="tabSecurity"></button>
+          <button type="button" class="btn btn-soft" data-admin-tab="config" data-admin-i18n="tabConfig"></button>
+          <button type="button" class="btn btn-soft" data-admin-tab="ops" data-admin-i18n="tabOps"></button>
+        </div>
+        <div id="adminContent" class="governance-content"></div>
+      </section>
       <section id="view-model" class="view">
         <div class="page-heading"><div><h1 data-i18n="modelTitle">Методика демонстрационного прототипа</h1><p data-i18n="modelSub">Что именно подтверждает MVP и где проходят границы доказательства</p></div><button class="btn btn-soft" onclick="window.open('/docs','_blank')">OpenAPI ↗</button></div>
         <div class="model-grid">
@@ -803,5 +814,6 @@
 <script src="/static/workflow.js"></script>
 <script src="/static/governance.js"></script>
   <script src="/static/risk_ops.js"></script>
+  <script src="/static/admin.js"></script>
 </body>
 </html>
