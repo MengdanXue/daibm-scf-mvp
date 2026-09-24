@@ -101,6 +101,15 @@ def _command(version: int, *, key: uuid.UUID | None = None) -> dict:
     }
 
 
+def _lifecycle(version: int, reason: str) -> dict:
+    return {
+        **_command(version),
+        "reason_code": reason,
+        "comment": "Governed lifecycle decision",
+        "evidence_sha256": "c" * 64,
+    }
+
+
 def _create_facility(client, session_factory) -> dict:
     request_id = _application(session_factory)
     _login(client, "financier.demo")
@@ -133,10 +142,15 @@ def _default_facility(client, session_factory) -> dict:
         },
     ).json()
     _login(client, "risk.demo")
+    disposal = client.post(
+        f"/api/v1/facilities/{facility_id}/open-disposal",
+        json=_lifecycle(overdue["version"], "ARREARS_WORKOUT"),
+    )
+    assert disposal.status_code == 200
     response = client.post(
         f"/api/v1/facilities/{facility_id}/declare-default",
         json={
-            **_command(overdue["version"]),
+            **_command(disposal.json()["version"]),
             "reason_code": "PAYMENT_DEFAULT",
             "comment": "Governed delinquency remains unresolved",
             "evidence_sha256": "d" * 64,
@@ -470,10 +484,30 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
     assert overdue.status_code == 200
 
     _login(facility_client, "risk.demo")
+    direct_default = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/declare-default",
+        json={
+            **_command(overdue.json()["version"]),
+            "reason_code": "PAYMENT_DEFAULT",
+            "comment": "Skipping risk disposal is illegal",
+            "evidence_sha256": "d" * 64,
+            "defaulted_at": "2026-08-24T12:00:00Z",
+            "days_past_due": 90,
+        },
+    )
+    assert direct_default.status_code == 409
+    assert direct_default.json()["detail"]["code"] == "facility_conflict"
+    disposal = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/open-disposal",
+        json=_lifecycle(overdue.json()["version"], "ARREARS_WORKOUT"),
+    )
+    assert disposal.status_code == 200
+    assert disposal.json()["status"] == "in_disposal"
+    assert disposal.json()["lifecycle_decisions"][0]["decision_type"] == "disposal_opened"
     invalid_schedule = facility_client.post(
         f"/api/v1/facilities/{facility_id}/restructure",
         json={
-            **_command(overdue.json()["version"]),
+            **_command(disposal.json()["version"]),
             "reason_code": "BORROWER_CASH_FLOW",
             "comment": "Verified revised capacity",
             "evidence_sha256": "c" * 64,
@@ -488,7 +522,7 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
     defaulted = facility_client.post(
         f"/api/v1/facilities/{facility_id}/declare-default",
         json={
-            **_command(overdue.json()["version"]),
+            **_command(disposal.json()["version"]),
             "reason_code": "PAYMENT_DEFAULT",
             "comment": "Governed delinquency remains unresolved",
             "evidence_sha256": "d" * 64,
@@ -499,12 +533,18 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
     assert defaulted.status_code == 200
     assert defaulted.json()["default_event"]["days_past_due"] == 90
     assert defaulted.json()["default_history"] == [defaulted.json()["default_event"]]
+    recovery = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/start-recovery",
+        json=_lifecycle(defaulted.json()["version"], "LEGAL_RECOVERY"),
+    )
+    assert recovery.status_code == 200
+    assert recovery.json()["status"] == "in_recovery"
 
     _login(facility_client, "auditor.demo")
     written_off = facility_client.post(
         f"/api/v1/facilities/{facility_id}/write-off",
         json={
-            **_command(defaulted.json()["version"]),
+            **_command(recovery.json()["version"]),
             "reason_code": "UNCOLLECTIBLE_BALANCE",
             "comment": "Independent recovery review completed",
             "evidence_sha256": "e" * 64,
@@ -516,12 +556,45 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
     assert written_off.json()["written_off_amount"] == "1000.00"
     assert written_off.json()["realized_loss"] == "1000.00"
     assert written_off.json()["recovered_amount"] == "0.00"
+
+    _login(facility_client, "financier.demo")
+    collected = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/recoveries",
+        json={
+            **_command(written_off.json()["version"]),
+            "amount": "200.00",
+            "source": "GUARANTOR",
+            "recovery_reference": "GUARANTEE-CALL-1",
+            "evidence_sha256": "f" * 64,
+        },
+    )
+    assert collected.status_code == 200
+    assert collected.json()["status"] == "written_off"
+    assert collected.json()["outstanding_amount"] == "0.00"
+    assert collected.json()["post_writeoff_recovery_amount"] == "200.00"
+    assert collected.json()["realized_loss"] == "1000.00"
+    assert collected.json()["net_loss"] == "800.00"
+
+    _login(facility_client, "auditor.demo")
     closed = facility_client.post(
         f"/api/v1/facilities/{facility_id}/close",
-        json=_command(written_off.json()["version"]),
+        json=_command(collected.json()["version"]),
     )
     assert closed.status_code == 200
     assert closed.json()["settlement_classification"] == "WRITTEN_OFF"
+    assert [
+        (row["from_status"], row["to_status"]) for row in closed.json()["status_history"]
+    ] == [
+        (None, "ready_for_disbursement"),
+        ("ready_for_disbursement", "disbursed"),
+        ("disbursed", "active"),
+        ("active", "overdue"),
+        ("overdue", "in_disposal"),
+        ("in_disposal", "defaulted"),
+        ("defaulted", "in_recovery"),
+        ("in_recovery", "written_off"),
+        ("written_off", "closed"),
+    ]
 
     malformed = facility_client.post(
         f"/api/v1/facilities/{facility_id}/write-off",
@@ -531,8 +604,13 @@ def test_governed_lifecycle_routes_are_versioned_thin_and_stable(
 
     paths = facility_client.get("/openapi.json").json()["paths"]
     for path in (
+        "/api/v1/facilities/state-machine",
+        "/api/v1/facilities/{facility_id}/open-disposal",
+        "/api/v1/facilities/{facility_id}/close-disposal",
         "/api/v1/facilities/{facility_id}/restructure",
         "/api/v1/facilities/{facility_id}/declare-default",
+        "/api/v1/facilities/{facility_id}/start-recovery",
+        "/api/v1/facilities/{facility_id}/recoveries",
         "/api/v1/facilities/{facility_id}/write-off",
     ):
         assert path in paths
@@ -544,11 +622,15 @@ def test_pending_recovery_suppresses_writeoff_and_returns_stable_409(
 ):
     defaulted = _default_facility(facility_client, session_factory)
     facility_id = defaulted["facility_id"]
+    recovery = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/start-recovery",
+        json=_lifecycle(defaulted["version"], "LEGAL_RECOVERY"),
+    ).json()
     _login(facility_client, "supplier.demo")
     submitted = facility_client.post(
         f"/api/v1/facilities/{facility_id}/payments",
         json={
-            **_command(defaulted["version"]),
+            **_command(recovery["version"]),
             "installment_id": defaulted["installments"][0]["installment_id"],
             "amount": "100.00",
             "payment_reference": "PENDING-API-WRITEOFF",
@@ -571,7 +653,7 @@ def test_pending_recovery_suppresses_writeoff_and_returns_stable_409(
 
     unchanged = facility_client.get(f"/api/v1/facilities/{facility_id}")
     assert unchanged.status_code == 200
-    assert unchanged.json()["status"] == "defaulted"
+    assert unchanged.json()["status"] == "in_recovery"
     assert unchanged.json()["outstanding_amount"] == "1000.00"
     assert unchanged.json()["writeoff_event"] is None
     assert unchanged.json()["payments"][0]["status"] == "submitted"
@@ -597,12 +679,16 @@ def test_repeated_default_and_writeoff_commands_return_stable_409(
     )
     assert repeated_default.status_code == 409
     assert repeated_default.json()["detail"]["code"] == "facility_conflict"
+    recovery = facility_client.post(
+        f"/api/v1/facilities/{facility_id}/start-recovery",
+        json=_lifecycle(defaulted["version"], "LEGAL_RECOVERY"),
+    ).json()
 
     _login(facility_client, "auditor.demo")
     written_off = facility_client.post(
         f"/api/v1/facilities/{facility_id}/write-off",
         json={
-            **_command(defaulted["version"]),
+            **_command(recovery["version"]),
             "reason_code": "UNCOLLECTIBLE_BALANCE",
             "comment": "Independent recovery review completed",
             "evidence_sha256": "e" * 64,

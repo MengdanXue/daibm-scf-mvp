@@ -15,9 +15,13 @@ from app.models_facility import (
     PaymentModel,
 )
 from app.models_lifecycle import (
+    FacilityContractVersionModel,
     FacilityDefaultModel,
     FacilityDelinquencyModel,
+    FacilityLifecycleDecisionModel,
+    FacilityRecoveryModel,
     FacilityRestructureModel,
+    FacilityStatusTransitionModel,
     FacilityWriteOffModel,
 )
 from app.models_identity import UserModel
@@ -332,6 +336,93 @@ class FacilityRepository:
                     PaymentModel.facility_id,
                     PaymentModel.submitted_at,
                     PaymentModel.payment_id,
+                )
+            )
+        )
+
+    def list_transitions_batch(
+        self,
+        session: Session,
+        facility_ids: Sequence[uuid.UUID],
+    ) -> list[FacilityStatusTransitionModel]:
+        if not facility_ids:
+            return []
+        return list(
+            session.scalars(
+                select(FacilityStatusTransitionModel)
+                .where(FacilityStatusTransitionModel.facility_id.in_(facility_ids))
+                .order_by(
+                    FacilityStatusTransitionModel.facility_id,
+                    FacilityStatusTransitionModel.transition_id,
+                )
+            )
+        )
+
+    def list_contract_versions_batch(
+        self,
+        session: Session,
+        facility_ids: Sequence[uuid.UUID],
+    ) -> list[FacilityContractVersionModel]:
+        if not facility_ids:
+            return []
+        return list(
+            session.scalars(
+                select(FacilityContractVersionModel)
+                .where(FacilityContractVersionModel.facility_id.in_(facility_ids))
+                .order_by(
+                    FacilityContractVersionModel.facility_id,
+                    FacilityContractVersionModel.contract_version,
+                )
+            )
+        )
+
+    def get_contract_version(
+        self,
+        session: Session,
+        facility_id: uuid.UUID,
+        contract_version: int,
+    ) -> FacilityContractVersionModel | None:
+        return session.scalar(
+            select(FacilityContractVersionModel).where(
+                FacilityContractVersionModel.facility_id == facility_id,
+                FacilityContractVersionModel.contract_version == contract_version,
+            )
+        )
+
+    def list_lifecycle_decisions_batch(
+        self,
+        session: Session,
+        facility_ids: Sequence[uuid.UUID],
+    ) -> list[FacilityLifecycleDecisionModel]:
+        if not facility_ids:
+            return []
+        return list(
+            session.scalars(
+                select(FacilityLifecycleDecisionModel)
+                .where(FacilityLifecycleDecisionModel.facility_id.in_(facility_ids))
+                .order_by(
+                    FacilityLifecycleDecisionModel.facility_id,
+                    FacilityLifecycleDecisionModel.recorded_at,
+                    FacilityLifecycleDecisionModel.decision_id,
+                )
+            )
+        )
+
+    def list_recoveries_batch(
+        self,
+        session: Session,
+        facility_ids: Sequence[uuid.UUID],
+    ) -> list[FacilityRecoveryModel]:
+        if not facility_ids:
+            return []
+        return list(
+            session.scalars(
+                select(FacilityRecoveryModel)
+                .where(FacilityRecoveryModel.facility_id.in_(facility_ids))
+                .order_by(
+                    FacilityRecoveryModel.facility_id,
+                    FacilityRecoveryModel.recorded_at,
+                    FacilityRecoveryModel.recovery_id,
                 )
             )
         )

@@ -113,7 +113,7 @@ def test_upgrade_from_either_deployed_history_preserves_all_original_fields(
     }
     with engine.connect() as connection:
         assert list(connection.scalars(sa.text("SELECT version_num FROM alembic_version"))) == [
-            MERGE_REVISION
+            ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
         ]
         assert connection.scalar(sa.text("SELECT circuit_version FROM anchor_outbox")) == circuit_version
     _upgrade(engine, "head")

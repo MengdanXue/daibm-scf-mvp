@@ -42,8 +42,8 @@ class FinancingFacilityModel(Base):
         ),
         CheckConstraint(
             "status IN ('ready_for_disbursement', 'disbursed', 'active', "
-            "'overdue', 'restructured', 'defaulted', 'repaid', "
-            "'written_off', 'closed')",
+            "'overdue', 'in_disposal', 'restructured', 'defaulted', "
+            "'in_recovery', 'repaid', 'recovered', 'written_off', 'closed')",
             name="ck_financing_facilities_status",
         ),
         CheckConstraint(
@@ -284,7 +284,9 @@ class FacilityActionModel(Base):
             "action_type IN ('create', 'initiate_disbursement', "
             "'confirm_disbursement', 'submit_payment', 'confirm_payment', "
             "'reject_payment', 'confirm_final_payment', 'mark_overdue', "
-            "'restructure', 'declare_default', 'write_off', 'close')",
+            "'open_disposal', 'close_disposal', 'restructure', "
+            "'declare_default', 'start_recovery', 'record_recovery', "
+            "'record_final_recovery', 'write_off', 'close')",
             name="ck_facility_actions_action_type",
         ),
         CheckConstraint(

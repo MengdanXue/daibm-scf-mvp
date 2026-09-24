@@ -69,6 +69,14 @@
       ready_for_disbursement: "Готово к выдаче", disbursed: "Выдача инициирована", active: "Активно", overdue: "Просрочено", repaid: "Погашено", closed: "Закрыто",
       installment_scheduled: "По графику", installment_partially_paid: "Частично погашено", installment_paid: "Погашено", installment_overdue: "Просрочено",
       payment_submitted: "На проверке", payment_confirmed: "Подтверждён", payment_rejected: "Отклонён",
+      restructured: "Реструктурировано", defaulted: "Дефолт", in_disposal: "Работа с проблемным активом", in_recovery: "Взыскание", recovered: "Взыскано после дефолта", written_off: "Списано", installment_superseded: "Заменено новой версией",
+      facilityOpenDisposal: "Открыть работу с проблемным активом", facilityCloseDisposal: "Закрыть работу с проблемным активом", facilityRestructure: "Реструктурировать", facilityDeclareDefault: "Объявить дефолт",
+      facilityStartRecovery: "Начать взыскание", facilityRecordRecovery: "Записать поступление от взыскания", facilityWriteOff: "Списать остаток",
+      facilityReasonCode: "Код основания", facilityComment: "Комментарий", facilityEvidenceReference: "Ссылка на доказательство (хешируется в браузере)", facilityDaysPastDue: "Дней просрочки",
+      facilityDefaultedAt: "Дата дефолта", facilityRecoverySource: "Источник взыскания", facilityRecoveryReference: "Референс поступления", facilityNewDueDate: "Новый срок",
+      facilityHistory: "История статусов", facilityContracts: "Версии договора", facilityRecoveries: "Поступления от взыскания", facilityNoHistory: "Записей пока нет.",
+      facilityArrears: "Просроченная задолженность", facilityWrittenOff: "Списано", facilityNetLoss: "Чистый убыток", facilityRecoveryCollected: "Взыскано",
+      facilityContractVersion: "Версия", facilityDecisions: "Решения по риску",
       facility_not_found: "Финансовое досье не найдено или недоступно вашей роли.", forbidden_role: "Текущая роль не может выполнить это действие.",
       facility_precondition_failed: "Для создания нужна одобренная заявка с завершённым аудитом и совпадающей суммой.", facility_conflict: "Данные изменились или действие больше недоступно. Обновите досье и повторите с новой командой.",
       fabricAnchorEyebrow: "ОПЦИОНАЛЬНЫЙ ВНЕШНИЙ ЯКОРЬ", fabricAnchorTitle: "Якорение в Fabric", fabricAnchorSubtitle: "Хеши аудиторских событий передаются через транзакционный outbox; бизнес-записи остаются в PostgreSQL.",
@@ -132,6 +140,14 @@
       facilityRequiredFields: "请填写该操作的必填字段。", ready_for_disbursement: "待放款", disbursed: "已发起放款", active: "进行中",
       overdue: "已逾期", repaid: "已还清", closed: "已关闭", installment_scheduled: "按计划", installment_partially_paid: "部分已还",
       installment_paid: "已还清", installment_overdue: "已逾期", payment_submitted: "待审核", payment_confirmed: "已确认", payment_rejected: "已拒绝",
+      restructured: "重组履约", defaulted: "违约", in_disposal: "风险处置", in_recovery: "追偿", recovered: "追偿完毕", written_off: "已核销", installment_superseded: "已被新版本替代",
+      facilityOpenDisposal: "发起风险处置", facilityCloseDisposal: "结束风险处置", facilityRestructure: "重组", facilityDeclareDefault: "认定违约",
+      facilityStartRecovery: "启动追偿", facilityRecordRecovery: "登记追偿回款", facilityWriteOff: "核销余额",
+      facilityReasonCode: "原因代码", facilityComment: "说明", facilityEvidenceReference: "证据引用（在浏览器中计算哈希）", facilityDaysPastDue: "逾期天数",
+      facilityDefaultedAt: "违约时间", facilityRecoverySource: "追偿来源", facilityRecoveryReference: "回款参考号", facilityNewDueDate: "新到期日",
+      facilityHistory: "状态历史", facilityContracts: "合同版本", facilityRecoveries: "追偿回款", facilityNoHistory: "暂无记录。",
+      facilityArrears: "逾期欠款", facilityWrittenOff: "已核销", facilityNetLoss: "净损失", facilityRecoveryCollected: "已追回",
+      facilityContractVersion: "版本", facilityDecisions: "风险决策",
       facility_not_found: "融资卷宗不存在或当前角色无权查看。", forbidden_role: "当前角色不能执行此操作。",
       facility_precondition_failed: "创建融资要求申请已批准、审计完成且本金一致。", facility_conflict: "数据已变化或操作不再可用。请刷新卷宗后使用新命令重试。",
       fabricAnchorEyebrow: "可选外部锚定", fabricAnchorTitle: "Fabric 锚定", fabricAnchorSubtitle: "审计事件哈希经事务型 outbox 发送；业务记录仍保存在 PostgreSQL。",
@@ -853,17 +869,33 @@
         <article><span>01</span><small>${escapeHtml(tr("facilityPrincipal"))}</small><b>${exactFacilityMoney(facility.principal, facility.currency)}</b></article>
         <article><span>02</span><small>${escapeHtml(tr("facilityPaid"))}</small><b>${exactFacilityMoney(paidAmount, facility.currency)}</b></article>
         <article><span>03</span><small>${escapeHtml(tr("facilityOutstanding"))}</small><b>${exactFacilityMoney(facility.outstanding_amount, facility.currency)}</b></article>
+        <article><span>04</span><small>${escapeHtml(tr("facilityArrears"))}</small><b>${exactFacilityMoney(facility.arrears_amount, facility.currency)}</b></article>
+        <article><span>05</span><small>${escapeHtml(tr("facilityRecoveryCollected"))}</small><b>${exactFacilityMoney(facility.recovery_collected_amount, facility.currency)}</b></article>
+        <article><span>06</span><small>${escapeHtml(tr("facilityNetLoss"))}</small><b>${exactFacilityMoney(facility.net_loss, facility.currency)}</b></article>
       </div>
     </section>
     <div class="facility-evidence"><span>${escapeHtml(tr("facilityEvidence"))}</span><b>${escapeHtml(facility.disbursement_reference || "—")}</b><small title="${escapeHtml(facility.disbursement_evidence_sha256 || "")}">${escapeHtml(compactHash(facility.disbursement_evidence_sha256))}</small></div>
     <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityInstallments"))}</b><span>${facility.installments.length}</span></div><ol id="facilityInstallments" class="facility-stage-rail">${installments}</ol></section>
     <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityPayments"))}</b><span>${facility.payments.length}</span></div><div id="facilityPayments" class="facility-payment-list">${payments}</div></section>
+    ${renderFacilityGovernance(facility)}
     <section class="facility-detail-section facility-action-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityActionStation"))}</b><span>${facility.allowed_actions.length}</span></div><div id="facilityActions" class="facility-action-list">${actions}</div></section>
     ${renderActualOutcomePanel(facility)}`;
   }
 
+  function renderFacilityGovernance(facility) {
+    const history = facility.status_history.map((row) => `<li><b>${escapeHtml(row.from_status ? tr(row.from_status) : "—")} → ${escapeHtml(tr(row.to_status))}</b><small>${escapeHtml(row.trigger_action)} · ${escapeHtml(row.actor_role || "migration")} · v${row.resulting_version}${row.reason_code ? ` · ${escapeHtml(row.reason_code)}` : ""}</small><em>${escapeHtml(row.recorded_at)}</em></li>`).join("");
+    const contracts = facility.contract_versions.map((row) => `<article class="facility-payment-row"><span class="status-chip">${escapeHtml(tr("facilityContractVersion"))} ${row.contract_version}</span><b>${escapeHtml(row.origin)}</b><small>${row.schedule.map((item) => `${escapeHtml(item.due_date)} · ${exactFacilityMoney(item.amount, facility.currency)}`).join(" / ")}</small><small title="${escapeHtml(row.terms_sha256)}">${escapeHtml(compactHash(row.terms_sha256))}</small></article>`).join("");
+    const decisions = facility.lifecycle_decisions.map((row) => `<article class="facility-payment-row"><span class="status-chip">${escapeHtml(row.decision_type)}</span><b>${escapeHtml(row.reason_code)}</b><small>${escapeHtml(row.comment)} · ${escapeHtml(row.recorded_at)}</small></article>`).join("");
+    const recoveries = facility.recoveries.map((row) => `<article class="facility-payment-row"><span class="status-chip">${escapeHtml(row.applied_to)}</span><b>${exactFacilityMoney(row.amount, facility.currency)}</b><small>${escapeHtml(row.source)} · ${escapeHtml(row.recovery_reference)} · ${escapeHtml(row.recorded_at)}</small></article>`).join("");
+    const empty = `<p class="facility-empty-copy">${escapeHtml(tr("facilityNoHistory"))}</p>`;
+    return `<section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityHistory"))}</b><span>${facility.status_history.length}</span></div><ol id="facilityStatusHistory" class="facility-history-rail">${history || empty}</ol></section>
+    <section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityContracts"))}</b><span>${facility.contract_versions.length}</span></div><div id="facilityContracts" class="facility-payment-list">${contracts || empty}</div></section>
+    ${facility.lifecycle_decisions.length ? `<section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityDecisions"))}</b><span>${facility.lifecycle_decisions.length}</span></div><div id="facilityDecisions" class="facility-payment-list">${decisions}</div></section>` : ""}
+    ${facility.recoveries.length ? `<section class="facility-detail-section"><div class="facility-section-head"><b>${escapeHtml(tr("facilityRecoveries"))}</b><span>${facility.recoveries.length}</span></div><div id="facilityRecoveries" class="facility-payment-list">${recoveries}</div></section>` : ""}`;
+  }
+
   function installmentOptions(facility, includePaid = false) {
-    return facility.installments.filter((item) => includePaid || item.status !== "paid").map((item) =>
+    return facility.installments.filter((item) => item.status !== "superseded" && (includePaid || item.status !== "paid")).map((item) =>
       `<option value="${escapeHtml(item.installment_id)}">${escapeHtml(tr("facilityInstallment"))} ${item.sequence} · ${escapeHtml(item.due_date)} · ${exactFacilityMoney(item.amount, facility.currency)}</option>`
     ).join("");
   }
@@ -883,7 +915,16 @@
       const isConfirm = action === "confirm_payment";
       return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr(isConfirm ? "facilityConfirmPayment" : "facilityRejectPayment"))}</b><label><span>${escapeHtml(tr("facilityPayments"))}</span><select name="payment_id" required>${submittedPaymentOptions(facility)}</select></label><label><span>${escapeHtml(tr("facilityDecisionComment"))}</span><input name="comment" maxlength="500" required></label>${button(tr(isConfirm ? "facilityConfirmPayment" : "facilityRejectPayment"), isConfirm ? "btn-primary" : "btn-danger")}</form>`;
     }
-    if (action === "mark_overdue") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityMarkOverdue"))}</b><label><span>${escapeHtml(tr("facilityInstallment"))}</span><select name="installment_id" required>${installmentOptions(facility)}</select></label>${button(tr("facilityMarkOverdue"), "btn-danger")}</form>`;
+    const evidenceFields = (reason) => `<label><span>${escapeHtml(tr("facilityReasonCode"))}</span><input name="reason_code" value="${escapeHtml(reason)}" pattern="[A-Z][A-Z0-9_]{2,63}" required></label><label><span>${escapeHtml(tr("facilityComment"))}</span><input name="comment" maxlength="500" required></label><label><span>${escapeHtml(tr("facilityEvidenceReference"))}</span><input name="evidence_reference" maxlength="500" required></label>`;
+    if (action === "mark_overdue") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityMarkOverdue"))}</b><label><span>${escapeHtml(tr("facilityInstallment"))}</span><select name="installment_id" required>${installmentOptions(facility)}</select></label><label><span>${escapeHtml(tr("facilityDaysPastDue"))}</span><input name="days_past_due" type="number" min="1" max="36500" value="30" required></label><label><span>${escapeHtml(tr("facilityEvidenceReference"))}</span><input name="evidence_reference" maxlength="500" required></label>${button(tr("facilityMarkOverdue"), "btn-danger")}</form>`;
+    const decisionLabels = { open_disposal: ["facilityOpenDisposal", "ARREARS_WORKOUT", "btn-danger"], close_disposal: ["facilityCloseDisposal", "ARREARS_CLEARED", "btn-primary"], start_recovery: ["facilityStartRecovery", "LEGAL_RECOVERY", "btn-danger"], write_off: ["facilityWriteOff", "UNCOLLECTIBLE_BALANCE", "btn-danger"] };
+    if (decisionLabels[action]) {
+      const [label, reason, style] = decisionLabels[action];
+      return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr(label))}</b>${evidenceFields(reason)}${button(tr(label), style)}</form>`;
+    }
+    if (action === "declare_default") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityDeclareDefault"))}</b>${evidenceFields("PAYMENT_DEFAULT")}<label><span>${escapeHtml(tr("facilityDaysPastDue"))}</span><input name="days_past_due" type="number" min="1" max="36500" value="90" required></label>${button(tr("facilityDeclareDefault"), "btn-danger")}</form>`;
+    if (action === "restructure") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityRestructure"))}</b>${evidenceFields("BORROWER_CASH_FLOW")}<label><span>${escapeHtml(tr("facilityNewDueDate"))}</span><input name="due_date" type="date" required></label><label><span>${escapeHtml(tr("facilityAmount"))}</span><input name="amount" inputmode="decimal" value="${escapeHtml(facility.outstanding_amount)}" readonly></label>${button(tr("facilityRestructure"))}</form>`;
+    if (action === "record_recovery") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityRecordRecovery"))}</b><label><span>${escapeHtml(tr("facilityRecoverySource"))}</span><select name="source">${["GUARANTOR", "COLLATERAL", "CORE_ENTERPRISE_BUYBACK", "LEGAL_ENFORCEMENT", "COLLECTION_AGENCY", "INSURANCE", "OTHER"].map((value) => `<option value="${value}">${value}</option>`).join("")}</select></label><label><span>${escapeHtml(tr("facilityAmount"))}</span><input name="amount" inputmode="decimal" required></label><label><span>${escapeHtml(tr("facilityRecoveryReference"))}</span><input name="recovery_reference" maxlength="120" required></label><label><span>${escapeHtml(tr("facilityEvidenceReference"))}</span><input name="evidence_reference" maxlength="500" required></label>${button(tr("facilityRecordRecovery"))}</form>`;
     if (action === "close") return `<form class="facility-action-card" data-facility-action-form="${action}"><b>${escapeHtml(tr("facilityClose"))}</b>${button(tr("facilityClose"))}</form>`;
     return "";
   }
@@ -945,7 +986,28 @@
         payload = { ...command, decision: action === "confirm_payment" ? "confirmed" : "rejected", comment };
       } else if (action === "mark_overdue") {
         suffix = "/mark-overdue";
-        payload = { ...command, installment_id: String(data.get("installment_id")) };
+        const reference = String(data.get("evidence_reference") || "").trim();
+        if (!reference) throw new Error(tr("facilityRequiredFields"));
+        payload = { ...command, installment_id: String(data.get("installment_id")), days_past_due: Number(data.get("days_past_due")), evidence_sha256: await hashEvidenceReference(reference) };
+      } else if (["open_disposal", "close_disposal", "start_recovery", "write_off", "declare_default", "restructure"].includes(action)) {
+        const reference = String(data.get("evidence_reference") || "").trim();
+        const comment = String(data.get("comment") || "").trim();
+        if (!reference || !comment) throw new Error(tr("facilityRequiredFields"));
+        const evidence = { reason_code: String(data.get("reason_code")).trim(), comment, evidence_sha256: await hashEvidenceReference(reference) };
+        suffix = `/${action.replace("_", "-")}`;
+        payload = { ...command, ...evidence };
+        if (action === "declare_default") payload = { ...payload, days_past_due: Number(data.get("days_past_due")), defaulted_at: new Date().toISOString() };
+        if (action === "restructure") {
+          if (!data.get("due_date")) throw new Error(tr("facilityRequiredFields"));
+          payload = { ...payload, installments: [{ sequence: 1, due_date: data.get("due_date"), amount: facility.outstanding_amount }] };
+        }
+      } else if (action === "record_recovery") {
+        const reference = String(data.get("evidence_reference") || "").trim();
+        const recoveryReference = String(data.get("recovery_reference") || "").trim();
+        if (!reference || !recoveryReference) throw new Error(tr("facilityRequiredFields"));
+        suffix = "/recoveries";
+        payload = { ...command, amount: normalizeMoneyInput(data.get("amount")), source: String(data.get("source")), recovery_reference: recoveryReference, evidence_sha256: await hashEvidenceReference(reference) };
+        moneyToCents(payload.amount);
       } else if (action === "close") suffix = "/close";
       else return;
       setFacilityPending(true);

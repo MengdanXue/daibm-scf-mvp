@@ -62,6 +62,7 @@ def _seed_closed_facility(
     *,
     scope: str = "controlled_demo",
     lifecycle: str = "repaid",
+    status: str = "closed",
 ) -> tuple[uuid.UUID, AuthenticatedUser]:
     identity = IdentityService(session_factory, clock=lambda: NOW)
     identity.seed_demo_accounts()
@@ -125,11 +126,11 @@ def _seed_closed_facility(
         session.add(FinancingFacilityModel(
             facility_id=ids["facility"], request_id=ids["request"],
             principal=Decimal("1000.00"), outstanding_amount=Decimal("0.00"),
-            currency="CNY", status="closed", version=7,
+            currency="CNY", status=status, version=7,
             current_schedule_version=1,
-            closure_reason=closure_reason,
+            closure_reason=closure_reason if status == "closed" else None,
             created_by_user_id=financier.user_id, created_at=NOW, updated_at=NOW,
-            closed_at=NOW,
+            closed_at=NOW if status == "closed" else None,
         ))
         session.add_all(confirmed_cash_rows(
             ids["facility"], financier.user_id, NOW,
@@ -373,11 +374,14 @@ def test_submission_requires_exact_scope_and_closed_governed_snapshot(
         service.submit(
             facility_id, _submission(provenance="EXTERNAL_VERIFIED"), auditor
         )
-    with session_factory.begin() as session:
-        facility = session.get(FinancingFacilityModel, facility_id)
-        facility.status = "active"
+    # PostgreSQL rejects reopening a closed facility, so the unclosed case is a
+    # facility seeded while still active rather than a rewritten closed one.
+    with pytest.raises(Exception, match="illegal facility status transition closed -> active"):
+        with session_factory.begin() as session:
+            session.get(FinancingFacilityModel, facility_id).status = "active"
+    active_id, _ = _seed_closed_facility(session_factory, status="active")
     with pytest.raises(OutcomeConflict, match="closed facility"):
-        service.submit(facility_id, _submission(), auditor)
+        service.submit(active_id, _submission(), auditor)
 
 
 @pytest.mark.parametrize(
