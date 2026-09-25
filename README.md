@@ -1,48 +1,113 @@
-# DAIBM-SCF — Supply-chain finance AI risk platform
+# DAIBM-SCF
 
-Release **v1.0.0** (see [RELEASE_NOTES.md](RELEASE_NOTES.md)) · Research Core `v0.4` / 平台版本 **v1.0.0** · 科研核心 `v0.4`
+**供应链金融 AI 风险管理平台原型** · Supply-chain finance AI risk management platform prototype
 
-## v1.0 产品概览 / Product overview
+`v1.0.0` · FastAPI + PostgreSQL 17 · 俄/中双语界面 · Docker 一键启动 · 900+ 项自动化测试
 
-**项目介绍**：面向供应链金融的 AI 风控平台原型。供应商、核心企业、放款机构、风险经理、审计员与管理员在同一平台上完成
-“申请 → 风险评估 → 模型决策 → 放款 → 还款 → 逾期 → 预警 → 任务处理 → 结果反馈 → 模型治理”的闭环；每一步都写入
-不可篡改的哈希链审计账本，数据按组织隔离。
+![风险驾驶舱 / Risk dashboard](docs/product/screenshots/02-risk-dashboard.png)
 
-**架构**：
+## 一分钟了解 / At a glance
+
+DAIBM-SCF 把供应链金融的一笔融资从**申请**、**AI 风险评估**、**授信放款**、**还款与逾期**，一路追踪到**预警处置**、
+**结果反馈**和**模型更新**，放在同一个平台里完成。平台面向四类使用者：
+
+- **企业用户**（供应商、核心企业）：提交与确认融资申请、还款；
+- **放款机构**（融资方、风险经理）：评估、审批、放款、盯风险、处理预警与任务；
+- **审计员**：复核、录入业务结果、治理模型、查审计；
+- **管理员**：组织与用户、配置、运维。
+
+平台的三个特点：
+- **可追溯**：每一次决策都能追溯到模型版本、训练数据快照和具体的训练样本；每个操作都写入哈希链审计账本，任何篡改都能被检测出来。
+- **可治理**：AI 模型只有通过独立验证才能上线，可审批、可回滚。
+- **隔离**：多家放款机构共用平台，数据与模型严格隔离。
+
+> 这是研究型产品原型：放款和还款是受控模拟（controlled financing lifecycle simulation），不发起真实银行转账；
+> 演示数据为合成数据。
+
+## 核心能力 / Core capabilities
+
+| 能力 | 做什么 | 在哪里看 |
+|---|---|---|
+| **融资生命周期管理** | 申请 → 交易确认 → 评估 → 审批 → 放款 → 分期还款；逾期、处置、重组、违约、追偿、核销、结清，精确到分的状态机 | 业务工作台 · 融资生命周期 |
+| **AI 风险评估** | 可解释的透明基线评分 + 按放款机构训练的 Platt 校准；每次评分记录输入哈希、模型版本与回退原因 | 申请详情 · 风险详情 |
+| **模型生命周期治理** | DRAFT → EVALUATING → CANDIDATE → ACTIVE → ROLLED_BACK / RETIRED；独立的时间外验证门槛、人工审批、回滚、决策血缘 | 模型中心 |
+| **数据治理** | 业务结果复核、排除与恢复、替代修订；训练资格预览；不可变数据快照，精确记录每次训练读取的数据 | 结果治理 · 数据快照 |
+| **风险预警** | 风险驾驶舱、版本化规则、自动检测、预警流转（指派 → 处理 → 解决 → 审核关闭）、风险任务 | 风险驾驶舱 · 预警中心 · 任务中心 |
+| **多组织隔离** | 申请绑定放款机构；融资、预警、任务、结果、快照、模型按组织归属；数据库层拒绝跨组织数据血缘 | 所有页面（按登录组织） |
+| **审计追踪** | 哈希链账本、篡改检测与恢复、安全事件（登录、越权、管理员操作）、完整状态转移历史 | 可信审计账本 · 平台管理 |
+| **备份恢复** | 一条命令备份数据库、审计数据与模型工件，恢复前后都做哈希校验；健康检查、指标、自动重启 | 运维监控 · `scripts/ops/` |
+
+## 系统架构 / Architecture
 
 ```text
-浏览器（俄/中双语单页）
-   │ HTTPS 反向代理（可选）
-FastAPI 单体应用 ───────────────┬─ 进程内后台任务：校准训练 worker、风险规则监控
- ├─ 身份/会话/安全事件          │
- ├─ PermissionService（角色 × 组织 × 资源归属）
- ├─ 申请工作流 · 融资生命周期 · 风险运营（驾驶舱/预警/任务/规则）
- ├─ 业务结果治理 · 数据快照 · 模型注册表（按组织）· 决策血缘
- ├─ 配置中心 · 健康/指标 · 备份恢复
- └─ 研究核心（TGNN/XGBoost，ONNX 推理）
-   │
-PostgreSQL 17（Alembic 迁移；数据库触发器保证状态机、不可变历史、租户血缘）
-   │ 可选：Fabric 哈希锚定 · ZKP 发票上限证明（advanced/）
+┌──────────────────────────── Business Layer 业务层 ────────────────────────────┐
+│ 融资申请工作流（五角色、放款机构绑定）· 融资生命周期状态机 · 还款/逾期/违约/核销     │
+└───────────────────────────────────────┬───────────────────────────────────────┘
+                                        ↓
+┌──────────────────────── Risk Intelligence Layer 风险智能层 ────────────────────┐
+│ 透明基线评分 · 按组织的 Platt 校准推理 · 风险驾驶舱 · 规则检测 · 预警与任务 · 研究核心（TGNN/ONNX） │
+└───────────────────────────────────────┬───────────────────────────────────────┘
+                                        ↓
+┌────────────────────────── AI Governance Layer AI 治理层 ───────────────────────┐
+│ 业务结果复核与纠正 · 训练资格 · 数据快照 · 模型注册表与状态机 · 独立验证门槛 · 决策血缘   │
+└───────────────────────────────────────┬───────────────────────────────────────┘
+                                        ↓
+┌─────────────────── Security & Operations Layer 安全与运维层 ───────────────────┐
+│ PermissionService（角色×组织×归属）· 会话与锁定 · 安全事件 · 哈希链账本 · 配置中心     │
+│ 健康检查与指标 · 哈希校验备份恢复 · Docker 健康检查与自动重启 · PostgreSQL 触发器约束    │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**功能**：五角色融资工作流与放款机构绑定；受治理的融资生命周期（放款、还款、逾期、重组、违约、追偿、核销、结清）；
-透明基线评分 + 按组织训练的 Platt 校准模型（DRAFT → CANDIDATE → ACTIVE，可回滚）；风险驾驶舱、预警中心、任务中心、
-版本化风险规则；业务结果复核、纠正与数据快照；审计账本完整性检测与恢复；多租户隔离与审计授权；登录锁定、会话超时、
-安全事件；配置中心；健康检查、指标、哈希校验的备份恢复；演示数据集。
+单体 FastAPI 应用 + PostgreSQL 17。后台任务在进程内运行：校准训练 worker 和风险规则监控，不依赖消息队列。
+可选模块：Fabric 哈希锚定和 ZKP 发票上限证明（`advanced/`）。详见 [FINAL_PRODUCT_REPORT.md](FINAL_PRODUCT_REPORT.md)。
 
-**快速启动**：
+## 演示流程 / Demo flow
+
+```text
+企业申请 → 风险评估 → 授信 → 还款 → 逾期 → 预警 → 处置 → 结果反馈 → 模型更新
+supplier   financier   financier  supplier  financier  系统规则  risk     auditor    校准 worker
+            (模型评分)  (审批放款)                      (自动检测) (任务)   (录入结果)  (训练→验证→激活)
+```
+
+10 分钟演示讲稿：[docs/demo/DEMO_SCRIPT.md](docs/demo/DEMO_SCRIPT.md) ·
+演示数据说明：[docs/demo/DATASET_OVERVIEW.md](docs/demo/DATASET_OVERVIEW.md) ·
+截图：[docs/product/screenshots/](docs/product/screenshots/)
+
+## 快速开始 / Quick start
 
 ```bash
-scripts/ops/init-env.sh                      # 生成 .env（随机数据库密码与演示密码）
-docker compose -p daibm-scf-mvp up -d --build
-open http://127.0.0.1:8010                   # 用 .env 中的 DAIBM_DEMO_PASSWORD 登录任一 *.demo 账号
+scripts/ops/init-env.sh                          # 生成 .env：随机数据库密码与演示密码（会打印出来）
+docker compose -p daibm-scf-mvp up -d --build    # 首次启动约 1 分钟，自动生成演示数据
+# 打开 http://127.0.0.1:8010 ，用 .env 中的 DAIBM_DEMO_PASSWORD 登录
 ```
 
-Windows 下双击 `start-demo.cmd` 即可（自动生成 `.env` 并打印演示密码）。首次启动会通过业务服务生成演示数据集
-（约 30 秒）。文档：[部署指南](DEPLOYMENT_GUIDE.md) · [用户指南](USER_GUIDE.md) · [变更记录](CHANGELOG.md) ·
-[性能基线](docs/performance/PERF_BASELINE.md) · [v1.0 发布报告](V1_RELEASE_REPORT.md)。
+Windows：双击 `start-demo.cmd`。演示账号如下：
+
+| 角色 | 账号 | 典型操作 |
+|---|---|---|
+| 管理员 admin | `admin.demo` | 平台管理、配置中心、风险规则、运维监控 |
+| 风险经理 risk manager | `risk.demo` | 风险驾驶舱、预警与任务处理、违约处置 |
+| 审计员 auditor | `auditor.demo` | 审计账本、结果治理、模型激活与回滚 |
+| 融资方 | `financier.demo` | 风险评估、审批、放款、确认还款 |
+| 企业用户 | `supplier.demo`、`core.demo`；演示企业 `supplier.normal.demo`、`supplier.watch.demo`、`supplier.default.demo` | 申请、确认交易、还款 |
+
+## 文档导航 / Documentation
+
+| 文档 | 内容 |
+|---|---|
+| [FINAL_PRODUCT_REPORT.md](FINAL_PRODUCT_REPORT.md) | 产品定位、架构、AI/数据治理、安全、多租户、测试、限制、路线 |
+| [USER_GUIDE.md](USER_GUIDE.md) | 按角色的操作指南 |
+| [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | 环境、配置、启动、初始化、备份恢复、升级 |
+| [docs/demo/DEMO_SCRIPT.md](docs/demo/DEMO_SCRIPT.md) · [DATASET_OVERVIEW.md](docs/demo/DATASET_OVERVIEW.md) | 10 分钟演示与演示数据 |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) · [CHANGELOG.md](CHANGELOG.md) · [V1_RELEASE_REPORT.md](V1_RELEASE_REPORT.md) | 发布说明、变更、v1 验收 |
+| [docs/performance/PERF_BASELINE.md](docs/performance/PERF_BASELINE.md) | 性能基线 |
+| [docs/thesis-traceability.md](docs/thesis-traceability.md) | 论文到实现的对照 |
 
 ---
+
+# 详细说明 / Details
+
+以下为原型的详细说明（俄/中双语），包括答辩启动器、研究核心复现、可选 Fabric 与 ZKP 模式和边界说明。
 
 Двуязычный демонстрационный прототип магистерской диссертации: русский интерфейс используется по умолчанию, китайский включается одной кнопкой. Система показывает полный контур одобрения, риск-контроля и аудита: «заявка → оценка риска → решение → контрольное действие → проверяемая запись».
 

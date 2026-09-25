@@ -26,4 +26,5 @@
 - 模型相关响应增加 `organization_id` / `organization_code` 字段。
 
 详细变更见 [CHANGELOG.md](CHANGELOG.md)，部署见 [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)，
-操作见 [USER_GUIDE.md](USER_GUIDE.md)，验收见 [V1_RELEASE_REPORT.md](V1_RELEASE_REPORT.md)。
+操作见 [USER_GUIDE.md](USER_GUIDE.md)，验收见 [V1_RELEASE_REPORT.md](V1_RELEASE_REPORT.md)，
+产品总结见 [FINAL_PRODUCT_REPORT.md](FINAL_PRODUCT_REPORT.md)，演示见 [docs/demo/DEMO_SCRIPT.md](docs/demo/DEMO_SCRIPT.md)。
