@@ -32,6 +32,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       DAIBM_ENV: ${DAIBM_ENV:-demo}
       DAIBM_DEMO_PASSWORD: ${DAIBM_DEMO_PASSWORD:-}
+      # Seeds the stable demo dataset once through the services (needs the demo password).
+      DAIBM_DEMO_DATASET: "${DAIBM_DEMO_DATASET:-true}"
       DAIBM_COOKIE_SECURE: "${DAIBM_COOKIE_SECURE:-false}"
       DAIBM_LOGIN_MAX_FAILURES: ${DAIBM_LOGIN_MAX_FAILURES:-5}
       DAIBM_LOCKOUT_MINUTES: ${DAIBM_LOCKOUT_MINUTES:-15}

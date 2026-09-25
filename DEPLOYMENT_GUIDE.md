@@ -1,4 +1,4 @@
-# DAIBM-SCF 部署指南 / Deployment Guide
+# DAIBM-SCF 部署指南 / Deployment Guide (v1.0.0)
 
 本指南说明如何以单机 Docker Compose 方式部署 DAIBM-SCF（FastAPI 应用 + PostgreSQL 17），
 以及日常运维中的配置、初始化、健康检查、备份与恢复。架构保持不变：一个应用容器、一个数据库容器，
@@ -37,6 +37,7 @@ scripts/ops/init-env.sh          # Linux/macOS：从 .env.example 生成 .env，
 | `POSTGRES_DB` / `POSTGRES_USER` | 数据库名 / 用户 | `daibm_scf` / `daibm` |
 | `DAIBM_DEMO_PASSWORD` | `*.demo` 演示账号的密码；**生产环境留空**，此时不创建任何演示账号 | 空 |
 | `DAIBM_ENV` | `production` 时演示密码也必须满足密码策略 | `demo` |
+| `DAIBM_DEMO_DATASET` | `true` 时首次启动通过业务服务生成演示数据集（需要演示密码；生产设为 `false`） | Compose 中 `true` |
 | `DAIBM_COOKIE_SECURE` | 经 HTTPS 访问时设为 `true`，会话 Cookie 带 `Secure` | `false` |
 | `DAIBM_COOKIE_SAMESITE` | 会话 Cookie 的 SameSite | `strict` |
 | `DAIBM_LOGIN_MAX_FAILURES` | 连续登录失败多少次后锁定 | `5` |
@@ -89,7 +90,13 @@ curl -s http://127.0.0.1:8010/api/v1/ops/health
    - 生产环境：`DAIBM_DEMO_PASSWORD` 留空时不会创建任何账号。首个管理员可临时设置演示密码启动一次，
      通过 `admin.demo` 登录后在“平台管理 → 组织与用户”中创建正式组织与用户，
      然后禁用 `admin.demo`（或者以数据库管理员身份插入首个管理员），再移除 `DAIBM_DEMO_PASSWORD`。
-4. **多租户**：每个组织只能看到自己的数据——融资、预警、任务、业务结果、风险驾驶舱和数据快照明细都按组织过滤；
+4. **演示数据集**：`DAIBM_DEMO_DATASET=true` 且设置了演示密码时，首次启动（约 30 秒）通过业务服务幂等生成：
+   32 笔历史融资与业务结果并训练出 ACTIVE 模型；“稳健制造”（正常结清）、“东方物流”（逾期 → 预警处理中 → 催收任务）、
+   “西部化工”（违约 → 追偿 → 核销）三家企业；5 笔新增结果训练出的 CANDIDATE 模型；数据快照与决策血缘。
+   也可手动执行：`docker compose -p daibm-scf-mvp exec mvp python -m app.demo_dataset`。
+5. **多租户**：每个组织只能看到自己的数据——融资、预警、任务、业务结果、风险驾驶舱和数据快照明细都按组织过滤；
+   融资申请提交时绑定放款机构（只有一个放款机构时自动选择），此后只有该机构的融资方与风险经理可见；
+   每个放款机构只用本机构的业务结果训练模型、只用本机构的 ACTIVE 模型做决策；
    企业用户（供应商/核心企业）只能看到涉及本企业的融资；审计员只能看到被授予审计权限（`audit_grants`）的组织；
    管理员可以看到所有组织。
 
@@ -133,7 +140,19 @@ scripts/ops/restore.sh <name> --yes
 恢复演练（Phase 4 已执行，见 `PHASE4_ENTERPRISE_READINESS_REPORT.md`）：在运行中的 Compose 环境生成备份 →
 写入新的业务数据 → 恢复备份 → 验证新数据消失、行数与账本链头哈希与备份一致、演示账号可登录、健康检查为 `ok`。
 
-## 7. 常见运维操作
+## 7. 升级到 v1.0.0
+
+1. `scripts/ops/backup.sh before-v1`（先备份）；
+2. 拉取新版本并 `docker compose -p daibm-scf-mvp up -d --build`；应用启动时执行迁移 `20260930_0021`：
+   为既有申请回填放款机构（依据已开立的融资、融资方操作记录，或唯一的放款机构），为既有训练任务、快照、
+   校准运行与模型版本回填组织归属（依据其业务结果血缘）；不修改任何状态、哈希或历史记录；
+3. 如果历史数据无法唯一归属（例如同一次训练混合了多个机构的结果，或存在多个放款机构且申请从未被处理），
+   迁移会拒绝执行并说明原因，数据库保持在升级前状态；处理后重新启动即可。
+
+性能基线（1000 笔融资 / 5000 条结果 / 10000 条审计事件）见 `docs/performance/PERF_BASELINE.md`，
+可用 `python scripts/perf_baseline.py --admin-url <postgres 管理连接>` 在自己的环境中复测。
+
+## 8. 常见运维操作
 
 | 操作 | 命令 |
 |---|---|
