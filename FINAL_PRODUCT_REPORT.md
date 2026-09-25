@@ -214,8 +214,8 @@ scripts/ops/restore.sh <name> --yes              # 校验 → 恢复 → 再校�
 |---|---|
 | `ruff check .` | All checks passed |
 | `mypy`（`app/`） | Success: no issues found in 90 source files |
-| 全量测试 `pytest tests --ignore=tests/research` | 见 §9.5 |
-| CI（GitHub Actions：application-tests、advanced-tests、research-tests、static-analysis，各两项） | 在 PR #13 的最终提交上运行，结果见 PR |
+| 全量测试 `pytest tests --ignore=tests/research` | 922 passed, 12 skipped, 0 failed（见 §9.5） |
+| CI（GitHub Actions：application-tests、advanced-tests、research-tests、static-analysis，各两项） | 全部通过（见 §9.5） |
 
 ### 9.2 Docker 验收（最终镜像）
 
@@ -252,7 +252,11 @@ scripts/ops/restore.sh <name> --yes              # 校验 → 恢复 → 再校�
 
 ### 9.5 全量测试
 
-（最终结果在 CI 通过后补充到本节。）
+| 检查 | 结果 |
+|---|---|
+| 本地全量 `pytest tests --ignore=tests/research`（独立测试数据库） | **922 passed, 12 skipped, 0 failed**（12 分 30 秒） |
+| 跳过原因 | 10 项需要 Windows `cmd.exe`（启动器执行测试）；1 项需要 Node 24 与 ZKP 依赖（本地跳过，CI 的 application-tests 中启用）；1 项冷备份 Docker 测试需要显式开启 |
+| CI（提交 `cac2f1c`） | 8 项检查全部通过：application-tests ×2、advanced-tests ×2、research-tests ×2、static-analysis ×2 |
 
 ## 10. 当前限制
 
