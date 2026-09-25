@@ -66,6 +66,9 @@ from app.services.permissions import PermissionDenied
 from app.services.security import SecuritySettings, record_security_event
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+VERSION_FILE = Path(__file__).resolve().parents[1] / "VERSION"
+# The release version; the Docker image copies VERSION next to app/.
+APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "1.0.0"
 
 
 def _flag(name: str, *, default: str) -> bool:
@@ -276,7 +279,7 @@ def create_app(
 
     application = FastAPI(
         title="DAIBM-SCF Minimal MVP",
-        version="0.7.0",
+        version=APP_VERSION,
         description=(
             "Scenario demonstrator for an auditable supply-chain finance "
             "risk loop."

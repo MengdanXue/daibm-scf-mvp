@@ -383,7 +383,9 @@ def test_health_rejects_an_invalid_ledger(client):
 
 
 def test_integrated_application_version_advances_after_acceptance(client):
-    assert client.get("/openapi.json").json()["info"]["version"] == "0.7.0"
+    version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+    assert version == "1.0.0"
+    assert client.get("/openapi.json").json()["info"]["version"] == version
 
 
 def test_ci_runs_research_suite_in_a_separate_pinned_environment():
