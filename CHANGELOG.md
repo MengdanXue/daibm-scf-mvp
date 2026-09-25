@@ -34,6 +34,18 @@ All notable changes of DAIBM-SCF. Versions follow semantic versioning from v1.0.
 ### Fixed
 - Decision lineage of a not-yet-funded application was readable across organizations.
 - A financier of any bank could open a facility on any approved application.
+- `scripts/perf_baseline.py` no longer hard-codes the password of its throwaway
+  benchmark accounts; a fresh one is generated per run.
+- Wide tables no longer stretch governance pages beyond the viewport
+  (risk detail, dataset snapshots, rule center); they scroll inside their panel.
+
+### Documentation (release & showcase)
+- README rewritten as the product homepage: one-line positioning, core
+  capabilities, four-layer architecture, demo flow, quick start, documentation map.
+- `docs/demo/DEMO_SCRIPT.md` (10-minute demo), `docs/demo/DATASET_OVERVIEW.md`
+  (frozen demo dataset), `docs/product/screenshots/` (eight product pages).
+- `FINAL_PRODUCT_REPORT.md`: positioning, architecture, features, AI and data
+  governance, security, multi-tenancy, deployment, test results, limits, roadmap.
 
 ## [0.9.0] — Phase 4 Enterprise Readiness
 Multi-tenant facilities, alerts, tasks and outcomes; `PermissionService`;

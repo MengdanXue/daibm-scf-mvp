@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import statistics
 import sys
 import tempfile
@@ -65,7 +66,8 @@ CLOSED = 800
 OVERDUE = 50
 OUTCOMES = 5000
 AUDIT_EVENTS = 10000
-PASSWORD = "Perf-Baseline-2026!"
+# Throwaway accounts of the temporary benchmark database: a fresh password per run.
+PASSWORD = f"Pf-{secrets.token_hex(8)}-Aa1!"
 ENGINE = "transparent_logistic_baseline_v0.1"
 
 
