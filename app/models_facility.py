@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    FetchedValue,
     BigInteger,
     CheckConstraint,
     Date,
@@ -27,6 +28,9 @@ from app.models import Base
 
 class FinancingFacilityModel(Base):
     __tablename__ = "financing_facilities"
+    # The database fills organization_id when omitted; it is read on access
+    # rather than via INSERT ... RETURNING (keeps pre-0020 schemas insertable).
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         CheckConstraint(
             "principal > 0",
@@ -114,6 +118,15 @@ class FinancingFacilityModel(Base):
     disbursed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     repaid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The lending organization that owns the facility (tenant boundary).
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        # Defaults to the creator's organization in the database when omitted.
+        server_default=FetchedValue(),
+    )
 
 
 Index("ix_financing_facilities_request_id", FinancingFacilityModel.request_id)

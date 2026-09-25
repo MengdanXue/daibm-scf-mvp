@@ -1,6 +1,113 @@
-# DAIBM-SCF Demo MVP
+# DAIBM-SCF
 
-Integrated application `v0.6` · Research Core `v0.4` / 集成应用 `v0.6` · 科研核心 `v0.4`
+**供应链金融 AI 风险管理平台原型** · Supply-chain finance AI risk management platform prototype
+
+`v1.0.0` · FastAPI + PostgreSQL 17 · 俄/中双语界面 · Docker 一键启动 · 900+ 项自动化测试
+
+![风险驾驶舱 / Risk dashboard](docs/product/screenshots/02-risk-dashboard.png)
+
+## 一分钟了解 / At a glance
+
+DAIBM-SCF 把供应链金融的一笔融资从**申请**、**AI 风险评估**、**授信放款**、**还款与逾期**，一路追踪到**预警处置**、
+**结果反馈**和**模型更新**，放在同一个平台里完成。平台面向四类使用者：
+
+- **企业用户**（供应商、核心企业）：提交与确认融资申请、还款；
+- **放款机构**（融资方、风险经理）：评估、审批、放款、盯风险、处理预警与任务；
+- **审计员**：复核、录入业务结果、治理模型、查审计；
+- **管理员**：组织与用户、配置、运维。
+
+平台的三个特点：
+- **可追溯**：每一次决策都能追溯到模型版本、训练数据快照和具体的训练样本；每个操作都写入哈希链审计账本，任何篡改都能被检测出来。
+- **可治理**：AI 模型只有通过独立验证才能上线，可审批、可回滚。
+- **隔离**：多家放款机构共用平台，数据与模型严格隔离。
+
+> 这是研究型产品原型：放款和还款是受控模拟（controlled financing lifecycle simulation），不发起真实银行转账；
+> 演示数据为合成数据。
+
+## 核心能力 / Core capabilities
+
+| 能力 | 做什么 | 在哪里看 |
+|---|---|---|
+| **融资生命周期管理** | 申请 → 交易确认 → 评估 → 审批 → 放款 → 分期还款；逾期、处置、重组、违约、追偿、核销、结清，精确到分的状态机 | 业务工作台 · 融资生命周期 |
+| **AI 风险评估** | 可解释的透明基线评分 + 按放款机构训练的 Platt 校准；每次评分记录输入哈希、模型版本与回退原因 | 申请详情 · 风险详情 |
+| **模型生命周期治理** | DRAFT → EVALUATING → CANDIDATE → ACTIVE → ROLLED_BACK / RETIRED；独立的时间外验证门槛、人工审批、回滚、决策血缘 | 模型中心 |
+| **数据治理** | 业务结果复核、排除与恢复、替代修订；训练资格预览；不可变数据快照，精确记录每次训练读取的数据 | 结果治理 · 数据快照 |
+| **风险预警** | 风险驾驶舱、版本化规则、自动检测、预警流转（指派 → 处理 → 解决 → 审核关闭）、风险任务 | 风险驾驶舱 · 预警中心 · 任务中心 |
+| **多组织隔离** | 申请绑定放款机构；融资、预警、任务、结果、快照、模型按组织归属；数据库层拒绝跨组织数据血缘 | 所有页面（按登录组织） |
+| **审计追踪** | 哈希链账本、篡改检测与恢复、安全事件（登录、越权、管理员操作）、完整状态转移历史 | 可信审计账本 · 平台管理 |
+| **备份恢复** | 一条命令备份数据库、审计数据与模型工件，恢复前后都做哈希校验；健康检查、指标、自动重启 | 运维监控 · `scripts/ops/` |
+
+## 系统架构 / Architecture
+
+```text
+┌──────────────────────────── Business Layer 业务层 ────────────────────────────┐
+│ 融资申请工作流（五角色、放款机构绑定）· 融资生命周期状态机 · 还款/逾期/违约/核销     │
+└───────────────────────────────────────┬───────────────────────────────────────┘
+                                        ↓
+┌──────────────────────── Risk Intelligence Layer 风险智能层 ────────────────────┐
+│ 透明基线评分 · 按组织的 Platt 校准推理 · 风险驾驶舱 · 规则检测 · 预警与任务 · 研究核心（TGNN/ONNX） │
+└───────────────────────────────────────┬───────────────────────────────────────┘
+                                        ↓
+┌────────────────────────── AI Governance Layer AI 治理层 ───────────────────────┐
+│ 业务结果复核与纠正 · 训练资格 · 数据快照 · 模型注册表与状态机 · 独立验证门槛 · 决策血缘   │
+└───────────────────────────────────────┬───────────────────────────────────────┘
+                                        ↓
+┌─────────────────── Security & Operations Layer 安全与运维层 ───────────────────┐
+│ PermissionService（角色×组织×归属）· 会话与锁定 · 安全事件 · 哈希链账本 · 配置中心     │
+│ 健康检查与指标 · 哈希校验备份恢复 · Docker 健康检查与自动重启 · PostgreSQL 触发器约束    │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+单体 FastAPI 应用 + PostgreSQL 17。后台任务在进程内运行：校准训练 worker 和风险规则监控，不依赖消息队列。
+可选模块：Fabric 哈希锚定和 ZKP 发票上限证明（`advanced/`）。详见 [FINAL_PRODUCT_REPORT.md](FINAL_PRODUCT_REPORT.md)。
+
+## 演示流程 / Demo flow
+
+```text
+企业申请 → 风险评估 → 授信 → 还款 → 逾期 → 预警 → 处置 → 结果反馈 → 模型更新
+supplier   financier   financier  supplier  financier  系统规则  risk     auditor    校准 worker
+            (模型评分)  (审批放款)                      (自动检测) (任务)   (录入结果)  (训练→验证→激活)
+```
+
+10 分钟演示讲稿：[docs/demo/DEMO_SCRIPT.md](docs/demo/DEMO_SCRIPT.md) ·
+演示数据说明：[docs/demo/DATASET_OVERVIEW.md](docs/demo/DATASET_OVERVIEW.md) ·
+截图：[docs/product/screenshots/](docs/product/screenshots/)
+
+## 快速开始 / Quick start
+
+```bash
+scripts/ops/init-env.sh                          # 生成 .env：随机数据库密码与演示密码（会打印出来）
+docker compose -p daibm-scf-mvp up -d --build    # 首次启动约 1 分钟，自动生成演示数据
+# 打开 http://127.0.0.1:8010 ，用 .env 中的 DAIBM_DEMO_PASSWORD 登录
+```
+
+Windows：双击 `start-demo.cmd`。演示账号如下：
+
+| 角色 | 账号 | 典型操作 |
+|---|---|---|
+| 管理员 admin | `admin.demo` | 平台管理、配置中心、风险规则、运维监控 |
+| 风险经理 risk manager | `risk.demo` | 风险驾驶舱、预警与任务处理、违约处置 |
+| 审计员 auditor | `auditor.demo` | 审计账本、结果治理、模型激活与回滚 |
+| 融资方 | `financier.demo` | 风险评估、审批、放款、确认还款 |
+| 企业用户 | `supplier.demo`、`core.demo`；演示企业 `supplier.normal.demo`、`supplier.watch.demo`、`supplier.default.demo` | 申请、确认交易、还款 |
+
+## 文档导航 / Documentation
+
+| 文档 | 内容 |
+|---|---|
+| [FINAL_PRODUCT_REPORT.md](FINAL_PRODUCT_REPORT.md) | 产品定位、架构、AI/数据治理、安全、多租户、测试、限制、路线 |
+| [USER_GUIDE.md](USER_GUIDE.md) | 按角色的操作指南 |
+| [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | 环境、配置、启动、初始化、备份恢复、升级 |
+| [docs/demo/DEMO_SCRIPT.md](docs/demo/DEMO_SCRIPT.md) · [DATASET_OVERVIEW.md](docs/demo/DATASET_OVERVIEW.md) | 10 分钟演示与演示数据 |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) · [CHANGELOG.md](CHANGELOG.md) · [V1_RELEASE_REPORT.md](V1_RELEASE_REPORT.md) | 发布说明、变更、v1 验收 |
+| [docs/performance/PERF_BASELINE.md](docs/performance/PERF_BASELINE.md) | 性能基线 |
+| [docs/thesis-traceability.md](docs/thesis-traceability.md) | 论文到实现的对照 |
+
+---
+
+# 详细说明 / Details
+
+以下为原型的详细说明（俄/中双语），包括答辩启动器、研究核心复现、可选 Fabric 与 ZKP 模式和边界说明。
 
 Двуязычный демонстрационный прототип магистерской диссертации: русский интерфейс используется по умолчанию, китайский включается одной кнопкой. Система показывает полный контур одобрения, риск-контроля и аудита: «заявка → оценка риска → решение → контрольное действие → проверяемая запись».
 
@@ -24,7 +131,7 @@ Integrated application `v0.6` · Research Core `v0.4` / 集成应用 `v0.6` · �
 
 ### Ролевой вход / 角色登录
 
-После запуска открывается настоящая страница входа. Все роли используют пароль `Demo123!` / 启动后首先进入真实登录页，全部角色使用密码 `Demo123!`：
+После запуска открывается настоящая страница входа. Все роли используют пароль из переменной `DAIBM_DEMO_PASSWORD` (файл `.env`; `start-demo.cmd` при первом запуске генерирует случайный пароль и выводит его) / 启动后首先进入真实登录页，全部角色使用 `.env` 中 `DAIBM_DEMO_PASSWORD` 设置的密码（`start-demo.cmd` 首次启动时随机生成并显示；代码中不含固定密码）。部署与运维见 [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)：
 
 | Роль / 角色 | Учётная запись / 账户 | Основное действие / 主要操作 |
 |---|---|---|
@@ -129,6 +236,8 @@ Offline research pipeline
 
 - `GET /api/health` — PostgreSQL и целостность реестра / PostgreSQL 与账本健康状态；
 - `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` — вход, выход и текущая роль / 登录、退出与当前角色；
+- `GET /api/v1/risk/dashboard`, `/api/v1/risk/alerts` (+ `scan`, `assign`, `start`, `resolve`, `close`, `reopen`), `/api/v1/risk/tasks` (+ `start`, `notes`, `result`, `complete`), `/api/v1/risk/rules` (+ `/{key}/versions`), `/api/v1/risk/facilities/{id}` — операционный риск-контур: панель, оповещения, задачи, версионируемые правила, риск-профиль / 风险运营：驾驶舱、预警中心、任务中心、版本化风险规则与融资风险详情（新增 `admin.demo` 管理员；`RISK_MONITOR_INTERVAL_SECONDS` 控制周期检测，见 [PHASE3_RISK_OPERATIONS_REPORT.md](PHASE3_RISK_OPERATIONS_REPORT.md)）；
+- `GET /api/v1/outcome-governance/overview`, `GET /api/v1/outcome-governance/review-queue`, `POST /api/v1/outcomes/{id}/review`, `GET /api/v1/outcomes/{id}/review-history`, `GET /api/v1/outcome-governance/eligibility`, `GET /api/v1/dataset-snapshots[/{id}]`, `GET /api/v1/risk-decisions/{id}/lineage` — управление данными результатов: проверка, единая точка допуска к обучению, неизменяемые снимки данных и трассировка решения / 结果数据治理：审核、统一训练资格入口、不可变训练数据快照与“决策 → 模型 → 快照 → 结果”追溯（`OUTCOME_MANUAL_REVIEW=true` 时规则通过的结果需人工审核，见 [PHASE2.2_OUTCOME_GOVERNANCE_REPORT.md](PHASE2.2_OUTCOME_GOVERNANCE_REPORT.md)）；
 - `GET/POST /api/v1/model-versions`, `GET /api/v1/model-versions/{id}`, `POST /api/v1/model-versions/{id}/activate`, `POST /api/v1/model-versions/{id}/rollback`, `GET /api/v1/model-versions/activation-history` — версии моделей: регистрация, оценка, активация с проверкой хеша, откат и журнал / 模型版本注册表：注册、评估、校验哈希后激活、回滚与激活历史（推理按 scope 查询 ACTIVE 版本；`CALIBRATION_AUTO_PROMOTION=false` 时候选需审计员人工激活，见 [PHASE2.1_MODEL_REGISTRY_REPORT.md](PHASE2.1_MODEL_REGISTRY_REPORT.md)）；
 - `GET /api/v1/model-registry`, `POST /api/v1/model-registry/calibration/{id}/retire`, `GET /api/v1/outcome-governance/summary`, `POST /api/v1/outcomes/{id}/supersede`, `GET /api/v1/outcomes/{id}/lineage`, `GET /api/v1/applications/{id}/risk-decisions` — модельный реестр, проверка результатов и аудит решений / 模型注册表、结果资格审查与风险决策审计（见 [docs/product/model-governance.md](docs/product/model-governance.md)）；
 - `GET /api/v1/dashboard`, `GET /api/v1/tasks` — ролевые показатели и очередь задач / 角色指标与待办；

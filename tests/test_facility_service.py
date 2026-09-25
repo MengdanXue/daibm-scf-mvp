@@ -61,17 +61,36 @@ def _users(session_factory) -> dict[str, AuthenticatedUser]:
     }
 
 
+_LENDER = object()
+
+
 def _approved_application(
     session_factory,
     users: dict[str, AuthenticatedUser],
     *,
     amount: Decimal = Decimal("1000.00"),
+    lender: object = _LENDER,
 ) -> uuid.UUID:
+    """An approved, audited application addressed to the financier's organization.
+
+    ``lender=None`` writes no lender column (schemas before revision 0021).
+    """
+
     request_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
+    extra = (
+        {}
+        if lender is None
+        else {
+            "lender_organization_id": (
+                users["financier.demo"].organization_id if lender is _LENDER else lender
+            )
+        }
+    )
     with session_factory.begin() as session:
         session.add(
             FinancingRequestModel(
+                **extra,
                 request_id=request_id,
                 created_at=now,
                 updated_at=now,

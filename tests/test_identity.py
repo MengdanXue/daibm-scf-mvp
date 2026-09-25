@@ -40,13 +40,13 @@ def test_password_hash_uses_unique_salts_and_rejects_wrong_password():
     assert verify_password("wrong-password", first_salt, first_hash) is False
 
 
-def test_demo_account_seed_is_idempotent_and_assigns_five_roles(session_factory):
+def test_demo_account_seed_is_idempotent_and_assigns_every_role(session_factory):
     service, _ = seeded_service(session_factory)
 
     service.seed_demo_accounts()
 
     with session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(UserModel)) == 5
+        assert session.scalar(select(func.count()).select_from(UserModel)) == 6
         assert (
             session.scalar(select(func.count()).select_from(OrganizationModel))
             == 4
@@ -58,6 +58,7 @@ def test_demo_account_seed_is_idempotent_and_assigns_five_roles(session_factory)
         "financier",
         "risk_manager",
         "auditor",
+        "admin",
     }
 
 

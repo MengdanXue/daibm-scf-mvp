@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -113,6 +114,8 @@ Index("ix_actual_outcomes_model_version_id", ActualOutcomeModel.model_version_id
 
 class CalibrationRunModel(Base):
     __tablename__ = "calibration_runs"
+    # organization_id is read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         CheckConstraint(
             "sample_count >= 1 AND positive_count >= 0 AND negative_count >= 0 "
@@ -244,6 +247,20 @@ class CalibrationRunModel(Base):
         UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT")
     )
     retirement_reason: Mapped[str | None] = mapped_column(Text)
+    dataset_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("training_dataset_snapshots.snapshot_id", ondelete="RESTRICT"),
+        index=True,
+    )
+    # Owning (lending) organization; the database fills it from the lineage and
+    # rejects rows whose lineage belongs to another organization.
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=FetchedValue(),
+    )
 
 
 Index("ix_calibration_runs_completed_at", CalibrationRunModel.completed_at.desc())
@@ -254,6 +271,7 @@ Index(
 )
 Index(
     "uq_calibration_runs_active_scope",
+    CalibrationRunModel.organization_id,
     CalibrationRunModel.deployment_scope,
     unique=True,
     postgresql_where=text("deployment_status = 'active'"),

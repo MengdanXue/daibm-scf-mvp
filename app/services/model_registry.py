@@ -28,21 +28,22 @@ from app.domain.governance import (
 from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
 from app.models_governance import CalibrationJobModel, OutcomeCorrectionModel
-from app.models_identity import UserModel
+from app.models_identity import OrganizationModel, UserModel
 from app.domain.model_registry import ModelVersionStatus
 from app.models_model_governance import (
     ModelRegistryEventModel,
     RiskModelVersionModel,
     RiskModelVersionTransitionModel,
+    TrainingDatasetSnapshotModel,
 )
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel
 from app.repositories.ledger import LedgerRepository
 from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
+from app.services.permissions import PermissionService
 from app.services.outcomes import OutcomeConflict, OutcomeNotFound, OutcomeService
 
-READ_ROLES = {"auditor", "risk_manager", "financier"}
 
 
 class RegistryError(Exception):
@@ -88,7 +89,9 @@ class ModelRegistryService:
         with self.session_factory() as session:
             runs = list(
                 session.scalars(
-                    select(CalibrationRunModel).order_by(
+                    select(CalibrationRunModel)
+                    .where(self._visible_runs(user))
+                    .order_by(
                         CalibrationRunModel.deployment_scope,
                         CalibrationRunModel.completed_at,
                         CalibrationRunModel.calibration_run_id,
@@ -138,12 +141,17 @@ class ModelRegistryService:
             if kind != "calibration":
                 raise RegistryNotFound(kind)
             run = session.get(CalibrationRunModel, normalized)
-            if run is None:
+            if run is None or not PermissionService.can_access_organization(
+                session, user, run.organization_id
+            ):
                 raise RegistryNotFound(str(model_id))
             runs = list(
                 session.scalars(
                     select(CalibrationRunModel)
-                    .where(CalibrationRunModel.deployment_scope == run.deployment_scope)
+                    .where(
+                        CalibrationRunModel.deployment_scope == run.deployment_scope,
+                        CalibrationRunModel.organization_id == run.organization_id,
+                    )
                     .order_by(
                         CalibrationRunModel.completed_at,
                         CalibrationRunModel.calibration_run_id,
@@ -194,16 +202,32 @@ class ModelRegistryService:
     ) -> dict[str, Any]:
         self._require_read(user)
         with self.session_factory() as session:
-            versions = self.versions.list_versions(session, scope=scope)
-            entries = [self._version_entry(item) for item in versions]
+            versions = self.versions.list_versions(
+                session, scope=scope, visibility=self._visible_versions(user)
+            )
+            snapshots = self._snapshots(session, versions)
+            codes = self._organization_codes(session)
+            entries = [
+                self._version_entry(item, snapshots.get(item.dataset_snapshot_id), codes)
+                for item in versions
+            ]
+            active_by_organization: dict[str, dict[str, Any]] = {}
+            for item in entries:
+                if item["status"] == "ACTIVE":
+                    active_by_organization.setdefault(item["organization_code"], {})[
+                        item["scope"]
+                    ] = item
+            own = codes.get(user.organization_id)
             return {
                 "versions": entries,
-                "active_by_scope": {
-                    item["scope"]: item for item in entries if item["status"] == "ACTIVE"
-                },
+                # The caller's own organization when it lends, else the first
+                # visible one; every visible organization is listed below.
+                "active_by_scope": active_by_organization.get(own or "")
+                or next(iter(active_by_organization.values()), {}),
+                "active_by_organization": active_by_organization,
                 "candidates": [item for item in entries if item["status"] == "CANDIDATE"],
                 "unregistered_artifacts": [
-                    str(run_id) for run_id in self._unregistered_runs(session, scope)
+                    str(run_id) for run_id in self._unregistered_runs(session, scope, user)
                 ],
             }
 
@@ -212,12 +236,15 @@ class ModelRegistryService:
         normalized = self._uuid(version_id)
         with self.session_factory() as session:
             version = self.versions.get(session, normalized)
-            if version is None:
+            if version is None or not PermissionService.can_access_organization(
+                session, user, version.organization_id
+            ):
                 raise RegistryNotFound(str(version_id))
             transitions = self.versions.list_transitions(session, version_ids=[version.id])
             labels = {version.id: self._label(version)}
+            snapshot = self._snapshots(session, [version]).get(version.dataset_snapshot_id)
             return {
-                **self._version_entry(version),
+                **self._version_entry(version, snapshot, self._organization_codes(session)),
                 "artifact_check": self._hash_check(version.artifact_path, version.artifact_hash),
                 "transitions": [self._transition_entry(item, labels) for item in transitions],
             }
@@ -227,11 +254,13 @@ class ModelRegistryService:
     ) -> list[dict[str, Any]]:
         self._require_read(user)
         with self.session_factory() as session:
+            visibility = self._visible_versions(user)
             transitions = self.versions.list_transitions(
-                session, scope=scope, activation_only=True
+                session, scope=scope, activation_only=True, visibility=visibility
             )
             labels = {
-                item.id: self._label(item) for item in self.versions.list_versions(session)
+                item.id: self._label(item)
+                for item in self.versions.list_versions(session, visibility=visibility)
             }
             return [self._transition_entry(item, labels) for item in reversed(transitions)]
 
@@ -258,18 +287,23 @@ class ModelRegistryService:
         normalized = self._uuid(version_id)
         with self.session_factory() as session:
             version = self.versions.get(session, normalized)
-            if version is None:
+            if version is None or not PermissionService.can_access_organization(
+                session, user, version.organization_id
+            ):
                 raise RegistryNotFound(str(version_id))
             if version.status != ModelVersionStatus.ACTIVE.value:
                 raise RegistryConflict(f"model version is {version.status}, not ACTIVE")
             run_id, scope = version.calibration_run_id, version.scope
+            organization_id = version.organization_id
         self._delegate(
             lambda service: service.rollback(
                 run_id, user, scope=scope, reason=f"manual_rollback:{reason_code}"
             )
         )
         with self.session_factory() as session:
-            restored = self.versions.get_active_version(session, scope=scope)
+            restored = self.versions.get_active_version(
+                session, scope=scope, organization_id=organization_id
+            )
             assert restored is not None
             restored_id = restored.id
         return self.get_version(restored_id, user)
@@ -285,7 +319,26 @@ class ModelRegistryService:
             raise RegistryConflict(str(error)) from error
 
     @staticmethod
-    def _unregistered_runs(session: Session, scope: str | None) -> list[uuid.UUID]:
+    def _visible_runs(user: AuthenticatedUser):
+        return PermissionService.organization_filter(user, CalibrationRunModel.organization_id)
+
+    @staticmethod
+    def _visible_versions(user: AuthenticatedUser):
+        return PermissionService.organization_filter(user, RiskModelVersionModel.organization_id)
+
+    @staticmethod
+    def _organization_codes(session: Session) -> dict[uuid.UUID, str]:
+        return {
+            organization_id: code
+            for organization_id, code in session.execute(
+                select(OrganizationModel.organization_id, OrganizationModel.organization_code)
+            )
+        }
+
+    @classmethod
+    def _unregistered_runs(
+        cls, session: Session, scope: str | None, user: AuthenticatedUser
+    ) -> list[uuid.UUID]:
         statement = (
             select(CalibrationRunModel.calibration_run_id)
             .outerjoin(
@@ -295,6 +348,7 @@ class ModelRegistryService:
             .where(
                 RiskModelVersionModel.id.is_(None),
                 CalibrationRunModel.artifact_locator.is_not(None),
+                cls._visible_runs(user),
             )
             .order_by(CalibrationRunModel.completed_at)
         )
@@ -306,9 +360,37 @@ class ModelRegistryService:
     def _label(version: RiskModelVersionModel) -> str:
         return f"{version.model_id}@v{version.version}"
 
-    def _version_entry(self, version: RiskModelVersionModel) -> dict[str, Any]:
+    @staticmethod
+    def _snapshots(
+        session: Session, versions: list[RiskModelVersionModel]
+    ) -> dict[uuid.UUID | None, TrainingDatasetSnapshotModel]:
+        ids = {item.dataset_snapshot_id for item in versions if item.dataset_snapshot_id}
+        if not ids:
+            return {}
+        return {
+            item.snapshot_id: item
+            for item in session.scalars(
+                select(TrainingDatasetSnapshotModel).where(
+                    TrainingDatasetSnapshotModel.snapshot_id.in_(ids)
+                )
+            )
+        }
+
+    def _version_entry(
+        self,
+        version: RiskModelVersionModel,
+        snapshot: TrainingDatasetSnapshotModel | None = None,
+        organization_codes: dict[uuid.UUID, str] | None = None,
+    ) -> dict[str, Any]:
         status = version.status
         return {
+            "organization_id": str(version.organization_id),
+            "organization_code": (organization_codes or {}).get(version.organization_id),
+            "dataset_snapshot_id": str(snapshot.snapshot_id) if snapshot else None,
+            "dataset_snapshot_hash": snapshot.dataset_hash if snapshot else None,
+            "training_outcome_count": snapshot.included_count if snapshot else None,
+            "excluded_outcome_count": snapshot.excluded_count if snapshot else None,
+            "exclusion_reasons": snapshot.exclusion_summary if snapshot else None,
             "id": str(version.id),
             "model_id": version.model_id,
             "version": version.version,
@@ -366,7 +448,7 @@ class ModelRegistryService:
 
     @staticmethod
     def _require_auditor(user: AuthenticatedUser) -> None:
-        if user.role != "auditor":
+        if not PermissionService.allowed(user, "model:change"):
             raise RegistryForbidden("Only auditors can change model versions")
 
     # --- Commands -----------------------------------------------------------
@@ -385,7 +467,9 @@ class ModelRegistryService:
         normalized = self._uuid(model_id)
         with self.session_factory.begin() as session:
             unlocked = session.get(CalibrationRunModel, normalized)
-            if unlocked is None:
+            if unlocked is None or not PermissionService.can_access_organization(
+                session, user, unlocked.organization_id
+            ):
                 raise RegistryNotFound(str(model_id))
             self.repository.acquire_scope_lock(session, scope=unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, normalized)
@@ -430,10 +514,11 @@ class ModelRegistryService:
     @staticmethod
     def _version_labels(runs: list[CalibrationRunModel]) -> dict[uuid.UUID, str]:
         labels: dict[uuid.UUID, str] = {}
-        counters: dict[str, int] = {}
+        counters: dict[tuple[uuid.UUID, str], int] = {}
         for run in sorted(runs, key=lambda item: (item.completed_at, str(item.calibration_run_id))):
-            counters[run.deployment_scope] = counters.get(run.deployment_scope, 0) + 1
-            labels[run.calibration_run_id] = f"platt-{run.deployment_scope}-v{counters[run.deployment_scope]}"
+            key = (run.organization_id, run.deployment_scope)
+            counters[key] = counters.get(key, 0) + 1
+            labels[run.calibration_run_id] = f"platt-{run.deployment_scope}-v{counters[key]}"
         return labels
 
     def _creators(
@@ -498,6 +583,7 @@ class ModelRegistryService:
         return {
             "model_kind": "calibration",
             "model_id": str(run.calibration_run_id),
+            "organization_id": str(run.organization_id),
             "version": version,
             "model_type": "platt_calibration",
             "artifact_path": run.artifact_locator,
@@ -534,6 +620,8 @@ class ModelRegistryService:
         return {
             "model_kind": "research",
             "model_id": str(version.model_version_id),
+            # Synthetic reference research model: platform-level, holds no tenant data.
+            "organization_id": None,
             "version": f"{version.model_name}@{version.semantic_version}",
             "model_type": f"{version.model_family}_{version.inference_format}",
             "artifact_path": version.artifact_locator,
@@ -573,7 +661,7 @@ class ModelRegistryService:
 
     @staticmethod
     def _require_read(user: AuthenticatedUser) -> None:
-        if user.role not in READ_ROLES:
+        if not PermissionService.allowed(user, "model:read"):
             raise RegistryForbidden("Current role cannot view the model registry")
 
     @staticmethod

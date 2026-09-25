@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     Identity,
     Index,
@@ -86,8 +87,14 @@ class OutcomeReviewEventModel(Base):
         CheckConstraint(
             "status <> 'REJECTED' OR reason_code IN ("
             "'SCOPE_MISMATCH', 'DATA_QUALITY_INSUFFICIENT', 'BUSINESS_INCONSISTENT', "
-            "'BUSINESS_EXCEPTION', 'MANUAL_CORRECTION', 'SUPERSEDED_BY_CORRECTION')",
+            "'BUSINESS_EXCEPTION', 'MANUAL_CORRECTION', 'SUPERSEDED_BY_CORRECTION', "
+            "'QUALITY_ANOMALY')",
             name="ck_outcome_review_events_rejection_reason",
+        ),
+        CheckConstraint(
+            "from_status IS NULL OR from_status IN "
+            "('CREATED', 'REVIEWING', 'ELIGIBLE', 'TRAINING_USED', 'REJECTED')",
+            name="ck_outcome_review_events_from_status",
         ),
         CheckConstraint(
             "(status = 'TRAINING_USED') = (calibration_run_id IS NOT NULL)",
@@ -113,6 +120,10 @@ class OutcomeReviewEventModel(Base):
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
+    # Filled by trigger for every event since revision 20260927_0018.
+    from_status: Mapped[str | None] = mapped_column(Text)
+    actor_role: Mapped[str | None] = mapped_column(Text)
+    comment: Mapped[str | None] = mapped_column(Text)
 
 
 Index(
@@ -210,6 +221,8 @@ class RiskModelVersionModel(Base):
     """Registry of record: one governed version per calibration artifact."""
 
     __tablename__ = "risk_model_versions"
+    # organization_id is read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
     __table_args__ = (
         UniqueConstraint("model_id", "version", name="uq_risk_model_versions_model_version"),
         UniqueConstraint("calibration_run_id", name="uq_risk_model_versions_artifact"),
@@ -276,10 +289,25 @@ class RiskModelVersionModel(Base):
     previous_active_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("risk_model_versions.id", ondelete="RESTRICT")
     )
+    dataset_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("training_dataset_snapshots.snapshot_id", ondelete="RESTRICT"),
+        index=True,
+    )
+    # Owning (lending) organization; the database fills it from the lineage and
+    # rejects rows whose lineage belongs to another organization.
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=FetchedValue(),
+    )
 
 
 Index(
     "uq_risk_model_versions_active_scope",
+    RiskModelVersionModel.organization_id,
     RiskModelVersionModel.scope,
     unique=True,
     postgresql_where=text("status = 'ACTIVE'"),
@@ -351,10 +379,100 @@ Index(
 )
 
 
+class TrainingDatasetSnapshotModel(Base):
+    """Immutable record of exactly what one training attempt was allowed to read."""
+
+    __tablename__ = "training_dataset_snapshots"
+    # organization_id is read on access, not via INSERT ... RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "deployment_scope",
+            "dataset_hash",
+            name="uq_training_dataset_snapshots_hash",
+        ),
+        CheckConstraint(
+            "deployment_scope IN ('controlled_demo', 'external_verified', 'mixed')",
+            name="ck_training_dataset_snapshots_scope",
+        ),
+        CheckConstraint(
+            "dataset_hash ~ '^[0-9a-f]{64}$'", name="ck_training_dataset_snapshots_hash"
+        ),
+        CheckConstraint(
+            "included_count >= 0 AND excluded_count >= 0",
+            name="ck_training_dataset_snapshots_counts",
+        ),
+        CheckConstraint(
+            "source IN ('calibration_job', 'migration_backfill')",
+            name="ck_training_dataset_snapshots_source",
+        ),
+    )
+
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    deployment_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    eligibility_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    included_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    excluded_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    exclusion_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("calibration_jobs.job_id", ondelete="RESTRICT"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    # Owning (lending) organization; the database fills it from the lineage and
+    # rejects rows whose lineage belongs to another organization.
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=FetchedValue(),
+    )
+
+
+class TrainingDatasetSnapshotItemModel(Base):
+    __tablename__ = "training_dataset_snapshot_items"
+    __table_args__ = (
+        CheckConstraint(
+            "included = (exclusion_reason IS NULL)",
+            name="ck_training_dataset_snapshot_items_reason",
+        ),
+    )
+
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("training_dataset_snapshots.snapshot_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    outcome_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("actual_outcomes.outcome_id", ondelete="RESTRICT"),
+        primary_key=True,
+        index=True,
+    )
+    included: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    correction_head_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("outcome_corrections.correction_id", ondelete="RESTRICT"),
+        index=True,
+    )
+    review_status: Mapped[str | None] = mapped_column(Text)
+    exclusion_reason: Mapped[str | None] = mapped_column(Text)
+
+
 __all__ = [
     "ModelRegistryEventModel",
     "OutcomeReviewEventModel",
     "RiskDecisionRecordModel",
     "RiskModelVersionModel",
     "RiskModelVersionTransitionModel",
+    "TrainingDatasetSnapshotItemModel",
+    "TrainingDatasetSnapshotModel",
 ]

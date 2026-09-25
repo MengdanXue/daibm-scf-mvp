@@ -4,7 +4,10 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-daibm_scf}
       POSTGRES_USER: ${POSTGRES_USER:-daibm}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
+      # No default: the password comes from the environment or .env
+      # (scripts/ops/init-env.sh / init-env.ps1 generate a random one).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    restart: unless-stopped
     healthcheck:
       test:
         - CMD-SHELL
@@ -26,7 +29,17 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-daibm_scf}
       POSTGRES_USER: ${POSTGRES_USER:-daibm}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daibm_demo_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      DAIBM_ENV: ${DAIBM_ENV:-demo}
+      DAIBM_DEMO_PASSWORD: ${DAIBM_DEMO_PASSWORD:-}
+      # Seeds the stable demo dataset once through the services (needs the demo password).
+      DAIBM_DEMO_DATASET: "${DAIBM_DEMO_DATASET:-true}"
+      DAIBM_COOKIE_SECURE: "${DAIBM_COOKIE_SECURE:-false}"
+      DAIBM_LOGIN_MAX_FAILURES: ${DAIBM_LOGIN_MAX_FAILURES:-5}
+      DAIBM_LOCKOUT_MINUTES: ${DAIBM_LOCKOUT_MINUTES:-15}
+      DAIBM_SESSION_IDLE_MINUTES: ${DAIBM_SESSION_IDLE_MINUTES:-30}
+      DAIBM_SESSION_ABSOLUTE_HOURS: ${DAIBM_SESSION_ABSOLUTE_HOURS:-12}
+      DAIBM_METRICS_TOKEN: ${DAIBM_METRICS_TOKEN:-}
       RESEARCH_ARTIFACT_DIR: /app/artifacts/reference
       RESEARCH_CORE_REQUIRED: "true"
       ZKP_PROVER_URL: ${ZKP_PROVER_URL:-http://zkp-prover:8091}
@@ -34,21 +47,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
     volumes:
       - calibration-artifacts:/app/artifacts/candidates/calibration
+      - ${DAIBM_BACKUP_DIR:-./backups}:/backups
     networks:
       - app
     healthcheck:
+      # Readiness: application, database (at the head revision) and workers.
       test:
         - CMD
         - python
         - -c
         - >-
           import urllib.request;
-          urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)
-      interval: 3s
+          urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ops/health', timeout=2)
+      interval: 5s
       timeout: 3s
       retries: 30
+      start_period: 20s
 
 volumes:
   postgres-data:

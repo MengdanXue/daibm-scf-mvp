@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import ColumnElement, func, select, text
 from sqlalchemy.orm import Session
 
 from app.domain.model_registry import ModelVersionStatus, model_id_for
@@ -30,22 +30,37 @@ class ModelRegistryRepository:
         )
 
     def get_active_version(
-        self, session: Session, *, scope: str, for_update: bool = False
+        self,
+        session: Session,
+        *,
+        scope: str,
+        organization_id: uuid.UUID | None = None,
+        for_update: bool = False,
     ) -> RiskModelVersionModel | None:
+        """The ACTIVE version of one organization and scope (None: any, tests only)."""
+
         statement = select(RiskModelVersionModel).where(
             RiskModelVersionModel.scope == scope,
             RiskModelVersionModel.status == ModelVersionStatus.ACTIVE.value,
         )
+        if organization_id is not None:
+            statement = statement.where(RiskModelVersionModel.organization_id == organization_id)
         if for_update:
             statement = statement.with_for_update()
         return session.scalar(statement)
 
     def list_versions(
-        self, session: Session, *, scope: str | None = None
+        self,
+        session: Session,
+        *,
+        scope: str | None = None,
+        visibility: ColumnElement[bool] | None = None,
     ) -> list[RiskModelVersionModel]:
         statement = select(RiskModelVersionModel).order_by(
             RiskModelVersionModel.scope, RiskModelVersionModel.version.desc()
         )
+        if visibility is not None:
+            statement = statement.where(visibility)
         if scope is not None:
             statement = statement.where(RiskModelVersionModel.scope == scope)
         return list(session.scalars(statement))
@@ -57,6 +72,7 @@ class ModelRegistryRepository:
         version_ids: list[uuid.UUID] | None = None,
         scope: str | None = None,
         activation_only: bool = False,
+        visibility: ColumnElement[bool] | None = None,
     ) -> list[RiskModelVersionTransitionModel]:
         statement = (
             select(RiskModelVersionTransitionModel)
@@ -72,6 +88,8 @@ class ModelRegistryRepository:
             )
         if scope is not None:
             statement = statement.where(RiskModelVersionModel.scope == scope)
+        if visibility is not None:
+            statement = statement.where(visibility)
         if activation_only:
             statement = statement.where(
                 (RiskModelVersionTransitionModel.to_status == ModelVersionStatus.ACTIVE.value)
@@ -125,6 +143,8 @@ class ModelRegistryRepository:
             created_by=created_by,
             created_by_user_id=created_by_user_id,
             created_at=now,
+            dataset_snapshot_id=run.dataset_snapshot_id,
+            organization_id=run.organization_id,
         )
         session.add(version)
         session.flush()

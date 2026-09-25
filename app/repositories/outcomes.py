@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import and_, exists, func, or_, select, text, true
 from sqlalchemy.orm import Session, aliased
@@ -41,6 +42,42 @@ def review_eligible() -> ColumnElement[bool]:
 def is_effective() -> ColumnElement[bool]:
     successor = aliased(ActualOutcomeModel)
     return ~exists().where(successor.supersedes_outcome_id == ActualOutcomeModel.outcome_id)
+
+
+def rule_reason_expression():
+    """Live re-check of the database eligibility rules (NULL when they pass)."""
+
+    return func.outcome_eligibility_reason(ActualOutcomeModel.outcome_id)
+
+
+def training_rules_pass() -> ColumnElement[bool]:
+    return and_(is_effective(), rule_reason_expression().is_(None))
+
+
+def tenant_outcomes(organization_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """Outcomes whose facility belongs to ``organization_id`` (no filter for None)."""
+
+    if organization_id is None:
+        return true()
+    return ActualOutcomeModel.facility_id.in_(
+        select(FinancingFacilityModel.facility_id).where(
+            FinancingFacilityModel.organization_id == organization_id
+        )
+    )
+
+
+def _latest_correction(column):
+    return (
+        select(column)
+        .where(OutcomeCorrectionModel.outcome_id == ActualOutcomeModel.outcome_id)
+        .order_by(
+            OutcomeCorrectionModel.recorded_at.desc(),
+            OutcomeCorrectionModel.correction_id.desc(),
+        )
+        .limit(1)
+        .correlate(ActualOutcomeModel)
+        .scalar_subquery()
+    )
 
 
 class OutcomeRepository:
@@ -378,11 +415,54 @@ class OutcomeRepository:
             )
         )
 
+    def eligibility_population(
+        self,
+        session: Session,
+        *,
+        scope: str,
+        organization_id: uuid.UUID | None = None,
+    ) -> list[tuple[Any, ...]]:
+        """Every outcome of the scope with the facts the eligibility service judges.
+
+        Rows: (outcome, correction head id, correction head action, review
+        status, review reason, live rule reason, is effective).
+        """
+
+        provenance = self._provenance_for_scope(scope)
+        review_reason = (
+            select(OutcomeReviewEventModel.reason_code)
+            .where(OutcomeReviewEventModel.outcome_id == ActualOutcomeModel.outcome_id)
+            .order_by(OutcomeReviewEventModel.event_id.desc())
+            .limit(1)
+            .correlate(ActualOutcomeModel)
+            .scalar_subquery()
+        )
+        return [
+            tuple(row)
+            for row in session.execute(
+                select(
+                    ActualOutcomeModel,
+                    _latest_correction(OutcomeCorrectionModel.correction_id),
+                    _latest_correction(OutcomeCorrectionModel.action),
+                    review_status_expression(),
+                    review_reason,
+                    rule_reason_expression(),
+                    is_effective(),
+                )
+                .where(
+                    ActualOutcomeModel.provenance == provenance,
+                    tenant_outcomes(organization_id),
+                )
+                .order_by(ActualOutcomeModel.outcome_id)
+            )
+        ]
+
     def list_eligible_outcomes(
         self,
         session: Session,
         *,
         scope: str,
+        organization_id: uuid.UUID | None = None,
     ) -> list[ActualOutcomeModel]:
         provenance = self._provenance_for_scope(scope)
         latest_action = (
@@ -403,8 +483,10 @@ class OutcomeRepository:
                 select(ActualOutcomeModel)
                 .where(
                     ActualOutcomeModel.provenance == provenance,
+                    tenant_outcomes(organization_id),
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
                     review_eligible(),
+                    training_rules_pass(),
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
@@ -415,6 +497,7 @@ class OutcomeRepository:
         session: Session,
         *,
         scope: str,
+        organization_id: uuid.UUID | None = None,
     ) -> list[tuple[ActualOutcomeModel, uuid.UUID | None]]:
         provenance = self._provenance_for_scope(scope)
         latest_id = (
@@ -449,8 +532,10 @@ class OutcomeRepository:
                 select(ActualOutcomeModel, latest_id.label("correction_head_id"))
                 .where(
                     ActualOutcomeModel.provenance == provenance,
+                    tenant_outcomes(organization_id),
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
                     review_eligible(),
+                    training_rules_pass(),
                 )
                 .order_by(ActualOutcomeModel.outcome_id)
             )
@@ -461,6 +546,7 @@ class OutcomeRepository:
         session: Session,
         *,
         scope: str,
+        organization_id: uuid.UUID | None = None,
     ) -> int:
         provenance = self._provenance_for_scope(scope)
         latest_action = (
@@ -482,6 +568,7 @@ class OutcomeRepository:
                 .select_from(ActualOutcomeModel)
                 .where(
                     ActualOutcomeModel.provenance == provenance,
+                    tenant_outcomes(organization_id),
                     latest_action == "EXCLUDE",
                 )
             )
@@ -517,6 +604,7 @@ class OutcomeRepository:
                         ActualOutcomeModel.provenance != provenance,
                         latest_action == "EXCLUDE",
                         ~review_eligible(),
+                        ~training_rules_pass(),
                     )
                 ),
             )
@@ -645,12 +733,18 @@ class OutcomeRepository:
         dataset_sha256: str,
         *,
         scope: str,
+        organization_id: uuid.UUID | None = None,
     ) -> CalibrationRunModel | None:
         self._provenance_for_scope(scope)
         return session.scalar(
             select(CalibrationRunModel).where(
                 CalibrationRunModel.dataset_sha256 == dataset_sha256,
                 CalibrationRunModel.deployment_scope == scope,
+                (
+                    CalibrationRunModel.organization_id == organization_id
+                    if organization_id is not None
+                    else true()
+                ),
                 CalibrationRunModel.artifact_schema == "daibm.platt-calibration.v4",
                 CalibrationRunModel.status == "eligible_candidate",
                 CalibrationRunModel.deployment_status.in_(
@@ -671,11 +765,17 @@ class OutcomeRepository:
         *,
         scope: str,
     ) -> bool:
+        organization_id = session.scalar(
+            select(CalibrationRunModel.organization_id).where(
+                CalibrationRunModel.calibration_run_id == run_id
+            )
+        )
         current = {
             (outcome.outcome_id, correction_head_id)
             for outcome, correction_head_id in self.list_eligible_outcomes_with_heads(
                 session,
                 scope=scope,
+                organization_id=organization_id,
             )
         }
         persisted = {
@@ -716,13 +816,22 @@ class OutcomeRepository:
         session: Session,
         *,
         scope: str,
+        organization_id: uuid.UUID | None = None,
         for_update: bool = False,
     ) -> CalibrationRunModel | None:
+        """The ACTIVE run of one organization and scope.
+
+        ``organization_id=None`` is only meaningful while a single
+        organization has an ACTIVE run in the scope (tests and diagnostics).
+        """
+
         statement = select(CalibrationRunModel).where(
             CalibrationRunModel.deployment_status == "active"
         )
         self._provenance_for_scope(scope)
         statement = statement.where(CalibrationRunModel.deployment_scope == scope)
+        if organization_id is not None:
+            statement = statement.where(CalibrationRunModel.organization_id == organization_id)
         if for_update:
             statement = statement.with_for_update()
         return session.scalar(statement)
@@ -771,6 +880,7 @@ class OutcomeRepository:
         limit: int,
         offset: int,
         include_superseded: bool = False,
+        facility_ids: Any = None,
     ) -> list[tuple[ActualOutcomeModel, bool, str | None, str | None]]:
         latest_action = (
             select(OutcomeCorrectionModel.action)
@@ -791,6 +901,7 @@ class OutcomeRepository:
                 and_(
                     or_(latest_action.is_(None), latest_action == "REINSTATE"),
                     review_eligible(),
+                    training_rules_pass(),
                 ).label("effective_training_eligible"),
                 review_status_expression().label("review_status"),
                 select(OutcomeReviewEventModel.reason_code)
@@ -802,6 +913,9 @@ class OutcomeRepository:
                 .label("review_reason"),
             )
             .where(true() if include_superseded else is_effective())
+            .where(
+                true() if facility_ids is None else ActualOutcomeModel.facility_id.in_(facility_ids)
+            )
             .order_by(
                 ActualOutcomeModel.recorded_at.desc(),
                 ActualOutcomeModel.outcome_id,
@@ -827,10 +941,12 @@ class OutcomeRepository:
         *,
         limit: int,
         offset: int,
+        visibility: ColumnElement[bool] | None = None,
     ) -> list[CalibrationRunModel]:
         return list(
             session.scalars(
                 select(CalibrationRunModel)
+                .where(visibility if visibility is not None else true())
                 .order_by(
                     CalibrationRunModel.completed_at.desc(),
                     CalibrationRunModel.calibration_run_id,
@@ -926,7 +1042,9 @@ class OutcomeRepository:
         ).first()
         return (row[0], row[1]) if row is not None else (None, None)
 
-    def review_summary(self, session: Session) -> list[tuple[str, str | None, str | None, bool, int]]:
+    def review_summary(
+        self, session: Session, *, facility_ids: Any = None
+    ) -> list[tuple[str, str | None, str | None, bool, int]]:
         """(provenance, status, reason, effective, count) over latest review status."""
 
         latest_status = review_status_expression()
@@ -946,7 +1064,13 @@ class OutcomeRepository:
                 latest_reason.label("reason"),
                 effective.label("effective"),
                 func.count(),
-            ).group_by(
+            )
+            .where(
+                ActualOutcomeModel.facility_id.in_(facility_ids)
+                if facility_ids is not None
+                else true()
+            )
+            .group_by(
                 ActualOutcomeModel.provenance, "status", "reason", "effective"
             )
         ).all()

@@ -160,7 +160,7 @@ def test_invalid_active_calibration_falls_back_with_persisted_audit_lineage(
     users = demo_users(session_factory)
 
     class CorruptActiveCalibration:
-        def assess(self, _session, baseline_score, assessment_scope):
+        def assess(self, _session, baseline_score, assessment_scope, organization_id=None):
             return AdaptiveRiskResult(
                 raw_score=baseline_score,
                 final_score=baseline_score,

@@ -167,6 +167,7 @@ def test_default_startup_still_seeds_identities_and_registry(
     with TestClient(application) as client:
         assert client.get("/api/health").status_code == 200
     with session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(UserModel)) == 5
+        # Five workflow roles plus the Phase 3 operations administrator.
+        assert session.scalar(select(func.count()).select_from(UserModel)) == 6
         assert session.scalar(select(func.count()).select_from(OrganizationModel)) == 4
         assert session.scalar(select(func.count()).select_from(DatasetVersionModel)) == 1

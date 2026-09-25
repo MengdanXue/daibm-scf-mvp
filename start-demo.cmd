@@ -10,6 +10,9 @@ if errorlevel 1 goto no_docker
 docker info >nul 2>nul
 if errorlevel 1 goto docker_stopped
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ops\init-env.ps1"
+if errorlevel 1 exit /b 1
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do set "%%A=%%B"
 echo [DAIBM-SCF] Building and starting PostgreSQL and the demo...
 docker compose up --build -d
 if errorlevel 1 exit /b 1
@@ -45,4 +48,5 @@ exit /b 1
 echo [DAIBM-SCF] PostgreSQL and the application are healthy.
 start "" "%DEMO_URL%"
 echo [DAIBM-SCF] Opened %DEMO_URL%
+echo [DAIBM-SCF] Demo accounts use DAIBM_DEMO_PASSWORD from .env: %DAIBM_DEMO_PASSWORD%
 endlocal

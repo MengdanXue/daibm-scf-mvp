@@ -1,0 +1,58 @@
+{
+ "dataset": {
+  "facilities": 1000,
+  "outcomes": 5000,
+  "audit_events": 10002,
+  "active_models": 1
+ },
+ "build_seconds": 65.0,
+ "repeat": 5,
+ "postgres": "17.11",
+ "results": {
+  "dashboard (risk_manager)": {
+   "median_ms": 155.0,
+   "max_ms": 191.0,
+   "queries": 16
+  },
+  "dashboard (admin)": {
+   "median_ms": 121.0,
+   "max_ms": 222.6,
+   "queries": 16
+  },
+  "risk detail (overdue facility)": {
+   "median_ms": 34.3,
+   "max_ms": 34.5,
+   "queries": 37
+  },
+  "alert scan (first, creates alerts)": {
+   "median_ms": 333.3,
+   "max_ms": 333.3,
+   "queries": 359
+  },
+  "alert scan (steady state)": {
+   "median_ms": 19.2,
+   "max_ms": 21.0,
+   "queries": 9
+  },
+  "model lookup (decision-time ACTIVE model)": {
+   "median_ms": 61.4,
+   "max_ms": 75.9,
+   "queries": 1
+  },
+  "model registry list": {
+   "median_ms": 5.7,
+   "max_ms": 11.6,
+   "queries": 4
+  },
+  "outcome list (200 rows)": {
+   "median_ms": 47.4,
+   "max_ms": 52.0,
+   "queries": 1
+  },
+  "eligibility preview (all outcomes)": {
+   "median_ms": 637.3,
+   "max_ms": 718.9,
+   "queries": 2
+  }
+ }
+}

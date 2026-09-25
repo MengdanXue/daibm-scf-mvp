@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ledger import canonical_timestamp
@@ -14,7 +15,10 @@ from app.repositories import FinancingRequestRepository, LedgerRepository
 from app.repositories.ledger import LedgerEventSpec
 from app.risk import BAND_DECISIONS, DECISION_CONTROLS, RiskResult, assess, band_for_score
 from app.schemas import FinancingRequestCreate
+from app.identity import AuthenticatedUser
+from app.models_identity import OrganizationModel
 from app.services.adaptive_risk import AdaptiveRiskInferenceService
+from app.services.permissions import PermissionService
 
 __all__ = ["FinancingService"]
 
@@ -72,28 +76,69 @@ class FinancingService:
     def create_request(
         self,
         request: FinancingRequestCreate,
+        creator: AuthenticatedUser | None = None,
     ) -> dict[str, Any]:
         with self.session_factory.begin() as session:
-            model = self._create_request_in_session(session, request)
+            lender = self._lender_for(session, creator)
+            model = self._create_request_in_session(session, request, lender=lender)
         return self._request_to_dict(model)
 
-    def get_request(self, request_id: str | uuid.UUID) -> dict[str, Any]:
+    def get_request(
+        self, request_id: str | uuid.UUID, viewer: AuthenticatedUser | None = None
+    ) -> dict[str, Any]:
         try:
             normalized_id = uuid.UUID(str(request_id))
         except ValueError as error:
             raise KeyError(str(request_id)) from error
         with self.session_factory() as session:
             model = self.financing_repository.get(session, normalized_id)
-            if model is None:
+            if model is None or (
+                viewer is not None
+                and not PermissionService.can_access_organization(
+                    session, viewer, model.lender_organization_id
+                )
+            ):
                 raise KeyError(str(request_id))
             return self._request_to_dict(model)
 
-    def list_requests(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_requests(
+        self, limit: int = 50, viewer: AuthenticatedUser | None = None
+    ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
             return [
                 self._request_to_dict(model)
-                for model in self.financing_repository.list_recent(session, limit)
+                for model in self.financing_repository.list_recent(
+                    session, limit, visibility=self._visibility(viewer)
+                )
             ]
+
+    @staticmethod
+    def _visibility(viewer: AuthenticatedUser | None):
+        if viewer is None:
+            return None
+        return PermissionService.organization_filter(
+            viewer, FinancingRequestModel.lender_organization_id
+        )
+
+    @staticmethod
+    def _lender_for(session: Session, creator: AuthenticatedUser | None) -> uuid.UUID | None:
+        """A financier lends for its own organization; an auditor's demo case goes
+        to the only lender it audits; a system caller's to the only lender that
+        exists. Otherwise no lender, hence no tenant model, applies."""
+
+        if creator is None:
+            lenders = list(
+                session.scalars(
+                    select(OrganizationModel.organization_id)
+                    .where(OrganizationModel.organization_type == "financier")
+                    .limit(2)
+                )
+            )
+            return lenders[0] if len(lenders) == 1 else None
+        if creator.role == "financier":
+            return creator.organization_id
+        visible = PermissionService.lending_organizations(session, creator)
+        return visible[0] if len(visible) == 1 else None
 
     def list_ledger(self, limit: int = 100) -> list[dict[str, Any]]:
         with self.session_factory() as session:
@@ -103,10 +148,10 @@ class FinancingService:
         with self.session_factory() as session:
             return self.ledger_repository.verify(session)
 
-    def dashboard(self) -> dict[str, Any]:
+    def dashboard(self, viewer: AuthenticatedUser | None = None) -> dict[str, Any]:
         with self.session_factory() as session:
             total, average, decision_counts = self.financing_repository.dashboard_aggregates(
-                session
+                session, visibility=self._visibility(viewer)
             )
             verification = self.ledger_repository.verify(session)
         return {
@@ -126,8 +171,11 @@ class FinancingService:
                 ]
 
         with self.session_factory.begin() as session:
+            # Demo cases belong to the only lending organization, if there is one.
+            lender = self._lender_for(session, None)
             models = [
-                self._create_request_in_session(session, scenario) for scenario in DEMO_SCENARIOS
+                self._create_request_in_session(session, scenario, lender=lender)
+                for scenario in DEMO_SCENARIOS
             ]
         return [self._request_to_dict(model) for model in models]
 
@@ -152,13 +200,17 @@ class FinancingService:
         self,
         session: Session,
         request: FinancingRequestCreate,
+        *,
+        lender: uuid.UUID | None = None,
     ) -> FinancingRequestModel:
         canonical_amount = Decimal(str(request.amount)).quantize(CENT)
         normalized_request = request.model_copy(update={"amount": float(canonical_amount)})
         result = assess(normalized_request)
         # This legacy public/demo workflow has no external-verification authority.
         assessment_scope = "controlled_demo"
-        adaptive = AdaptiveRiskInferenceService().assess(session, result.score, assessment_scope)
+        adaptive = AdaptiveRiskInferenceService().assess(
+            session, result.score, assessment_scope, lender
+        )
         result = replace(
             result, score=adaptive.final_score, band=band_for_score(adaptive.final_score)
         )
@@ -184,6 +236,7 @@ class FinancingService:
             control_action=control_action,
             status="audited",
             version=1,
+            lender_organization_id=lender,
         )
         self.financing_repository.add(session, model)
         events = self._event_specs(normalized_request, result, decision, control_action)

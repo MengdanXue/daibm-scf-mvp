@@ -8,19 +8,19 @@
       researchBoundary: "Демонстрационный прототип на синтетических данных · PostgreSQL · проверяемый журнал событий",
       demoAccess: "Демонстрационный доступ", chooseRole: "Выберите роль", demoRoleGuide: "Порядок демонстрационных ролей", demoRoleSelected: "Выбрана роль: {role}. Проверьте данные и нажмите кнопку входа.", orCredentials: "или введите учётные данные",
       username: "Имя пользователя", password: "Пароль", signIn: "Войти в систему", logout: "Выйти",
-      commonPassword: "Общий пароль демо-ролей:", navWorkflow: "Рабочий контур",
+      commonPassword: "Пароль демо-ролей задаётся при развёртывании (DAIBM_DEMO_PASSWORD).", navWorkflow: "Рабочий контур",
       workflowEyebrow: "РОЛЕВОЙ БИЗНЕС-ПРОЦЕСС", workflowTitle: "Финансирование цепи поставок", refresh: "Обновить данные",
       currentStation: "Текущая рабочая станция", allApplications: "Доступные заявки", myTasks: "Мои задачи",
       activeStatus: "Активных статусов", database: "Хранилище", newApplication: "Новая заявка на финансирование",
       newApplicationHint: "Заполните реквизиты сделки. Заявка сохранится как черновик и будет доступна для подачи.",
-      coreEnterpriseCode: "Код якорной компании", contractNumber: "Номер договора", invoiceNumber: "Номер счёта-фактуры",
+      coreEnterpriseCode: "Код якорной компании", lenderCode: "Финансирующая организация", lender_required: "Выберите финансирующую организацию.", lender_locked: "Финансирующую организацию нельзя изменить после подачи заявки.", contractNumber: "Номер договора", invoiceNumber: "Номер счёта-фактуры",
       amount: "Сумма, CNY", termDays: "Срок, дней", paymentDelay: "Просрочка, дней", counterpartyRisk: "Риск контрагента, 0–1",
       relationshipMonths: "Отношения, месяцев", transactions30d: "Сделок за 30 дней", invoiceMismatch: "Есть расхождение документов",
       saveDraft: "Сохранить черновик", updateDraft: "Сохранить изменения", applicationQueue: "Очередь заявок",
       selectApplication: "Выберите заявку", selectApplicationHint: "Здесь появятся реквизиты, допустимые действия и полная история передачи между ролями.",
       workflowTimeline: "История передачи ответственности", timelineHint: "Каждый переход выполняется атомарно и фиксируется вместе с ролью исполнителя.",
       timelineEmpty: "Выберите заявку, чтобы увидеть историю.", roleSupplier: "Поставщик", roleCoreEnterprise: "Якорная компания",
-      roleFinancier: "Финансист", roleRiskManager: "Риск-менеджер", roleAuditor: "Аудитор",
+      roleFinancier: "Финансист", roleRiskManager: "Риск-менеджер", roleAuditor: "Аудитор", roleAdmin: "Администратор", openRiskDetail: "Риск-профиль", adminMission: "Видит весь портфель, настраивает правила риска и распределяет работу.",
       stageCreate: "Создание и подача", stageConfirm: "Подтверждение сделки", stageDecide: "Оценка и решение", stageControl: "Контроль", stageAudit: "Проверка следа",
       supplierMission: "Создайте заявку, проверьте реквизиты и передайте её якорной компании.",
       coreMission: "Подтвердите реальность договора и счёта-фактуры либо верните заявку поставщику.",
@@ -38,7 +38,7 @@
       confirmTrade: "Подтвердить сделку", returnTrade: "Вернуть поставщику", assessRisk: "Выполнить оценку риска",
       approve: "Одобрить", manualReview: "Ручная проверка", reject: "Отклонить", applyControl: "Зафиксировать контроль",
       auditReview: "Завершить аудит", created: "Черновик сохранён", updated: "Изменения сохранены", actionComplete: "Действие выполнено",
-      sessionExpired: "Сессия завершена. Войдите снова.", loginFailed: "Не удалось войти. Проверьте имя пользователя и пароль.",
+      sessionExpired: "Сессия завершена. Войдите снова.", loginFailed: "Не удалось войти. Проверьте имя пользователя и пароль.", accountLocked: "Учётная запись временно заблокирована после нескольких неудачных попыток входа. Повторите позже.", account_locked: "Учётная запись временно заблокирована.",
       requestFailed: "Операция не выполнена", loading: "Загрузка…", signedIn: "Вход выполнен", taskReady: "требует действия",
       timelineCreate: "Создание заявки", days: "дн.", cancelEdit: "Новый черновик",
       draft: "Черновик", submitted: "Подана", trade_returned: "Возвращена", trade_confirmed: "Сделка подтверждена",
@@ -90,16 +90,16 @@
       loginTitle: "进入业务工作台", loginSubtitle: "五类参与者共同将一笔申请从供应商推进到可验证的审计轨迹。",
       researchBoundary: "基于合成数据的演示原型 · PostgreSQL · 可验证事件日志", demoAccess: "演示访问", chooseRole: "选择角色", demoRoleGuide: "演示角色顺序", demoRoleSelected: "已选择角色：{role}。请检查账户信息后点击登录。",
       orCredentials: "或输入账户信息", username: "用户名", password: "密码", signIn: "登录系统", logout: "退出",
-      commonPassword: "演示角色通用密码：", navWorkflow: "业务工作台", workflowEyebrow: "基于角色的业务流程",
+      commonPassword: "演示角色密码由部署配置 DAIBM_DEMO_PASSWORD 设定。", navWorkflow: "业务工作台", workflowEyebrow: "基于角色的业务流程",
       workflowTitle: "供应链融资", refresh: "刷新数据", currentStation: "当前工作站", allApplications: "可查看申请",
       myTasks: "我的待办", activeStatus: "活跃状态", database: "数据存储", newApplication: "新建融资申请",
-      newApplicationHint: "填写交易信息。申请将先保存为草稿，确认后可提交。", coreEnterpriseCode: "核心企业代码",
+      newApplicationHint: "填写交易信息。申请将先保存为草稿，确认后可提交。", coreEnterpriseCode: "核心企业代码", lenderCode: "融资机构", lender_required: "请选择融资机构。", lender_locked: "申请提交后不能更换融资机构。",
       contractNumber: "合同编号", invoiceNumber: "发票编号", amount: "融资金额，CNY", termDays: "期限，天",
       paymentDelay: "付款延迟，天", counterpartyRisk: "交易对手风险，0–1", relationshipMonths: "合作关系，月",
       transactions30d: "近30天交易数", invoiceMismatch: "存在单据不一致", saveDraft: "保存草稿", updateDraft: "保存修改",
       applicationQueue: "申请队列", selectApplication: "请选择申请", selectApplicationHint: "这里将显示交易信息、当前角色允许的操作和完整交接历史。",
       workflowTimeline: "责任交接历史", timelineHint: "每次状态变更均以原子事务执行，并记录操作角色。", timelineEmpty: "选择申请后查看历史。",
-      roleSupplier: "供应商", roleCoreEnterprise: "核心企业", roleFinancier: "融资方", roleRiskManager: "风险经理", roleAuditor: "审计员",
+      roleSupplier: "供应商", roleCoreEnterprise: "核心企业", roleFinancier: "融资方", roleRiskManager: "风险经理", roleAuditor: "审计员", roleAdmin: "管理员", openRiskDetail: "风险详情", adminMission: "查看全部风险数据、配置风险规则并分派处理任务。",
       stageCreate: "创建与提交", stageConfirm: "交易确认", stageDecide: "评估与决策", stageControl: "风险控制", stageAudit: "审计核验",
       supplierMission: "创建申请、核对交易信息，并提交给核心企业。", coreMission: "确认合同与发票真实性，或将申请退回供应商。",
       financierMission: "执行风险评估、查看模型结果并作出融资决策。", riskMission: "根据决策设置控制措施并写入日志。",
@@ -113,7 +113,7 @@
       edit: "修改草稿", submit: "提交申请", confirmTrade: "确认交易", returnTrade: "退回供应商", assessRisk: "执行风险评估",
       approve: "批准", manualReview: "人工复核", reject: "拒绝", applyControl: "记录控制措施", auditReview: "完成审计",
       created: "草稿已保存", updated: "修改已保存", actionComplete: "操作已完成", sessionExpired: "会话已结束，请重新登录。",
-      loginFailed: "登录失败，请检查用户名和密码。", requestFailed: "操作失败", loading: "加载中……", signedIn: "登录成功",
+      loginFailed: "登录失败，请检查用户名和密码。", accountLocked: "连续登录失败次数过多，账号已被临时锁定，请稍后再试。", account_locked: "账号已被临时锁定。", requestFailed: "操作失败", loading: "加载中……", signedIn: "登录成功",
       taskReady: "需要处理", timelineCreate: "创建申请", days: "天", cancelEdit: "新建草稿",
       draft: "草稿", submitted: "已提交", trade_returned: "已退回", trade_confirmed: "交易已确认", risk_assessed: "风险已评估",
       approved: "已批准", manual_review: "人工复核", rejected: "已拒绝", controlled: "已设置控制", audited: "审计已完成",
@@ -164,7 +164,8 @@
     core_enterprise: { key: "roleCoreEnterprise", mission: "coreMission", seal: "C", color: "#7a5ce0", order: 1 },
     financier: { key: "roleFinancier", mission: "financierMission", seal: "F", color: "#15976c", order: 2 },
     risk_manager: { key: "roleRiskManager", mission: "riskMission", seal: "R", color: "#d48a16", order: 3 },
-    auditor: { key: "roleAuditor", mission: "auditorMission", seal: "A", color: "#b94650", order: 4 }
+    auditor: { key: "roleAuditor", mission: "auditorMission", seal: "A", color: "#b94650", order: 4 },
+    admin: { key: "roleAdmin", mission: "adminMission", seal: "M", color: "#334155", order: 5 }
   };
 
   const STATUS_STAGE = {
@@ -174,7 +175,7 @@
 
   const state = {
     lang: localStorage.getItem("daibm-lang") || "ru", user: null,
-    accounts: [], coreEnterprises: [], dashboard: null, tasks: [],
+    accounts: [], coreEnterprises: [], lenders: [], dashboard: null, tasks: [],
     applications: [], selected: null, editing: null, busy: false,
     facilities: [], selectedFacility: null, facilityPending: false,
     anchors: [], anchorsBusy: false, anchorLastSummary: null,
@@ -300,7 +301,7 @@
     const username = button.dataset.demoUsername;
     const role = ROLE_META[button.dataset.demoRole];
     document.querySelector('#loginForm input[name="username"]').value = username;
-    document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
+    document.querySelector('#loginForm input[name="password"]').focus();
     const announcement = document.querySelector("#demoRoleAnnouncement");
     if (announcement) {
       announcement.textContent = tr("demoRoleSelected").replace("{role}", tr(role?.key || button.dataset.demoRole));
@@ -318,7 +319,7 @@
       document.body.classList.add("authenticated");
       await enterWorkbench();
       notify(tr("signedIn"));
-    } catch (_) {
+    } catch (loginError) {
       if (state.user) {
         try { await wfApi("/api/v1/auth/logout", { method: "POST" }); }
         catch (_) { /* the local rollback still applies */ }
@@ -332,7 +333,7 @@
         document.body.classList.remove("authenticated");
         renderAccounts();
       }
-      errorElement.textContent = tr("loginFailed");
+      errorElement.textContent = loginError?.status === 423 ? tr("accountLocked") : tr("loginFailed");
     } finally {
       setBusy(false);
     }
@@ -357,7 +358,6 @@
     delete document.body.dataset.workflowRole;
     document.querySelector("#loginForm").reset();
     document.querySelector('#loginForm input[name="username"]').value = "supplier.demo";
-    document.querySelector('#loginForm input[name="password"]').value = "Demo123!";
     renderAccounts();
   }
 
@@ -370,9 +370,16 @@
       review: role === "financier" || role === "auditor",
       research: role === "financier" || role === "auditor",
       ledger: role === "auditor",
-      governance: ["auditor", "risk_manager", "financier"].includes(role),
+      governance: ["auditor", "risk_manager", "financier", "admin"].includes(role),
       feedback: role === "auditor" || role === "risk_manager",
-      model: true
+      snapshots: ["auditor", "risk_manager", "financier"].includes(role),
+      model: true,
+      riskdash: ["admin", "risk_manager", "auditor", "financier"].includes(role),
+      alerts: ["admin", "risk_manager", "auditor"].includes(role),
+      tasks: ["admin", "risk_manager", "auditor"].includes(role),
+      rules: ["admin", "risk_manager", "auditor"].includes(role),
+      riskdetail: true,
+      admin: role === "admin" || role === "auditor"
     };
     document.querySelectorAll("[data-view-button]").forEach((button) => {
       button.hidden = !rules[button.dataset.viewButton];
@@ -400,13 +407,18 @@
   async function enterWorkbench() {
     const role = ROLE_META[state.user.role];
     document.body.dataset.workflowRole = state.user.role;
+    document.body.dataset.workflowUserId = state.user.user_id;
+    document.body.dataset.workflowUsername = state.user.username;
     renderCurrentUser();
     document.querySelector("#view-workflow").style.setProperty("--role-color", role.color);
     document.querySelector("#view-facilities").style.setProperty("--role-color", role.color);
     configureRoleNavigation();
-    window.switchView("workflow");
+    window.switchView(state.user.role === "admin" ? "riskdash" : "workflow");
     state.coreEnterprises = state.user.role === "supplier"
       ? await wfApi("/api/v1/organizations/core-enterprises")
+      : [];
+    state.lenders = state.user.role === "supplier"
+      ? await wfApi("/api/v1/organizations/lenders")
       : [];
     await Promise.all([refreshWorkflow(), refreshFacilities(), state.user.role === "auditor" ? refreshAnchors() : Promise.resolve(), state.user.role === "auditor" ? refreshOutcomes() : Promise.resolve()]);
     await refreshLegacyForRole();
@@ -583,6 +595,18 @@
     if (state.coreEnterprises.some(
       (organization) => organization.organization_code === selectedCode
     )) select.value = selectedCode;
+    // The application is addressed to one lending organization.
+    const lenderSelect = document.querySelector(
+      '#applicationForm select[name="lender_organization_code"]'
+    );
+    if (!lenderSelect) return;
+    const selectedLender = state.editing?.lender_organization_code || lenderSelect.value;
+    lenderSelect.innerHTML = state.lenders.map((organization) =>
+      `<option value="${escapeHtml(organization.organization_code)}">${escapeHtml(organization.name)} · ${escapeHtml(organization.organization_code)}</option>`
+    ).join("");
+    if (state.lenders.some(
+      (organization) => organization.organization_code === selectedLender
+    )) lenderSelect.value = selectedLender;
   }
 
   const compactHash = (value) => value ? `${String(value).slice(0, 10)}…${String(value).slice(-8)}` : "—";
@@ -625,7 +649,7 @@
     </div>`;
     container.innerHTML = `<div class="detail-top"><div><span class="status-chip" data-status="${escapeHtml(application.status)}">${escapeHtml(tr(application.status))}</span><h2>${escapeHtml(application.contract_number)}</h2><p>${escapeHtml(application.request_id)}</p></div><div class="detail-version"><span>${escapeHtml(tr("version"))}</span><b>v${application.version}</b></div></div>
       <div class="detail-fields">
-        ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), coreEnterprise)}${detailField(tr("amount"), money(application.amount))}
+        ${detailField(tr("supplier"), application.applicant_id)}${detailField(tr("core"), coreEnterprise)}${detailField(tr("lenderCode"), application.lender_organization_code || "—")}${detailField(tr("amount"), money(application.amount))}
         ${detailField(tr("invoice"), application.invoice_number)}${detailField(tr("term"), `${application.term_days} ${tr("days")}`)}${detailField(tr("paymentDelay"), `${application.features.payment_delay_days} ${tr("days")}`)}
       </div>
       <div class="risk-result"><span>${escapeHtml(tr("risk"))}<strong>${escapeHtml(risk)}</strong></span><span>${escapeHtml(tr("decision"))}<strong>${escapeHtml(application.decision ? tr(application.decision) : "—")}</strong></span></div>
@@ -868,7 +892,7 @@
       : `<p class="facility-empty-copy">${escapeHtml(tr("facilityNoAction"))}</p>`;
     container.innerHTML = `<div class="facility-detail-head">
       <div><span class="status-chip" data-status="${escapeHtml(facility.status)}">${escapeHtml(tr(facility.status))}</span><h2>${exactFacilityMoney(facility.principal, facility.currency)}</h2><p>${escapeHtml(facility.facility_id)}</p></div>
-      <div class="detail-version"><span>${escapeHtml(tr("facilityVersion"))}</span><b>v${facility.version}</b></div>
+      <div class="detail-version"><span>${escapeHtml(tr("facilityVersion"))}</span><b>v${facility.version}</b><button class="btn btn-secondary" type="button" data-open-risk-detail="${escapeHtml(facility.facility_id)}" onclick="window.riskOpsOpenDetail && window.riskOpsOpenDetail(this.dataset.openRiskDetail)">${escapeHtml(tr("openRiskDetail"))}</button></div>
     </div>
     <section id="facilityMoneyRail" class="facility-money-rail" aria-label="Exact facility balance rail">
       <div class="facility-money-flow">
@@ -1030,7 +1054,8 @@
   function formPayload(form) {
     const data = new FormData(form);
     return {
-      core_enterprise_organization_code: data.get("core_enterprise_organization_code"), contract_number: data.get("contract_number"),
+      core_enterprise_organization_code: data.get("core_enterprise_organization_code"),
+      lender_organization_code: data.get("lender_organization_code") || null, contract_number: data.get("contract_number"),
       invoice_number: data.get("invoice_number"), amount: Number(data.get("amount")), term_days: Number(data.get("term_days")),
       payment_delay_days: Number(data.get("payment_delay_days")), counterparty_risk: Number(data.get("counterparty_risk")),
       invoice_mismatch: data.get("invoice_mismatch") === "on", relationship_months: Number(data.get("relationship_months")),
@@ -1058,7 +1083,7 @@
     const application = state.selected;
     state.editing = application;
     const form = document.querySelector("#applicationForm");
-    const values = { ...application.features, core_enterprise_organization_code: application.core_enterprise_organization_code, contract_number: application.contract_number, invoice_number: application.invoice_number, amount: application.amount, term_days: application.term_days };
+    const values = { ...application.features, core_enterprise_organization_code: application.core_enterprise_organization_code, lender_organization_code: application.lender_organization_code, contract_number: application.contract_number, invoice_number: application.invoice_number, amount: application.amount, term_days: application.term_days };
     Object.entries(values).forEach(([name, value]) => {
       const input = form.elements.namedItem(name);
       if (!input) return;
