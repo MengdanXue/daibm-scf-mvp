@@ -23,6 +23,8 @@ from app.services.workflow import (
     DuplicateInvoiceClaim,
     ForbiddenWorkflow,
     InvoiceProofRequired,
+    LenderLocked,
+    LenderSelectionRequired,
     PayableCeilingViolation,
     StaleApplication,
 )
@@ -45,6 +47,16 @@ def _execute(operation: Callable[[], Any]):
         ) from error
 
 
+    except LenderSelectionRequired as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "lender_required", "message": str(error)},
+        ) from error
+    except LenderLocked as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "lender_locked", "message": str(error)},
+        ) from error
     except ForbiddenWorkflow as error:
         raise HTTPException(
             status_code=403,
@@ -101,6 +113,16 @@ def _execute(operation: Callable[[], Any]):
 )
 def core_enterprises(_user: CurrentUser, request: Request):
     return request.app.state.identity_service.core_enterprises()
+
+
+@router.get(
+    "/organizations/lenders",
+    response_model=list[OrganizationOptionResponse],
+)
+def lenders(_user: CurrentUser, request: Request):
+    """Active financier organizations a supplier can address an application to."""
+
+    return request.app.state.identity_service.lenders()
 
 
 @router.get("/tasks")

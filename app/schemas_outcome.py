@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ActualOutcomeCreate(BaseModel):
@@ -63,9 +63,10 @@ class CalibrationJobResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     job_id: UUID
+    organization_id: UUID
     deployment_scope: Literal["controlled_demo", "external_verified"]
     trigger_type: Literal[
-        "outcome_submitted", "correction_exclude", "correction_reinstate"
+        "outcome_submitted", "correction_exclude", "correction_reinstate", "outcome_reviewed"
     ]
     trigger_outcome_id: UUID | None
     trigger_correction_id: UUID | None
@@ -199,3 +200,35 @@ class OutcomeSupersedeCreate(BaseModel):
             if not value:
                 raise ValueError("comment must not be blank")
         return value
+
+
+class OutcomeReviewCreate(BaseModel):
+    """A reviewer's decision on an outcome's training eligibility."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["APPROVE", "REJECT"]
+    reason_code: (
+        Literal[
+            "QUALITY_ANOMALY",
+            "DATA_QUALITY_INSUFFICIENT",
+            "BUSINESS_INCONSISTENT",
+            "BUSINESS_EXCEPTION",
+            "SCOPE_MISMATCH",
+        ]
+        | None
+    ) = None
+    comment: str = Field(min_length=4, max_length=500)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def reason_matches_decision(self) -> "OutcomeReviewCreate":
+        if self.decision == "REJECT" and self.reason_code is None:
+            raise ValueError("a rejection needs a reason_code")
+        if self.decision == "APPROVE" and self.reason_code is not None:
+            raise ValueError("an approval takes no reason_code")
+        return self

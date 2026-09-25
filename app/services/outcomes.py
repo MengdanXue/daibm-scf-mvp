@@ -29,16 +29,19 @@ from app.models_lifecycle import (
     FacilityDelinquencyModel,
     FacilityWriteOffModel,
 )
-from app.models_model_governance import ModelRegistryEventModel
+from app.models_identity import UserModel
+from app.models_model_governance import ModelRegistryEventModel, OutcomeReviewEventModel
 from app.models_outcome import ActualOutcomeModel, CalibrationRunModel
 from app.models_research import ModelVersionModel, RiskAssessmentModel
 from app.domain.model_registry import ModelVersionStatus
+from app.domain.outcome_governance import training_failure_reason
 from app.repositories.ledger import LedgerRepository
 from app.repositories.model_registry import ModelRegistryRepository
 from app.repositories.outcomes import OutcomeRepository
 from app.schemas_outcome import (
     ActualOutcomeCreate,
     OutcomeCorrectionCreate,
+    OutcomeReviewCreate,
     OutcomeSupersedeCreate,
 )
 from app.services.adaptive_risk import (
@@ -48,6 +51,8 @@ from app.services.adaptive_risk import (
     is_strictly_newer_candidate,
     load_verified_calibration,
 )
+from app.services.permissions import PermissionService
+from app.services.outcome_eligibility import OutcomeEligibilityService, observation_for
 from app.services.outcome_calibration import (
     UnmeasuredCalibrationDataset,
     CalibrationCandidate,
@@ -63,6 +68,7 @@ from app.services.outcome_calibration import (
 
 
 SYSTEM_ACTOR = "system:calibration-worker"
+REVIEWER_ROLES = frozenset({"auditor", "risk_manager"})
 AWAITING_PROMOTION = "awaiting_manual_promotion"
 
 
@@ -154,18 +160,56 @@ class OutcomeService:
         clock: Callable[[], datetime] | None = None,
         model_registry: ModelRegistryRepository | None = None,
         auto_promotion: bool = True,
+        manual_review: bool = False,
+        policy_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.artifact_root = Path(artifact_root)
         self.repository = repository or OutcomeRepository()
         self.model_registry = model_registry or ModelRegistryRepository()
-        # When false, a validated candidate waits for an auditor's promotion.
-        self.auto_promotion = auto_promotion
+        # Runtime policy comes from the configuration center when wired; the
+        # constructor values are the fallback, and assignment pins a value.
+        self.policy_provider = policy_provider
+        self._policy_defaults = {
+            "calibration.auto_promotion": auto_promotion,
+            "outcome.manual_review": manual_review,
+        }
+        self._policy_pinned: dict[str, bool] = {}
+        self.eligibility = OutcomeEligibilityService(self.repository)
         self.ledger_repository = ledger_repository or LedgerRepository()
         self.trainer = trainer
         self.artifact_writer = artifact_writer
         self.training_config = training_config or CalibrationTrainingConfig()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def _policy(self, key: str) -> bool:
+        if key in self._policy_pinned:
+            return self._policy_pinned[key]
+        if self.policy_provider is not None:
+            values = self.policy_provider()
+            if key in values:
+                return bool(values[key])
+        return bool(self._policy_defaults[key])
+
+    @property
+    def auto_promotion(self) -> bool:
+        """When false, a validated candidate waits for an auditor's promotion."""
+
+        return self._policy("calibration.auto_promotion")
+
+    @auto_promotion.setter
+    def auto_promotion(self, value: bool) -> None:
+        self._policy_pinned["calibration.auto_promotion"] = value
+
+    @property
+    def manual_review(self) -> bool:
+        """When true, outcomes that pass the rules wait in REVIEWING for a reviewer."""
+
+        return self._policy("outcome.manual_review")
+
+    @manual_review.setter
+    def manual_review(self, value: bool) -> None:
+        self._policy_pinned["outcome.manual_review"] = value
 
     def submit(
         self,
@@ -185,6 +229,7 @@ class OutcomeService:
         normalized_id = self._uuid(facility_id)
         request_sha256 = self._request_sha256(normalized_id, payload)
         with self.session_factory.begin() as session:
+            self._apply_review_mode(session)
             replay = self.repository.get_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -194,6 +239,7 @@ class OutcomeService:
             facility = self.repository.get_facility_for_update(session, normalized_id)
             if facility is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_facility(session, user, facility)
             replay = self.repository.get_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -265,6 +311,7 @@ class OutcomeService:
             facility = self.repository.get_facility_for_update(session, normalized_id)
             if facility is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_facility(session, user, facility)
             application = session.get(FinancingRequestModel, facility.request_id)
             if application is None:
                 raise OutcomeConflict("Facility request lineage is missing")
@@ -291,6 +338,7 @@ class OutcomeService:
         normalized_id = self._uuid(outcome_id)
         request_sha256 = self._correction_sha256(normalized_id, payload)
         with self.session_factory.begin() as session:
+            self._apply_review_mode(session)
             replay = self.repository.get_correction_by_idempotency_key(
                 session, payload.idempotency_key
             )
@@ -305,6 +353,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, normalized_id)
             if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             scope = self._scope_for_provenance(outcome.provenance)
             self.repository.acquire_scope_lock(session, scope=scope)
             outcome = self.repository.get_outcome_for_update(session, normalized_id)
@@ -422,6 +471,7 @@ class OutcomeService:
             ).encode("utf-8")
         ).hexdigest()
         with self.session_factory.begin() as session:
+            self._apply_review_mode(session)
             replay = self.repository.get_by_idempotency_key(session, payload.idempotency_key)
             if replay is not None:
                 if replay.request_sha256 != request_sha256:
@@ -432,6 +482,7 @@ class OutcomeService:
             original = self.repository.get_outcome(session, normalized_id)
             if original is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, original)
             scope = self._scope_for_provenance(original.provenance)
             self.repository.acquire_scope_lock(session, scope=scope)
             original = self.repository.get_outcome_for_update(session, normalized_id)
@@ -527,6 +578,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, normalized_id)
             if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             chain = self.repository.list_revision_chain(session, outcome.facility_id)
             reviews = self.repository.list_review_events(
                 session, [item.outcome_id for item in chain]
@@ -576,7 +628,9 @@ class OutcomeService:
         if user.role not in {"auditor", "risk_manager"}:
             raise ForbiddenOutcome("Only auditors and risk managers can view outcome governance")
         with self.session_factory() as session:
-            rows = self.repository.review_summary(session)
+            rows = self.repository.review_summary(
+                session, facility_ids=PermissionService.visible_facility_ids(session, user)
+            )
         by_scope: dict[str, dict[str, Any]] = {}
         for provenance, status, reason, effective, count in rows:
             scope = self._scope_for_provenance(provenance)
@@ -614,8 +668,10 @@ class OutcomeService:
         self._require_auditor(user)
         normalized_id = self._uuid(outcome_id)
         with self.session_factory() as session:
-            if self.repository.get_outcome(session, normalized_id) is None:
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
                 raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
             return [
                 self._serialize_correction(item)
                 for item in self.repository.list_corrections(session, normalized_id)
@@ -631,6 +687,7 @@ class OutcomeService:
             outcome = self.repository.get_outcome(session, self._uuid(outcome_id))
             if outcome is None:
                 raise OutcomeNotFound(str(outcome_id))
+            self._require_visible_outcome(session, user, outcome)
             return self._serialize_outcome(
                 outcome,
                 effective_training_eligible=self._is_eligible(
@@ -657,6 +714,7 @@ class OutcomeService:
                 limit=limit,
                 offset=offset,
                 include_superseded=include_superseded,
+                facility_ids=PermissionService.visible_facility_ids(session, user),
             )
             return [
                 self._serialize_outcome(
@@ -675,7 +733,9 @@ class OutcomeService:
         self._require_auditor(user)
         with self.session_factory() as session:
             run = self.repository.get_run(session, self._uuid(run_id))
-            if run is None:
+            if run is None or not PermissionService.can_access_organization(
+                session, user, run.organization_id
+            ):
                 raise OutcomeNotFound(str(run_id))
             return self._serialize_run(run, session=session)
 
@@ -687,7 +747,9 @@ class OutcomeService:
         self._require_auditor(user)
         with self.session_factory() as session:
             job = self.repository.get_job(session, self._uuid(job_id))
-            if job is None:
+            if job is None or not PermissionService.can_access_organization(
+                session, user, job.organization_id
+            ):
                 raise OutcomeNotFound(str(job_id))
             return self._serialize_job(job)
 
@@ -704,7 +766,12 @@ class OutcomeService:
             return [
                 self._serialize_run(item, session=session)
                 for item in self.repository.list_runs(
-                    session, limit=limit, offset=offset
+                    session,
+                    limit=limit,
+                    offset=offset,
+                    visibility=PermissionService.organization_filter(
+                        user, CalibrationRunModel.organization_id
+                    ),
                 )
             ]
 
@@ -756,10 +823,17 @@ class OutcomeService:
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                 self._reject_unrecoverable_deployment(run_id)
 
-    def get_active_deployment(self, user: AuthenticatedUser, *, scope: str) -> dict[str, Any]:
+    def get_active_deployment(
+        self,
+        user: AuthenticatedUser,
+        *,
+        scope: str,
+        organization_id: str | uuid.UUID | None = None,
+    ) -> dict[str, Any]:
         self._require_auditor(user)
         with self.session_factory() as session:
-            run = self.repository.get_active_run(session, scope=scope)
+            owner = self.resolve_organization(session, user, organization_id)
+            run = self.repository.get_active_run(session, scope=scope, organization_id=owner)
             if run is None:
                 raise OutcomeNotFound("active calibration deployment")
             return self._serialize_run(run, session=session)
@@ -775,8 +849,23 @@ class OutcomeService:
         self._require_auditor(user)
         expected_id = self._uuid(expected_active_run_id)
         with self.session_factory.begin() as session:
+            # The expected run names the organization; an unknown or foreign
+            # id is simply "not the active run" of the caller's own lender, so
+            # the answer never reveals another organization's runs.
+            expected = self.repository.get_run(session, expected_id)
+            if expected is not None and PermissionService.can_access_organization(
+                session, user, expected.organization_id
+            ):
+                owner = expected.organization_id
+            else:
+                owner = self.resolve_organization(session, user, None)
             self.repository.acquire_scope_lock(session, scope=scope)
-            current = self.repository.get_active_run(session, scope=scope, for_update=True)
+            current = self.repository.get_active_run(
+                session,
+                scope=scope,
+                organization_id=owner,
+                for_update=True,
+            )
             if current is None:
                 raise OutcomeNotFound("active calibration deployment")
             if current.calibration_run_id != expected_id:
@@ -789,7 +878,10 @@ class OutcomeService:
             )
             if restored is None or restored.deployment_status != "superseded":
                 raise OutcomeConflict("rollback predecessor is unavailable")
-            if restored.deployment_scope != scope:
+            if (
+                restored.deployment_scope != scope
+                or restored.organization_id != current.organization_id
+            ):
                 raise OutcomeConflict("rollback predecessor scope is inconsistent")
             if restored.retired_at is not None:
                 raise OutcomeConflict("rollback predecessor has been retired")
@@ -852,7 +944,9 @@ class OutcomeService:
         normalized = self._uuid(run_id)
         with self.session_factory.begin() as session:
             unlocked = self.repository.get_run(session, normalized)
-            if unlocked is None:
+            if unlocked is None or not PermissionService.can_access_organization(
+                session, user, unlocked.organization_id
+            ):
                 raise OutcomeNotFound("calibration run")
             self._acquire_run_lock(session, unlocked.deployment_scope)
             run = self.repository.get_run_for_update(session, normalized)
@@ -945,7 +1039,9 @@ class OutcomeService:
         normalized = self._uuid(version_id)
         with self.session_factory.begin() as session:
             unlocked = self.model_registry.get(session, normalized)
-            if unlocked is None:
+            if unlocked is None or not PermissionService.can_access_organization(
+                session, user, unlocked.organization_id
+            ):
                 raise OutcomeNotFound("model version")
             scope = unlocked.scope
             self._acquire_run_lock(session, scope)
@@ -974,7 +1070,9 @@ class OutcomeService:
                 scope=scope,
                 dataset_sha256=version.training_dataset_version,
             )
-            previous = self.repository.get_active_run(session, scope=scope, for_update=True)
+            previous = self.repository.get_active_run(
+                session, scope=scope, organization_id=version.organization_id, for_update=True
+            )
             if previous is not None and not is_strictly_newer_candidate(
                 run.sample_count, active_sample_count=previous.sample_count
             ):
@@ -1028,6 +1126,29 @@ class OutcomeService:
                 ],
             )
             return version.id
+
+    @staticmethod
+    def resolve_organization(
+        session: Session, user: AuthenticatedUser, organization_id: str | uuid.UUID | None
+    ) -> uuid.UUID:
+        """The lending organization a model question is about.
+
+        Explicit ids must be in the caller's scope; without one, the caller's
+        only visible lending organization is used.
+        """
+
+        if organization_id is not None:
+            try:
+                owner = uuid.UUID(str(organization_id))
+            except ValueError as error:
+                raise OutcomeNotFound(str(organization_id)) from error
+            if not PermissionService.can_access_organization(session, user, owner):
+                raise OutcomeNotFound(str(organization_id))
+            return owner
+        visible = PermissionService.lending_organizations(session, user)
+        if len(visible) != 1:
+            raise OutcomeConflict("organization_id is required to choose a lending organization")
+        return visible[0]
 
     @staticmethod
     def _verify_version_artifact(
@@ -1625,7 +1746,7 @@ class OutcomeService:
         else:
             now = self._now()
             previous = self.repository.get_active_run(
-                session, scope=scope, for_update=True
+                session, scope=scope, organization_id=run.organization_id, for_update=True
             )
             if previous is not None and not is_strictly_newer_candidate(
                 run.sample_count,
@@ -1732,6 +1853,146 @@ class OutcomeService:
             )
         )
         session.flush()
+
+    @staticmethod
+    def _require_visible_facility(
+        session: Session, user: AuthenticatedUser, facility: FinancingFacilityModel
+    ) -> None:
+        """Tenant boundary: another organization's facility is simply not found."""
+
+        if not PermissionService.can_view_facility(session, user, facility):
+            raise OutcomeNotFound(str(facility.facility_id))
+
+    @classmethod
+    def _require_visible_outcome(
+        cls, session: Session, user: AuthenticatedUser, outcome: ActualOutcomeModel
+    ) -> None:
+        facility = session.get(FinancingFacilityModel, outcome.facility_id)
+        if facility is None or not PermissionService.can_view_facility(session, user, facility):
+            raise OutcomeNotFound(str(outcome.outcome_id))
+
+    def _apply_review_mode(self, session: Session) -> None:
+        """Tell the review trigger whether rule-passing outcomes need a reviewer."""
+
+        if self.manual_review:
+            session.execute(text("SELECT set_config('daibm.outcome_review_mode', 'manual', true)"))
+
+    def review(
+        self,
+        outcome_id: str | uuid.UUID,
+        payload: OutcomeReviewCreate,
+        user: AuthenticatedUser,
+    ) -> dict[str, Any]:
+        """A reviewer approves a REVIEWING outcome or rejects one not yet trained on."""
+
+        if user.role not in REVIEWER_ROLES:
+            raise ForbiddenOutcome("Only auditors and risk managers can review outcomes")
+        normalized_id = self._uuid(outcome_id)
+        with self.session_factory.begin() as session:
+            outcome = self.repository.get_outcome(session, normalized_id)
+            if outcome is None:
+                raise OutcomeNotFound(str(normalized_id))
+            self._require_visible_outcome(session, user, outcome)
+            scope = self._scope_for_provenance(outcome.provenance)
+            self._acquire_run_lock(session, scope)
+            if self.repository.get_successor(session, normalized_id) is not None:
+                raise OutcomeConflict("A superseded revision cannot be reviewed")
+            status, _ = self.repository.review_status(session, normalized_id)
+            now = self._now()
+            job = None
+            if payload.decision == "APPROVE":
+                if status != "REVIEWING":
+                    raise OutcomeConflict(f"Only a REVIEWING outcome can be approved (is {status})")
+                rule_reason = session.scalar(
+                    text("SELECT outcome_eligibility_reason(:id)"), {"id": normalized_id}
+                )
+                if rule_reason is not None:
+                    raise OutcomeConflict(f"Eligibility rules fail: {rule_reason}")
+                target, reason_code = "ELIGIBLE", None
+            else:
+                if status not in ("REVIEWING", "ELIGIBLE"):
+                    raise OutcomeConflict(
+                        "Only an outcome not yet used for training can be rejected by review; "
+                        "use a correction for trained outcomes"
+                    )
+                target, reason_code = "REJECTED", payload.reason_code
+            session.add(
+                OutcomeReviewEventModel(
+                    outcome_id=normalized_id,
+                    status=target,
+                    reason_code=reason_code,
+                    actor_user_id=user.user_id,
+                    comment=payload.comment,
+                )
+            )
+            session.flush()
+            if target == "ELIGIBLE" and scope in self.repository.DEPLOYABLE_SCOPES:
+                job = self.repository.add_job(
+                    session,
+                    self._new_job(
+                        scope=scope,
+                        trigger_type="outcome_reviewed",
+                        idempotency_key=uuid.uuid4(),
+                        now=now,
+                        outcome_id=normalized_id,
+                    ),
+                )
+            self.ledger_repository.append_many(
+                session,
+                normalized_id,
+                [
+                    (
+                        "ACTUAL_OUTCOME_REVIEWED",
+                        {
+                            "outcome_id": str(normalized_id),
+                            "from_status": status,
+                            "to_status": target,
+                            "reason_code": reason_code,
+                            "comment": payload.comment,
+                            "reviewer_user_id": str(user.user_id),
+                            "reviewer_role": user.role,
+                            "calibration_job_id": str(job.job_id) if job is not None else None,
+                        },
+                    )
+                ],
+            )
+            return {
+                "outcome_id": str(normalized_id),
+                "review_status": target,
+                "review_reason": reason_code,
+                "calibration_job_id": str(job.job_id) if job is not None else None,
+                "review_history": self.review_history(session, normalized_id),
+            }
+
+    def review_history(self, session: Session, outcome_id: uuid.UUID) -> list[dict[str, Any]]:
+        events = self.repository.list_review_events(session, [outcome_id])
+        usernames = {
+            row.user_id: row.username
+            for row in session.scalars(
+                select(UserModel).where(
+                    UserModel.user_id.in_(
+                        [item.actor_user_id for item in events if item.actor_user_id]
+                    )
+                )
+            )
+        }
+        return [
+            {
+                "from_status": event.from_status,
+                "to_status": event.status,
+                "reason_code": event.reason_code,
+                "comment": event.comment,
+                "operator": usernames.get(event.actor_user_id, "system")
+                if event.actor_user_id
+                else "system",
+                "role": event.actor_role or ("system" if event.actor_user_id is None else None),
+                "calibration_run_id": (
+                    str(event.calibration_run_id) if event.calibration_run_id else None
+                ),
+                "recorded_at": canonical_timestamp(event.recorded_at),
+            }
+            for event in events
+        ]
 
     @staticmethod
     def set_governance_actor(session: Session, user: AuthenticatedUser) -> None:
@@ -1976,6 +2237,7 @@ class OutcomeService:
     def _serialize_job(job: CalibrationJobModel) -> dict[str, Any]:
         return {
             "job_id": str(job.job_id),
+            "organization_id": str(job.organization_id),
             "deployment_scope": job.deployment_scope,
             "trigger_type": job.trigger_type,
             "trigger_outcome_id": (
@@ -2062,6 +2324,7 @@ class OutcomeService:
                 fold_assignment_sha256 = value
         return {
             "calibration_run_id": str(run.calibration_run_id),
+            "organization_id": str(run.organization_id),
             "trigger_outcome_id": (
                 str(run.trigger_outcome_id) if run.trigger_outcome_id is not None else None
             ),
@@ -2090,6 +2353,12 @@ class OutcomeService:
             "eligible_count": int(eligible_count),
             "excluded_count": int(excluded_count),
             "failure_code": run.failure_code,
+            "failure_reason": training_failure_reason(
+                failure_code=run.failure_code, activation_reason=run.activation_reason
+            ),
+            "dataset_snapshot_id": (
+                str(run.dataset_snapshot_id) if run.dataset_snapshot_id is not None else None
+            ),
             "deployment_status": run.deployment_status,
             "deployment_scope": run.deployment_scope,
             "activation_mode": run.activation_mode,
@@ -2109,24 +2378,7 @@ class OutcomeService:
 
     @staticmethod
     def _observation(outcome: ActualOutcomeModel) -> CalibrationObservation:
-        return CalibrationObservation(
-            outcome_id=str(outcome.outcome_id),
-            facility_id=str(outcome.facility_id),
-            request_id=str(outcome.request_id),
-            risk_assessment_id=str(outcome.risk_assessment_id),
-            model_version_id=(
-                str(outcome.model_version_id)
-                if outcome.model_version_id is not None
-                else None
-            ),
-            risk_engine_version=outcome.risk_engine_version,
-            risk_input_sha256=outcome.risk_input_sha256,
-            evidence_sha256=outcome.evidence_sha256,
-            original_score=outcome.original_risk_score,
-            defaulted=outcome.defaulted,
-            observed_at=canonical_timestamp(outcome.observed_at),
-            provenance=outcome.provenance,
-        )
+        return observation_for(outcome)
 
     @staticmethod
     def _request_sha256(

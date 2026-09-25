@@ -56,11 +56,13 @@ class FacilityRepository:
         *,
         role: str,
         organization_id: uuid.UUID | None,
+        visibility: ColumnElement[bool] | None = None,
     ) -> FinancingFacilityModel | None:
         statement = (
             self._visible_facilities_statement(
                 role=role,
                 organization_id=organization_id,
+                visibility=visibility,
             )
             .where(FinancingFacilityModel.facility_id == facility_id)
             .with_for_update(read=True, of=FinancingFacilityModel)
@@ -75,11 +77,13 @@ class FacilityRepository:
         organization_id: uuid.UUID | None,
         limit: int,
         offset: int,
+        visibility: ColumnElement[bool] | None = None,
     ) -> list[FinancingFacilityModel]:
         statement = (
             self._visible_facilities_statement(
                 role=role,
                 organization_id=organization_id,
+                visibility=visibility,
             )
             .order_by(
                 FinancingFacilityModel.updated_at.desc(),
@@ -96,7 +100,10 @@ class FacilityRepository:
         *,
         role: str,
         organization_id: uuid.UUID | None,
+        visibility: ColumnElement[bool] | None = None,
     ):
+        """Facilities in scope; services pass the PermissionService condition."""
+
         statement = (
             select(FinancingFacilityModel)
             .join(
@@ -109,8 +116,9 @@ class FacilityRepository:
                 UserModel.user_id == FinancingFacilityModel.created_by_user_id,
             )
         )
-        visibility: ColumnElement[bool]
-        if role == "auditor":
+        if visibility is not None:
+            return statement.where(visibility)
+        if role in {"auditor", "admin"}:
             visibility = true()
         elif organization_id is None:
             visibility = false()
@@ -124,7 +132,7 @@ class FacilityRepository:
                 == organization_id
             )
         elif role in {"financier", "risk_manager"}:
-            visibility = UserModel.organization_id == organization_id
+            visibility = FinancingFacilityModel.organization_id == organization_id
         else:
             visibility = false()
         return statement.where(visibility)

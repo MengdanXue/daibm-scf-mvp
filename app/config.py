@@ -9,6 +9,15 @@ from urllib.parse import urlsplit
 from sqlalchemy import URL
 
 
+def _required_secret(values: Mapping[str, str], name: str) -> str:
+    """Secrets are configuration only; there is deliberately no default in code."""
+
+    value = values.get(name, "")
+    if not value:
+        raise ValueError(f"{name} must be set in the environment")
+    return value
+
+
 @dataclass(frozen=True)
 class PostgresSettings:
     host: str
@@ -34,7 +43,7 @@ class PostgresSettings:
             port=port,
             database=values.get("POSTGRES_DB", "daibm_scf"),
             user=values.get("POSTGRES_USER", "daibm"),
-            password=values.get("POSTGRES_PASSWORD", "daibm_demo_password"),
+            password=_required_secret(values, "POSTGRES_PASSWORD"),
         )
 
     @property

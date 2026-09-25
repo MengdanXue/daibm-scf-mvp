@@ -383,7 +383,9 @@ def test_health_rejects_an_invalid_ledger(client):
 
 
 def test_integrated_application_version_advances_after_acceptance(client):
-    assert client.get("/openapi.json").json()["info"]["version"] == "0.7.0"
+    version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+    assert version == "1.0.0"
+    assert client.get("/openapi.json").json()["info"]["version"] == version
 
 
 def test_ci_runs_research_suite_in_a_separate_pinned_environment():
@@ -420,6 +422,7 @@ def test_release_documentation_lists_five_demo_roles_and_workflow():
     ):
         assert username in readme
         assert username in demo
-    assert "Demo123!" in readme
+    assert "Demo123!" not in readme
+    assert "DAIBM_DEMO_PASSWORD" in readme
     assert "draft → submitted" in readme
     assert "/api/v1/applications" in readme

@@ -38,6 +38,7 @@ class CalibrationRunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     calibration_run_id: str
+    organization_id: str
     trigger_outcome_id: str | None
     dataset_sha256: str
     sample_count: int
@@ -58,6 +59,8 @@ class CalibrationRunResponse(BaseModel):
     eligible_count: int
     excluded_count: int
     failure_code: str | None
+    failure_reason: str | None
+    dataset_snapshot_id: str | None
     deployment_status: str
     deployment_scope: str
     activation_mode: str | None
@@ -221,9 +224,12 @@ def get_active_calibration_deployment(
     user: CurrentAuditor,
     request: Request,
     scope: Literal["controlled_demo", "external_verified"],
+    organization_id: str | None = None,
 ):
     return _execute(
-        lambda: request.app.state.outcome_service.get_active_deployment(user, scope=scope)
+        lambda: request.app.state.outcome_service.get_active_deployment(
+            user, scope=scope, organization_id=organization_id
+        )
     )
 
 

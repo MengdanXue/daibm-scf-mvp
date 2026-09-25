@@ -1,6 +1,8 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+import uuid
+
 import pytest
 
 from app.services import outcome_calibration as module
@@ -179,7 +181,7 @@ def test_scope_is_required_at_inference_and_repository_boundaries():
 
 def test_scope_mismatch_keeps_attempted_run_lineage():
     class Registry:
-        def get_active_version(self, session, *, scope):
+        def get_active_version(self, session, *, scope, organization_id=None):
             return (
                 None
                 if scope == "external_verified"
@@ -189,7 +191,7 @@ def test_scope_mismatch_keeps_attempted_run_lineage():
             )
 
     result = AdaptiveRiskInferenceService(registry=Registry()).assess(
-        None, 0.4, "external_verified"
+        None, 0.4, "external_verified", uuid.uuid4()
     )
     assert result.final_score == 0.4
     assert result.calibration_run_id is None

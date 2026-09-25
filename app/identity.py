@@ -16,6 +16,10 @@ class AuthenticationRequired(Exception):
     pass
 
 
+class AccountLocked(InvalidCredentials):
+    """Too many failed sign-ins; the account is locked until ``locked_until``."""
+
+
 @dataclass(frozen=True)
 class AuthenticatedUser:
     user_id: uuid.UUID

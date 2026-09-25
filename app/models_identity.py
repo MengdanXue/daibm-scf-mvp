@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,7 @@ class OrganizationModel(Base):
             "'financier', 'auditor')",
             name="ck_organizations_type",
         ),
+        CheckConstraint("status IN ('active', 'suspended')", name="ck_organizations_status"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -31,6 +32,7 @@ class OrganizationModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
 
 
 class UserModel(Base):
@@ -38,9 +40,10 @@ class UserModel(Base):
     __table_args__ = (
         CheckConstraint(
             "role IN ('supplier', 'core_enterprise', 'financier', "
-            "'risk_manager', 'auditor')",
+            "'risk_manager', 'auditor', 'admin')",
             name="ck_users_role",
         ),
+        CheckConstraint("failed_login_count >= 0", name="ck_users_failed_login_count"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -62,6 +65,10 @@ class UserModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 Index("ix_users_organization_id", UserModel.organization_id)
@@ -93,6 +100,7 @@ class UserSessionModel(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 Index("ix_user_sessions_user_id", UserSessionModel.user_id)

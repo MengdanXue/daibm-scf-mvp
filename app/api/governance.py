@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.dependencies import current_user, require_roles
 from app.domain.governance import scope_matrix
 from app.identity import AuthenticatedUser
-from app.schemas_outcome import OutcomeSupersedeCreate
+from app.schemas_outcome import OutcomeReviewCreate, OutcomeSupersedeCreate
 from app.services.model_registry import (
     RegistryConflict,
     RegistryForbidden,
@@ -185,6 +185,79 @@ def supersede_outcome(
 ):
     return _execute(
         lambda: request.app.state.outcome_service.supersede(outcome_id, payload, user)
+    )
+
+
+@router.get("/api/v1/outcome-governance/overview")
+def outcome_governance_overview(user: CurrentUser, request: Request):
+    return _execute(lambda: request.app.state.outcome_governance_service.overview(user))
+
+
+@router.get("/api/v1/outcome-governance/review-queue")
+def outcome_review_queue(
+    user: CurrentUser,
+    request: Request,
+    status: str = Query(
+        "REVIEWING", pattern=r"^(CREATED|REVIEWING|ELIGIBLE|TRAINING_USED|REJECTED)$"
+    ),
+    limit: int = Query(100, ge=1, le=500),
+):
+    return _execute(
+        lambda: request.app.state.outcome_governance_service.review_queue(
+            user, status=status, limit=limit
+        )
+    )
+
+
+@router.get("/api/v1/outcome-governance/eligibility")
+def outcome_eligibility_preview(
+    user: CurrentUser,
+    request: Request,
+    scope: str = Query(..., pattern=r"^(controlled_demo|external_verified)$"),
+):
+    return _execute(
+        lambda: request.app.state.outcome_governance_service.eligibility_preview(
+            user, scope=scope
+        )
+    )
+
+
+@router.get("/api/v1/outcomes/{outcome_id}/review-history")
+def outcome_review_history(outcome_id: str, user: CurrentUser, request: Request):
+    return _execute(
+        lambda: request.app.state.outcome_governance_service.review_history(outcome_id, user)
+    )
+
+
+@router.post("/api/v1/outcomes/{outcome_id}/review")
+def review_outcome(
+    outcome_id: str, payload: OutcomeReviewCreate, user: CurrentUser, request: Request
+):
+    return _execute(
+        lambda: request.app.state.outcome_service.review(outcome_id, payload, user)
+    )
+
+
+@router.get("/api/v1/dataset-snapshots")
+def list_dataset_snapshots(user: CurrentUser, request: Request, scope: str | None = ScopeFilter):
+    return _execute(
+        lambda: request.app.state.outcome_governance_service.list_snapshots(user, scope=scope)
+    )
+
+
+@router.get("/api/v1/dataset-snapshots/{snapshot_id}")
+def get_dataset_snapshot(snapshot_id: str, user: CurrentUser, request: Request):
+    return _execute(
+        lambda: request.app.state.outcome_governance_service.get_snapshot(snapshot_id, user)
+    )
+
+
+@router.get("/api/v1/risk-decisions/{decision_record_id}/lineage")
+def risk_decision_lineage(decision_record_id: str, user: CurrentUser, request: Request):
+    return _execute(
+        lambda: request.app.state.outcome_governance_service.decision_lineage(
+            decision_record_id, user
+        )
     )
 
 

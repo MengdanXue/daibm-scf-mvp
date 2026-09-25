@@ -15,6 +15,9 @@ if not "%~1"=="" goto usage
 
 :start
 powershell -NoProfile -Command "$m = ConvertFrom-Json (Get-Content -Raw -Encoding utf8 'launcher-messages.json'); Write-Host ('[DAIBM-SCF] ' + $m.fabric_start_base)"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ops\init-env.ps1"
+if errorlevel 1 exit /b 1
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do set "%%A=%%B"
 docker --context desktop-linux compose -f "%~dp0docker-compose.yml" --project-name daibm-scf-mvp up --build -d
 if errorlevel 1 exit /b 1
 

@@ -14,7 +14,46 @@ from app.models_lifecycle import (
     FacilityDelinquencyModel,
     FacilityRestructureModel,
 )
-from test_facility_service import _approved_application, _users
+from app.identity import AuthenticatedUser
+from test_facility_service import _approved_application
+
+
+def _users(factory) -> dict[str, AuthenticatedUser]:
+    """Accounts written with the 0014-era columns; today's identity service
+    (sessions, lock-out, security events) needs the later schema."""
+
+    organizations = {
+        "supplier": ("SUPPLIER-001", "supplier"),
+        "core": ("CORE-001", "core_enterprise"),
+        "financier": ("BANK-001", "financier"),
+        "risk": ("BANK-001", "financier"),
+        "auditor": ("AUDIT-001", "auditor"),
+    }
+    roles = {"supplier": "supplier", "core": "core_enterprise", "financier": "financier",
+             "risk": "risk_manager", "auditor": "auditor"}
+    org_ids = {code: uuid.uuid4() for code, _ in organizations.values()}
+    users = {}
+    with factory.begin() as session:
+        for code, organization_type in set(organizations.values()):
+            session.execute(
+                text("INSERT INTO organizations (organization_id, organization_code, name, "
+                     "organization_type, created_at) VALUES (:id, :code, :code, :type, now())"),
+                {"id": org_ids[code], "code": code, "type": organization_type},
+            )
+        for name, (code, _) in organizations.items():
+            user = AuthenticatedUser(
+                user_id=uuid.uuid4(), username=f"{name}.demo", display_name=name, role=roles[name],
+                organization_id=org_ids[code], organization_code=code, organization_name=code,
+            )
+            session.execute(
+                text("INSERT INTO users (user_id, username, display_name, password_hash, "
+                     "password_salt, role, organization_id, is_active, created_at) VALUES "
+                     "(:id, :username, :name, 'x', 'y', :role, :org, true, now())"),
+                {"id": user.user_id, "username": user.username, "name": name,
+                 "role": user.role, "org": user.organization_id},
+            )
+            users[user.username] = user
+    return users
 
 # These tests exercise revision 20260907_0013. Revision 20260924_0015 refuses to
 # downgrade over governed lifecycle history, so the default-episode fixtures are
@@ -32,7 +71,7 @@ def _migrate(engine, target, *, down=False):
 def _seed(engine, *, restructured=False, second_default=False):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     users = _users(factory)
-    request_id = _approved_application(factory, users)
+    request_id = _approved_application(factory, users, lender=None)
     now = datetime(2026, 9, 7, tzinfo=timezone.utc)
     financier = users["financier.demo"].user_id
     risk = users["risk.demo"].user_id

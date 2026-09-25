@@ -1,7 +1,9 @@
-"""Pins who may see an application, including where the model stops short.
+"""Pins who may see an application: organization ownership, then stage.
 
 These exercise WorkflowService._can_view directly rather than through the
-database, so the visibility rules stay legible as rules.
+database, so the visibility rules stay legible as rules. Auditor scope comes
+from audit grants in the database and is covered by the tenant isolation
+tests; without a session the rule fails closed.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ def _application(status: str = Status.TRADE_CONFIRMED.value) -> SimpleNamespace:
         status=status,
         supplier_organization_id=SUPPLIER_ORG,
         core_enterprise_organization_id=CORE_ORG,
+        lender_organization_id=FIRST_BANK,
     )
 
 
@@ -71,27 +74,23 @@ def test_a_financier_cannot_see_an_application_before_the_trade_is_confirmed(
     )
 
 
-def test_financier_visibility_is_by_stage_not_by_organisation():
-    """A second funding organisation sees the same pipeline as the first.
+def test_financier_visibility_is_scoped_to_the_lender_organisation():
+    """The assignment concept exists now: an application names its lender.
 
-    This is the documented boundary, not an accident: an application never
-    records which financier handles it, so there is nothing to scope these
-    roles by. If an assignment concept is ever introduced, this test should
-    fail and be replaced by one asserting organisational isolation.
+    Only that organisation's financiers and risk managers see it, each from
+    the stage their work starts; a second funding organisation sees nothing.
     """
 
     application = _application()
     assert WorkflowService._can_view(
         application, _user("financier", FIRST_BANK)
     )
-    assert WorkflowService._can_view(
+    assert not WorkflowService._can_view(
         application, _user("financier", SECOND_BANK)
     )
-    # A risk manager enters later in the lifecycle, and is unscoped in the
-    # same way once it does.
-    assert WorkflowService._can_view(
-        _application(Status.APPROVED.value), _user("risk_manager", SECOND_BANK)
-    )
+    approved = _application(Status.APPROVED.value)
+    assert WorkflowService._can_view(approved, _user("risk_manager", FIRST_BANK))
+    assert not WorkflowService._can_view(approved, _user("risk_manager", SECOND_BANK))
 
 
 def test_a_risk_manager_waits_for_a_financing_decision():
@@ -101,8 +100,10 @@ def test_a_risk_manager_waits_for_a_financing_decision():
     )
 
 
-def test_an_auditor_sees_every_application_and_an_unknown_role_sees_none():
+def test_admin_sees_every_application_and_an_unknown_role_sees_none():
     application = _application()
-    assert WorkflowService._can_view(application, _user("auditor", uuid.uuid4()))
+    assert WorkflowService._can_view(application, _user("admin", uuid.uuid4()))
+    # Auditor scope needs the audit grants; without them the rule fails closed.
+    assert not WorkflowService._can_view(application, _user("auditor", uuid.uuid4()))
     with pytest.raises(ValueError):
         WorkflowService._can_view(application, _user("intruder", uuid.uuid4()))

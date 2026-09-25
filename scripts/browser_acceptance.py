@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+
 import argparse
 import re
 import uuid
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+
+# The demo password is deployment configuration, never a literal.
+DEMO_PASSWORD = os.environ.get("DAIBM_DEMO_PASSWORD", "")
 
 
 BASE_URL = "http://127.0.0.1:8010"
@@ -15,7 +20,7 @@ VIDEO_DIR = Path("output/defense-video").resolve()
 
 def login(page, username: str) -> None:
     page.locator('input[name="username"]').fill(username)
-    page.locator('input[name="password"]').fill("Demo123!")
+    page.locator('input[name="password"]').fill(DEMO_PASSWORD)
     page.locator("#loginButton").click()
     page.locator("body.authenticated").wait_for()
     page.wait_for_load_state("networkidle")
@@ -247,7 +252,7 @@ def _exercise_failed_core_directory(browser) -> None:
         page.goto(BASE_URL)
         page.wait_for_load_state("networkidle")
         page.locator('input[name="username"]').fill("supplier.demo")
-        page.locator('input[name="password"]').fill("Demo123!")
+        page.locator('input[name="password"]').fill(DEMO_PASSWORD)
         page.locator("#loginButton").click()
         page.locator("#loginError").filter(
             has_text="Не удалось войти"

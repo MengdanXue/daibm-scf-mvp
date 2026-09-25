@@ -21,8 +21,8 @@ from app.domain.workflow import (
 from app.identity import AuthenticatedUser
 from app.ledger import canonical_timestamp
 from app.models import FinancingRequestModel, LedgerEventModel
-from app.models_identity import UserModel
-from app.models_model_governance import RiskDecisionRecordModel
+from app.models_identity import OrganizationModel, UserModel
+from app.models_model_governance import RiskDecisionRecordModel, RiskModelVersionModel
 from app.models_outcome import CalibrationRunModel
 from app.models_workflow import WorkflowActionModel
 from app.repositories.identity import IdentityRepository
@@ -32,6 +32,7 @@ from app.risk import DECISION_CONTROLS, assess, band_for_score
 from app.schemas import FinancingRequestCreate
 from app.schemas_workflow import ApplicationDraftCreate
 from app.services.adaptive_risk import AdaptiveRiskInferenceService
+from app.services.permissions import PermissionService
 from app.services.invoice_proof import (
     InvoiceLimitProver,
     ProofRejected,
@@ -45,6 +46,14 @@ class ApplicationNotFound(Exception):
 
 class ForbiddenWorkflow(Exception):
     pass
+
+
+class LenderSelectionRequired(Exception):
+    """More than one lending organization exists and none was chosen."""
+
+
+class LenderLocked(Exception):
+    """The lender cannot change once the application has been submitted."""
 
 
 class StaleApplication(Exception):
@@ -103,6 +112,7 @@ class WorkflowService:
                     or core_organization.organization_type != "core_enterprise"
                 ):
                     raise ApplicationNotFound("Core enterprise not found")
+                lender = self._resolve_lender(session, payload.lender_organization_code)
                 amount = Decimal(str(payload.amount)).quantize(Decimal("0.01"))
                 fingerprint, invoice_claim = trade_evidence(
                     supplier_code=user.organization_code,
@@ -138,6 +148,7 @@ class WorkflowService:
                     core_enterprise_organization_id=(
                         core_organization.organization_id
                     ),
+                    lender_organization_id=lender.organization_id,
                     contract_number=payload.contract_number,
                     invoice_number=payload.invoice_number,
                     trade_evidence_sha256=fingerprint,
@@ -156,6 +167,7 @@ class WorkflowService:
                     payload={
                         "contract_number": payload.contract_number,
                         "invoice_number": payload.invoice_number,
+                        "lender_organization_code": lender.organization_code,
                         "amount": payload.amount,
                         "trade_evidence_sha256": fingerprint,
                         "invoice_claim_sha256": invoice_claim,
@@ -191,6 +203,14 @@ class WorkflowService:
                     or core_organization.organization_type != "core_enterprise"
                 ):
                     raise ApplicationNotFound("Core enterprise not found")
+                if payload.lender_organization_code is not None:
+                    lender = self._resolve_lender(session, payload.lender_organization_code)
+                    if lender.organization_id != application.lender_organization_id:
+                        if current != Status.DRAFT:
+                            raise LenderLocked(
+                                "The lender is fixed once the application has been submitted"
+                            )
+                        application.lender_organization_id = lender.organization_id
                 risk_request = payload.to_risk_request(user.organization_code)
                 amount = Decimal(str(payload.amount)).quantize(Decimal("0.01"))
                 fingerprint, invoice_claim = trade_evidence(
@@ -367,10 +387,12 @@ class WorkflowService:
             risk_result = assess(
                 FinancingRequestCreate.model_validate(application.features)
             )
+            # Only the lender's own ACTIVE model may calibrate its decision.
             adaptive_result = self.adaptive_risk_service.assess(
                 session,
                 risk_result.score,
                 application.assessment_scope,
+                application.lender_organization_id,
             )
             application.raw_risk_score = adaptive_result.raw_score
             application.risk_score = adaptive_result.final_score
@@ -498,7 +520,7 @@ class WorkflowService:
         normalized_id = self._normalize_id(request_id)
         with self.session_factory() as session:
             application = self.workflow_repository.get_application(session, normalized_id)
-            if application is None or not self._can_view(application, user):
+            if application is None or not self._can_view(application, user, session):
                 raise ApplicationNotFound(str(normalized_id))
             records = list(
                 session.scalars(
@@ -512,6 +534,16 @@ class WorkflowService:
                 for row in session.scalars(
                     select(UserModel).where(
                         UserModel.user_id.in_([item.assessed_by_user_id for item in records])
+                    )
+                )
+            }
+            versions = {
+                row.id: row
+                for row in session.scalars(
+                    select(RiskModelVersionModel).where(
+                        RiskModelVersionModel.id.in_(
+                            [item.model_version_id for item in records if item.model_version_id]
+                        )
                     )
                 )
             }
@@ -552,6 +584,18 @@ class WorkflowService:
                     "calibration_artifact_sha256": item.calibration_artifact_sha256,
                     "model_version_id": (
                         str(item.model_version_id) if item.model_version_id else None
+                    ),
+                    "model_version_label": (
+                        f"{versions[item.model_version_id].model_id}"
+                        f"@v{versions[item.model_version_id].version}"
+                        if item.model_version_id in versions
+                        else None
+                    ),
+                    "dataset_snapshot_id": (
+                        str(versions[item.model_version_id].dataset_snapshot_id)
+                        if item.model_version_id in versions
+                        and versions[item.model_version_id].dataset_snapshot_id
+                        else None
                     ),
                     "model_scope": item.model_scope,
                     "scope_result": item.scope_result,
@@ -673,7 +717,7 @@ class WorkflowService:
             application = self.workflow_repository.get_application(
                 session, normalized_id
             )
-            if application is None or not self._can_view(application, user):
+            if application is None or not self._can_view(application, user, session):
                 raise ApplicationNotFound(str(normalized_id))
             return self._serialize(session, application, user)
 
@@ -741,7 +785,7 @@ class WorkflowService:
         application = self.workflow_repository.get_application(
             session, request_id, for_update=True
         )
-        if application is None or not self._can_view(application, user):
+        if application is None or not self._can_view(application, user, session):
             raise ApplicationNotFound(str(request_id))
         return application
 
@@ -768,7 +812,16 @@ class WorkflowService:
     def _can_view(
         application: FinancingRequestModel,
         user: AuthenticatedUser,
+        session: Session | None = None,
     ) -> bool:
+        """Organization ownership first, then the lifecycle stage of the role.
+
+        Enterprises see their own applications; financiers and risk managers
+        only applications addressed to their organization (the lender), each
+        from the stage its work starts; auditors the lenders they are granted;
+        admin everything.
+        """
+
         role = Role(user.role)
         if role == Role.SUPPLIER:
             return application.supplier_organization_id == user.organization_id
@@ -777,32 +830,53 @@ class WorkflowService:
                 application.core_enterprise_organization_id
                 == user.organization_id
             )
-        # Financier and risk-manager visibility is by lifecycle stage, not by
-        # organisation, and that is a modelling decision rather than an
-        # oversight. An application records the supplier and the core
-        # enterprise but never which financier handles it, so these two roles
-        # have no organisation to be scoped by. A second funding organisation
-        # would therefore see the same pipeline as the first. Narrowing it
-        # requires an assignment concept the schema does not have; the
-        # FinancingFacility aggregate, which does record its creating
-        # financier, is scoped by organisation instead. The boundary is
-        # recorded in docs/thesis-traceability.md and pinned by
-        # test_financier_visibility_is_by_stage_not_by_organisation.
         if role == Role.FINANCIER:
-            return application.status not in {
-                Status.DRAFT.value,
-                Status.SUBMITTED.value,
-                Status.TRADE_RETURNED.value,
-            }
+            return application.lender_organization_id == user.organization_id and (
+                application.status
+                not in {
+                    Status.DRAFT.value,
+                    Status.SUBMITTED.value,
+                    Status.TRADE_RETURNED.value,
+                }
+            )
         if role == Role.RISK_MANAGER:
-            return application.status in {
-                Status.APPROVED.value,
-                Status.MANUAL_REVIEW.value,
-                Status.REJECTED.value,
-                Status.CONTROLLED.value,
-                Status.AUDITED.value,
-            }
-        return role == Role.AUDITOR
+            return application.lender_organization_id == user.organization_id and (
+                application.status
+                in {
+                    Status.APPROVED.value,
+                    Status.MANUAL_REVIEW.value,
+                    Status.REJECTED.value,
+                    Status.CONTROLLED.value,
+                    Status.AUDITED.value,
+                }
+            )
+        if role == Role.ADMIN:
+            return True
+        if role == Role.AUDITOR and session is not None:
+            return PermissionService.can_access_organization(
+                session, user, application.lender_organization_id
+            )
+        return False
+
+    @staticmethod
+    def _resolve_lender(session: Session, code: str | None) -> OrganizationModel:
+        """The chosen lending organization, or the only active one."""
+
+        statement = select(OrganizationModel).where(
+            OrganizationModel.organization_type == "financier",
+            OrganizationModel.status == "active",
+        )
+        if code is not None:
+            lender = session.scalar(
+                statement.where(OrganizationModel.organization_code == code.strip())
+            )
+            if lender is None:
+                raise ApplicationNotFound("Lender organization not found")
+            return lender
+        lenders = list(session.scalars(statement.limit(2)))
+        if len(lenders) != 1:
+            raise LenderSelectionRequired("Choose the lender organization for this application")
+        return lenders[0]
 
     def _advance(
         self,
@@ -888,6 +962,13 @@ class WorkflowService:
             if application.core_enterprise_organization_id
             else None
         )
+        lender_organization = (
+            self.identity_repository.get_organization_by_id(
+                session, application.lender_organization_id
+            )
+            if application.lender_organization_id
+            else None
+        )
         timeline = [
             {
                 "action_id": action.action_id,
@@ -935,6 +1016,14 @@ class WorkflowService:
             "supplier_organization_id": str(application.supplier_organization_id),
             "core_enterprise_organization_id": str(
                 application.core_enterprise_organization_id
+            ),
+            "lender_organization_id": (
+                str(application.lender_organization_id)
+                if application.lender_organization_id
+                else None
+            ),
+            "lender_organization_code": (
+                lender_organization.organization_code if lender_organization else None
             ),
             "core_enterprise_organization_code": (
                 core_organization.organization_code
