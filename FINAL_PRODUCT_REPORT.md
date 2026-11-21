@@ -285,7 +285,7 @@ scripts/ops/restore.sh <name> --yes              # 校验 → 恢复 → 再校�
 |---|---|
 | 版本 | `VERSION` 为 `1.0.0`，API（`/api/v1/ops/health`、OpenAPI）读取同一版本 |
 | 迁移 | Alembic 单一 head `20260930_0021`；`tests/test_release_contract.py` 与迁移漂移测试保证模型与迁移一致 |
-| 发布分支 | `claude/funny-ptolemy-32pkcy` → PR #13 → `main`（使用合并提交，保留 Phase 2.2–6 各提交，报告中引用的提交哈希在 main 上依然有效） |
+| 发布分支 | Phase 2–6 的开发分支 → PR #13 → `main`（使用合并提交，保留 Phase 2.2–6 各提交，报告中引用的提交哈希在 main 上依然有效） |
 | 标签与 Release | `v1.0.0` 应打在 PR #13 的合并提交上 |
 
 **标签推送限制（按要求记录，不绕过）：**

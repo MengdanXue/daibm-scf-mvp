@@ -3,7 +3,7 @@
 范围：在不改变现有架构（FastAPI + PostgreSQL 单体、进程内后台任务）的前提下，为多租户、统一权限、安全、运维、
 配置管理与部署补齐企业级能力。未引入 Kubernetes、Kafka、Redis、微服务拆分；未重写数据库、未修改核心风险算法与 Fabric 架构。
 
-实现提交：`e80b766`（分支 `claude/funny-ptolemy-32pkcy`，PR #13）。
+实现提交：`e80b766`（分支 Phase 2–6 的开发分支，PR #13）。
 
 ---
 
@@ -175,4 +175,4 @@ admin 可见全部标签；auditor 只能查看安全事件和配置（只读）
 | `e80b766` | Phase 4 实现：迁移、权限服务、安全、运维、配置中心、部署文件、管理界面、测试 |
 | 本报告所在提交 | `PHASE4_ENTERPRISE_READINESS_REPORT.md` |
 
-分支：`claude/funny-ptolemy-32pkcy`（PR #13；该 PR 叠加了 Phase 2.2、Phase 3 与 Phase 4）。
+分支：Phase 2–6 的开发分支（PR #13；该 PR 叠加了 Phase 2.2、Phase 3 与 Phase 4）。

@@ -224,4 +224,4 @@ Docker 验证（本地 8010）的步骤：
 
 ## 8. Commit
 
-- 实现提交：`2943433`（`claude/funny-ptolemy-32pkcy`，PR #13）
+- 实现提交：`2943433`（Phase 2–6 的开发分支，PR #13）
